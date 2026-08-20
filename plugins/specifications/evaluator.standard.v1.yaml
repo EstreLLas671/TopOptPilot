@@ -1,0 +1,57 @@
+# evaluator.standard.v1 — 标准质量评价器
+# 从求解结果提取灰度比例/连通分量/最大位移等质量指标
+# status=candidate：口径需与审计 Agent 的 ResultAnalyzer 对齐后验证
+
+plugin:
+  id: "evaluator.standard.v1"
+  name: "标准质量评价器"
+  version: "1.0.0"
+  language: "Python"
+  entry: "standard_evaluator"
+  type: "evaluator"
+  status: "candidate"
+
+interface:
+  input: ["result"]
+  output: ["quality"]
+  signature: "evaluator(result) -> {gray_ratio, connected_components, max_displacement_mm}"
+  note: "质量指标口径对应 solver.result_schema / audit_agent.ResultAnalyzer"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: ["filter.sensitivity.v1", "filter.density.v1"]
+  projections: ["none", "heaviside_projection"]
+  controllers:
+    - "fixed_controller"
+    - "periodic_controller"
+    - "gray_feedback_controller"
+    - "joint_feedback_controller"
+  evaluators: []
+  dimensions: [2, 3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters: []
+
+limitations:
+  - "灰度比例阈值（0.1,0.9）与连通阈值（0.5）为约定口径，改口径需重新验证"
+  - "尚未独立完成单元测试与基准复现（status=candidate，禁止用于正式结论）"
+  - "最大位移在单位模量模型下为无量纲量，换算 mm 需外部尺度因子"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: false
+  finite_difference_test: false
+  mbb_reproduction: false
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: ""
+  implementation_commit: ""
+  verification_date: ""

@@ -1,0 +1,60 @@
+# controller.gray_feedback.v1 — 灰度反馈控制器
+# 对应 Python 入口：solver.continuation.GrayFeedbackController
+# 对应实验组 A1：灰度未达标（gray > gray_threshold）时延迟 beta 提升
+# 体现"观察灰度 → 决定是否继续锐化"的闭环
+
+plugin:
+  id: "controller.gray_feedback.v1"
+  name: "灰度反馈控制器"
+  version: "1.0.0"
+  language: "Python"
+  entry: "gray_feedback_controller"
+  type: "controller"
+  status: "verified"
+
+interface:
+  input: ["params", "iteration", "gray_ratio"]
+  output: ["beta"]
+  signature: "GrayFeedbackController(params).beta(iteration, gray_ratio, connected) -> float   # solver/continuation.py"
+  note: "灰度超标时延迟一轮 beta 提升"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: ["filter.density.v1"]
+  projections: ["heaviside_projection"]
+  controllers: []
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2, 3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters:
+  - name: "gray_threshold"
+    meaning: "灰度达标阈值；灰度超过该值时延迟 beta 提升"
+    type: "float"
+    range: [0, 1]
+    default: 0.20
+    suggested: [0.10, 0.20, 0.30]
+    unit: ""
+
+limitations:
+  - "只反馈灰度，无法感知连通性断连"
+  - "gray_threshold 设置过低会过早锐化，过高则过度延迟收敛"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

@@ -1,0 +1,18 @@
+:root { --bg:#0d0f12; --panel:#111419; --line:#252a31; --muted:#8c949f; --text:#e6edf3; --accent:#d2a85a; --green:#67c587; --red:#e06c75; }
+[data-testid="stAppViewContainer"] { background:var(--bg); color:var(--text); }
+[data-testid="stHeader"] { background:transparent; }
+[data-testid="stSidebar"] { display:none; }
+.block-container { max-width:100% !important; padding:0.75rem 1rem 6rem !important; }
+.top-status { display:grid; grid-template-columns:1.25fr repeat(6,auto); gap:1.35rem; align-items:center; border:1px solid var(--line); background:#101318; padding:.62rem .9rem; margin-bottom:.8rem; }
+.top-status .brand { font-weight:800; letter-spacing:.08em; font-size:1.05rem; }.top-status .brand span{color:var(--accent)}
+.top-status div:not(.brand){display:flex;flex-direction:column;min-width:72px}.top-status small{font-size:.58rem;color:var(--muted);letter-spacing:.12em}.top-status strong{font-size:.78rem}.ready,.state-ready,.state-running{color:var(--green)}.state-paused{color:var(--accent)}.state-stopped{color:var(--red)}
+.workspace-panel { min-height:75vh; }
+.panel-heading,.tree-section,.event-label { color:var(--muted); font-size:.66rem; font-weight:700; letter-spacing:.13em; margin:.4rem 0 .65rem; }
+.tree-section { margin-top:1.15rem; border-top:1px solid var(--line); padding-top:.7rem; }
+.event-label.experiment,.event-label.analysis{color:#6cb6ff}.event-label.decision,.event-label.next-decision{color:var(--accent)}.event-label.safety-policy{color:#c58df0}.event-label.human-override{color:var(--green)}
+.kv { display:flex;justify-content:space-between;border-bottom:1px solid #1f242a;padding:.3rem 0;font-size:.8rem}.kv span{color:var(--muted)}
+.timeline-node{display:grid;grid-template-columns:110px 1fr auto;gap:1rem;border:1px solid var(--line);padding:.8rem;background:var(--panel)}.timeline-node span{color:#c6ccd3}.timeline-node em{color:var(--muted);font-size:.72rem}.timeline-line{text-align:center;color:#4b535d;line-height:1rem}
+div[data-testid="stVerticalBlockBorderWrapper"] { background:var(--panel); border-color:var(--line) !important; }
+.stButton button { border-radius:3px; border-color:var(--line); background:#15191f; text-align:left; }
+.stChatInput { border-top:1px solid var(--line); background:var(--bg); }
+@media(max-width:1100px){.top-status{grid-template-columns:repeat(3,1fr)}.top-status .brand{grid-column:1/-1}}

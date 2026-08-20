@@ -1,0 +1,21 @@
+{
+  "task_id": "bracket_3d_001",
+  "research_goal": "研究三维设备安装支架拓扑优化中自适应滤波与投影策略的效果",
+  "geometry": "models/bracket.TopVoxel",
+  "material": {
+    "E_MPa": 70000,
+    "nu": 0.33,
+    "density_kg_m3": 2670
+  },
+  "load_cases": ["vertical", "lateral"],
+  "volume_fraction": 0.40,
+  "requirements": {
+    "connected_components": 1,
+    "gray_ratio_max": 0.05,
+    "compliance_increase_max": 0.03
+  },
+  "compute_budget": {
+    "gpu": "RTX 5090",
+    "max_runs": 30
+  }
+}

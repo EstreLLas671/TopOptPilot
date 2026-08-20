@@ -1,0 +1,59 @@
+# solver.fe_solver.v1 — 线性有限元求解器（Python 移植）
+# 对应 Python 引擎入口：solver.topopt_engine.run_topopt（entry 参考名 fe_solver_main）
+# backend="python"：numpy/scipy 稀疏直接求解，无 MATLAB 依赖
+
+plugin:
+  id: "solver.fe_solver.v1"
+  name: "二维有限元求解器（Python 移植）"
+  version: "1.0.0"
+  language: "Python"
+  entry: "fe_solver_main"
+  type: "solver"
+  status: "verified"
+
+interface:
+  input: ["task_spec", "backend"]
+  output: ["result"]
+  signature: "solver.topopt_engine.run_topopt(task_spec, backend='python')"
+  note: "backend='python'（numpy/scipy 稀疏直接求解，开箱即用）"
+  supported_objectives: ["compliance"]
+  supported_constraints: ["volume_fraction"]
+
+compatibility:
+  solvers: []
+  optimizers: ["OC"]
+  filters: ["sensitivity_filter", "density_filter"]
+  projections: ["none", "heaviside_projection"]
+  controllers:
+    - "fixed_controller"
+    - "periodic_controller"
+    - "gray_feedback_controller"
+    - "joint_feedback_controller"
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters: []
+
+limitations:
+  - "当前仅支持 2D 平面应力网格；3D 体素求解需使用 solver.cuda_mex.v1"
+  - "使用直接稀疏求解器，网格超过 fine（90×45）时内存占用显著上升"
+  - "经典 OC 的 change 判据不可靠，停止判据主用 max_iter（见验证记录）"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

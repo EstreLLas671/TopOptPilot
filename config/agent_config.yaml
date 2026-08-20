@@ -1,0 +1,97 @@
+# TopOptPilot Agent 系统配置
+# 参照方案 §7 AI Scientist 决策逻辑
+
+agent:
+  runtime:
+    framework: "pi-rpc"
+    provider: "dashscope"
+    api: "openai-completions"
+    model: "qwen3.7-plus"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    expose_thinking: false
+
+  orchestrator:
+    max_iterations: 5          # 最大科研循环轮次
+    max_no_gain_rounds: 2      # 连续无信息增益终止阈值
+    convergence_rounds: 3      # 连续"支持"结论后提前终止
+
+  research_lead:
+    require_validation: true   # 启动前必须验证任务包
+
+  evidence_agent:
+    max_methods_per_query: 10  # 每次检索最多返回方法数
+    min_evidence_score: 0.3    # 证据相关性最低阈值
+    require_doi: true          # 禁止无DOI引用
+    require_page: true         # 必须指定原文页码
+
+  hypothesis_agent:
+    min_hypotheses: 3          # 最少生成假设数
+    max_hypotheses: 5          # 最多生成假设数
+    require_falsifiable: true  # 必须包含明确可证伪条件
+
+  review_agent:
+    dimensions: 4              # 评审维度数（新颖/自洽/可证伪/成本）
+    require_counterexamples: true  # 必须为每个假设生成反例
+
+  experiment_agent:
+    prefer_verified: true      # 优先选择Verified状态插件
+    allow_experimental: false  # 正式实验禁止Experimental插件
+    cross_validation_required: true  # 必须有跨网格/跨载荷验证
+
+  audit_agent:
+    quality_thresholds:
+      max_gray_ratio: 0.05     # 灰度比例上限
+      connected_components: 1   # 连通分量要求
+      max_compliance_increase: 0.03  # 柔度增幅上限
+    solver_credibility:
+      max_residual: 1.0e-3     # 最大允许残差
+      max_cg_iterations: 500   # 最大允许PCG迭代
+    consistency:
+      cross_mesh_tolerance: 0.20  # 跨网格柔度差异容忍度
+      cpu_gpu_tolerance: 0.01    # CPU/GPU偏差容忍度
+
+plugins:
+  registry_path: "./plugins/registry/"
+  interfaces_path: "./plugins/interfaces/"
+  implementations_path: "./plugins/implementations/"
+  lifecycle:
+    promote_to_experimental:
+      - "规格说明完整"
+      - "接口定义完成"
+    promote_to_verified:
+      - "单元测试通过"
+      - "有限差分梯度检查通过"
+      - "二维MBB复现通过"
+      - "三维小案例稳定测试通过"
+      - "CPU/GPU一致性通过"
+      - "人工批准"
+
+mcp:
+  matlab:
+    engine_timeout: 300         # MATLAB引擎超时（秒）
+    auto_restart: true          # 崩溃后自动重启
+    keep_alive: true            # 保持常驻会话
+  solver:
+    max_handles: 5              # 最大同时MEX句柄数
+    memory_limit_gb: 24         # GPU显存上限（RTX 5090）
+    default_precision: "fp64"   # 默认求解精度
+
+experiments:
+  mesh_levels: ["coarse", "medium", "fine"]
+  load_cases: ["vertical", "lateral"]
+  output_dir: "./experiments/output/"
+  default_solver: "cuda_mex"
+  default_optimizer: "OC"
+  default_filter: "PDE_filter"
+  default_projection: "Heaviside_projection"
+
+knowledge:
+  evidence_db: "./knowledge/storage/method_cards/"
+  paper_storage: "./knowledge/storage/papers/"
+  reference_storage: "./knowledge/storage/references/"
+  auto_extract: true           # 自动提取PDF文本
+
+demo:
+  mode: false                  # 演示模式开关
+  precompute_results: true     # 预计算结果避免现场等待
+  backup_video: true           # 备用录像策略

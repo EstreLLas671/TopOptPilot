@@ -1,0 +1,59 @@
+# filter.sensitivity.v1 — 灵敏度滤波（经典 99-line check）
+# 对应 Python 入口：solver.filters.sensitivity_filter
+
+plugin:
+  id: "filter.sensitivity.v1"
+  name: "灵敏度滤波（经典 99-line check）"
+  version: "1.0.0"
+  language: "Python"
+  entry: "sensitivity_filter"
+  type: "filter"
+  status: "verified"
+
+interface:
+  input: ["dc", "H", "x"]
+  output: ["dcn"]
+  signature: "sensitivity_filter(dc, H, x) -> dcn   # solver/filters.py"
+  note: "dcn = (H@dc)/x，与 MATLAB 地面真值逐点验证"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: []
+  projections: ["none"]
+  controllers: ["fixed_controller"]
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: ["filter.density.v1"]
+
+parameters:
+  - name: "rmin"
+    meaning: "灵敏度滤波半径（单元数），用于抑制棋盘格与网格依赖"
+    type: "float"
+    range: [1.0, 6.0]
+    default: 1.5
+    suggested: [1.5, 2.0, 3.0]
+    unit: "单元"
+
+limitations:
+  - "rmin 小于 1.5 时棋盘格抑制不足，易产生灰度伪影"
+  - "rmin 过大（>6）会使拓扑结构过度模糊，丢失细节特征"
+  - "与密度滤波（density_filter）互斥，不可同时使用"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

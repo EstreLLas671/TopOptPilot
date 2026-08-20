@@ -1,0 +1,5 @@
+{
+  "id": "A", "name": "MBB beam compliance", "geometry": {"type": "MBB", "dimensions": [3, 1]},
+  "goal": "Minimize compliance at fixed material volume", "constraints": {"volume_fraction": 0.4, "gray_max": 0.05, "connected": true},
+  "hypothesis": "Projection continuation can reduce grayness without disconnecting the load path."
+}

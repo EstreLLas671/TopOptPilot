@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TopOptPilot 实验结果 JSON Schema",
+  "description": "参照方案 §6.3 MEX返回字段 + 附录B 实验结果JSON模板",
+  "type": "object",
+  "required": ["run_id", "status", "objective", "constraints", "quality", "solver"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "task_id": {"type": "string"},
+    "hypothesis_id": {"type": "string"},
+    "experiment_group": {"type": "string"},
+    "status": {"type": "string", "enum": ["converged", "failed", "timeout", "diverged"]},
+    "objective": {
+      "type": "object",
+      "properties": {
+        "compliance": {"type": "number"},
+        "weight": {"type": "number"}
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "volume_fraction": {"type": "number"}
+      }
+    },
+    "quality": {
+      "type": "object",
+      "properties": {
+        "gray_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "connected_components": {"type": "integer", "minimum": 0},
+        "max_displacement_mm": {"type": "number"}
+      }
+    },
+    "solver": {
+      "type": "object",
+      "properties": {
+        "backend": {"type": "string", "enum": ["cpu_top3dxl", "cuda_mex_fp64", "cuda_mex_fp32", "cuda_mex_mixed"]},
+        "relative_residual": {"type": "number", "minimum": 0},
+        "cg_iterations": {"type": "integer", "minimum": 0},
+        "solve_time_seconds": {"type": "number", "minimum": 0},
+        "mesh_level": {"type": "string", "enum": ["coarse", "medium", "fine"]},
+        "converged": {"type": "boolean"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "density": {"type": "string"},
+        "history": {"type": "string"},
+        "design": {"type": "string"},
+        "log": {"type": "string"}
+      }
+    }
+  }
+}

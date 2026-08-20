@@ -1,0 +1,71 @@
+# optimizer.OC.v1 — OC 最优准则更新（经典 99/88-line）
+# 对应 Python 入口：solver.oc_solver.oc_update
+# OC 仅支持单约束（体积分数），多约束需改用 MMA
+
+plugin:
+  id: "optimizer.OC.v1"
+  name: "OC 最优准则更新器"
+  version: "1.0.0"
+  language: "Python"
+  entry: "oc_update"
+  type: "optimizer"
+  status: "verified"
+
+interface:
+  input: ["x", "dc", "volfrac", "opts"]
+  output: ["xnew", "info"]
+  signature: "oc_update(x, dc, volfrac, opts) -> (xnew, info)   # solver/oc_solver.py"
+  note: "体积约束作用于设计变量 x，与 MATLAB 地面真值逐点验证"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: []
+  filters: ["filter.sensitivity.v1", "filter.density.v1"]
+  projections: ["none", "heaviside_projection"]
+  controllers:
+    - "fixed_controller"
+    - "periodic_controller"
+    - "gray_feedback_controller"
+    - "joint_feedback_controller"
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2, 3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters:
+  - name: "move"
+    meaning: "设计变量单步最大变化量（阻尼系数），控制收敛速度与稳定性"
+    type: "float"
+    range: [0.01, 1]
+    default: 0.2
+    suggested: [0.1, 0.2, 0.3]
+    unit: ""
+  - name: "xmin"
+    meaning: "设计变量下限（避免除零与奇异刚度）"
+    type: "float"
+    range: [0.0, 0.01]
+    default: 0.001
+    suggested: [0.001]
+    unit: ""
+
+limitations:
+  - "OC 接口不支持多约束（>1）；多约束需切换 MMA 优化器"
+  - "move 过大导致振荡不收敛，过小则收敛缓慢、迭代数激增"
+  - "xmin 过高会浪费有效材料体积，过低引入病态"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

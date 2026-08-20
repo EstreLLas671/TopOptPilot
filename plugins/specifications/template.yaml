@@ -1,0 +1,57 @@
+# TopOptPilot 插件说明书模板
+# 参照方案 §5.3 必填字段 + 附录A 插件说明书模板
+
+plugin:
+  id: ""                         # 唯一ID, 如 "projection.heaviside.v1"
+  name: ""                       # 显示名称
+  version: "1.0.0"               # 语义化版本
+  language: "MATLAB"             # 实现语言
+  entry: ""                      # MATLAB入口函数名
+  type: ""                       # solver/filter/projection/optimizer/controller/evaluator
+  status: "candidate"            # candidate/experimental/verified/deprecated
+
+interface:
+  input: []                      # 输入参数列表
+  output: []                     # 输出参数列表
+  signature: ""                  # 函数签名（MATLAB classdef 或 function）
+
+compatibility:
+  solvers: []                    # 兼容求解器列表
+  optimizers: []                 # 兼容优化器列表
+  filters: []                    # 兼容滤波列表
+  projections: []                # 兼容投影列表
+  controllers: []                # 兼容控制器列表
+  evaluators: []                 # 兼容评价器列表
+  dimensions: [2, 3]             # 支持的维度
+  requires_chain_gradient: false # 是否需要返回链式导数
+  dependencies: []               # 依赖的其他插件ID
+  mutual_exclusion: []           # 互斥的插件ID
+
+parameters:
+  - name: ""                     # 参数名
+    meaning: ""                  # 物理意义
+    type: "float"                # 数据类型
+    range: [0, inf]              # 数值范围
+    default: 0                   # 默认值
+    suggested: []                # 建议值列表
+    unit: ""                     # 单位
+
+limitations:
+  - ""                           # 已知失败模式
+  - ""                           # 适用边界描述
+
+evidence:
+  paper_doi: ""                  # 论文DOI
+  pages: []                      # 相关页码
+  figures: []                    # 相关图表编号
+  equations: []                  # 相关公式编号
+
+verification:
+  unit_test: false               # 单元测试通过？
+  finite_difference_test: false  # 有限差分梯度检查通过？
+  mbb_reproduction: false        # MBB梁基准复现通过？
+  cantilever_3d: false           # 3D悬臂梁通过？
+  cpu_gpu_consistency: false     # CPU/GPU一致性通过？
+  verified_by: ""                # 批准人
+  implementation_commit: ""      # 代码提交哈希
+  verification_date: ""          # 验证日期

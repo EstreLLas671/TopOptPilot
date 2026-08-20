@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+node_modules/
+.npm-cache/
+
+# Environment
+.env
+venv/
+.venv/
+.venv-release/
+
+# MATLAB
+*.asv
+*.m~*
+slprj/
+*.mexw64
+*.mexa64
+
+# CUDA
+*.o
+*.obj
+*.cu.o
+
+# Experiment Output
+experiments/output/
+topoptpilot/storage/
+*.mat
+*.nii
+*.vtk
+*.stl
+
+# Knowledge Storage
+knowledge/storage/papers/*.pdf
+knowledge/storage/references/*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test & verification artifacts
+tests/
+_ground_truth/
+test_phase0*.py
+test_phase0*.json
+
+# Third-party MATLAB reference modules (not part of the deliverable)
+求解器模块/
+
+# Competition original materials
+XH-202619*.pdf
+
+# Archives
+*.rar
+*.zip
+*.7z
