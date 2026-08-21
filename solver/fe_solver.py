@@ -167,6 +167,7 @@ class FESolver:
                 f"未知的边界条件类型: {bc_type}。支持: MBB, cantilever, "
                 f"L-bracket, simply_supported, custom")
 
+        F *= float(bc_config.get("load_scale", 1.0))
         return fixeddofs, F
 
     def solve(self, x: np.ndarray, penal: float, bc_type: str,

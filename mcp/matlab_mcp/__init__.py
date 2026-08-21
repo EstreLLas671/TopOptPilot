@@ -14,3 +14,7 @@ eng.cd(r'E:\\AAAwuliao2\\1A解绑挂帅')
 result = eng.top3d_main(nargout=1)
 ```
 """
+from .matlab_connector import MatlabConnector, MatlabMcpError
+from .matlab_mcp_server import MatlabMcpWorker
+
+__all__ = ["MatlabConnector", "MatlabMcpError", "MatlabMcpWorker"]

@@ -1,15 +1,16 @@
-# TopOptPilot V5.0 — Pi-native Local Research Workspace
+# TopOptPilot V5.1 — 原生桌面科研工作台
 
-> **V5.0 当前实现**：官方 `@earendil-works/pi-coding-agent` 以 JSON-RPC 常驻运行，
+> **V5.1 当前实现**：Windows 正式入口为 Tauri 2 + React 原生桌面应用；官方 `@earendil-works/pi-coding-agent` 以 JSON-RPC 常驻运行，
 > 每个 Research ID 对应一个可恢复 Pi session。Pi 只接触 11 个科研工具；参数由确定性
-> Safety Policy 编译，目标与评价来自真实 2D/3D FEM，而不是大模型猜测。
+> Safety Policy 编译。F3 只通过 MathWorks MATLAB MCP Server v0.12.0 调用仓库内原始 `.m`
+> 求解器，失败时严格记录为 MATLAB 基础设施故障，不允许 Python 伪回退。界面默认中文，支持英文。
 
 面向三维工程结构拓扑优化的**可验证假设生成与自动实验智能体**（AI Scientist）
 
 | 字段 | 内容 |
 |------|------|
 | **对应赛题** | XH-202619 基于国产开源大模型的 AI Scientist 的研发与应用 |
-| **技术底座** | 官方 Pi RPC + Qwen 3.7 Plus + Python 2D/3D FEM + 可选 MATLAB |
+| **技术底座** | Tauri 2 + React + 官方 Pi RPC + Qwen + Python FEM + MATLAB MCP |
 | **核心定位** | 大模型做科研推理，MATLAB/CUDA 做确定性物理计算，评价器做客观裁决 |
 
 ---
@@ -25,15 +26,26 @@ TopOptPilot 不是"自然语言调一次拓扑优化"的工具。它是：
 **核心原则**：大模型不代替有限元求解器。Pi 负责科研意图、证据解释与工具编排；
 Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责确定性计算，Evaluator 客观裁决。
 
-## V5.0 快速开始
+## V5.1 快速开始
 
 ```powershell
 npm install
 pip install -r requirements.txt
+npm --prefix desktop install
 Copy-Item .env.example .env
 # 在 .env 中填写 DASHSCOPE_API_KEY
 python launch.py
 ```
+
+`python launch.py` 启动 Tauri 原生窗口，不打开浏览器。仅开发旧界面时使用
+`python launch.py --web`。生成 Windows x64 安装包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
+```
+
+安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`，最终用户无需预装
+Python、Node 或 Rust；MATLAB 本体不随包分发，首次验收版本为 R2024a。
 
 模型默认使用 `qwen3.7-plus` 与 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
 密钥仅由 `.env` 注入，不写入 session、报告或复现包。无模型或调用失败时进入
@@ -200,15 +212,13 @@ compliance/change/volume_fraction/gray_ratio/connected/beta/penal 历史）。
 | `gray_feedback_controller` | A1 | 灰度反馈：灰度未达标时延迟 β 提升 |
 | `joint_feedback_controller` | Ours | 联合反馈：灰度 + 连通性双反馈，步长更温和 |
 
-### MATLAB 双后端
+### MATLAB MCP 后端
 
-`backend="matlab"` 时通过 MATLAB Engine 调用原始 `.m` 文件（需先 `pip install matlabengine`）；
-未安装或未配置时回退 Python（numpy/scipy）实现。统一入口不变：
-
-```bash
-python -c "from solver.topopt_engine import run_topopt; \
-print(run_topopt({...}, backend='matlab')['objective'])"
-```
+正式 ResearchService 中的 `backend="matlab"` 由单会话 `MatlabMcpWorker` 调用随包提供的
+MathWorks MATLAB MCP Server v0.12.0。MCP 只允许 `topopt_run_task` 受控工具；它按任务维度
+分派原始 `topopt_main.m` 或 `topopt3d_main.m`。任务与结果路径必须位于当前研究数据目录，
+参数须通过 Policy 安全边界。MATLAB/MCP、许可证、超时或输出校验失败均标记为
+`FAILED/MATLAB_INFRASTRUCTURE`，F3 不回退到 Python。
 
 ### 与实验层的集成
 
@@ -246,12 +256,13 @@ Round 1 审计驱动调参：盲锐化对照 C≈113.5（退化）→ 灰度反�
 |------|------|------|------|
 | Agent | 6角色+编排器+状态机+提示词 | ✅ 完成 | 39个Python文件，3,241行代码，全部语法通过 |
 | Plugin | 6个MATLAB基类+Python注册表 | ✅ 接口层完成 | 实现层为空，等待人工开发 |
-| MCP | MATLAB桥+CUDA桥 | ✅ 接口占位 | 具体实现依赖 pip install matlabengine |
+| MCP | 官方 MATLAB MCP v0.12.0 + 受控工具 | ✅ 实机通过 | R2024a 真实 2D/3D `.m` 求解 |
 | Knowledge | 证据库+方法卡片 | ✅ 关键词检索 | 待升级为SQLite+FAISS三级架构 |
 | Solver | 真实拓扑优化引擎+双后端 | ✅ 完成 | numpy/scipy移植，与MATLAB地面真值逐点验证 |
 | Experiment | 任务生成+运行器+结果管理 | ✅ 完成 | 预定义六组实验矩阵 |
-| Frontend | Streamlit Workspace | ✅ V5.0 | Explorer + Pi Stream + Inspector + Baselines |
-| Test API | FastAPI | ✅ V5.0 | 与 Streamlit 共用 ResearchService |
+| Frontend | Tauri 2 + React 桌面 App | ✅ V5.1 | Codex 式三栏工作台，中英双语 |
+| Sidecar API | FastAPI + WebSocket | ✅ V5.1 | 随机端口、一次性令牌、仅本机访问 |
+| Legacy UI | Streamlit Workspace | 开发专用 | `python launch.py --web` |
 | Demo | 10分钟演示编排 | ✅ 完成 | 9阶段时间线+Paper-to-Plugin流水线 |
 
 ---
@@ -266,11 +277,11 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，填入 DASHSCOPE_API_KEY
 
-# 3. 启动唯一主界面
-streamlit run app.py
-
-# 或执行环境/求解器检查后启动
+# 3. 启动原生桌面主界面
 python launch.py
+
+# 仅开发旧 Streamlit 页面
+python launch.py --web
 
 # 4. （可选）启动赛题测试 API
 uvicorn topoptpilot.api.fastapi_app:app --host 127.0.0.1 --port 8000
@@ -285,6 +296,21 @@ Workspace 支持自然语言和统一命令输入：`/run`、`/pause`、`/resume
 
 ---
 
+## 第三方依赖（vendor/，不入库）
+
+桌面端打包（`scripts/build_desktop.ps1`）与 MATLAB MCP 后端依赖以下第三方组件，
+二进制不随仓库分发，按下表在本地准备：
+
+| 本地路径 | 获取方式 | 用途 |
+|----------|----------|------|
+| `vendor/node/` | 构建脚本自动从 nodejs.org 下载 Node v24.14.0 win-x64 并解压 | 桌面端 sidecar 启动 Pi RPC，无需手动准备 |
+| `vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe` + `LICENSE.md` | 从 MathWorks 官方 MATLAB MCP Server 项目发布页下载（BSD-2 许可） | F3 高保真 MATLAB 求解通道（严格审批制） |
+
+本地验证套件位于 `tests/`（入口 `pytest.ini`，`pip install -r requirements-dev.txt` 后
+`pytest` 运行），同样不随仓库分发。
+
+---
+
 ## 边界情况评估
 
 ### ✅ 已覆盖的边界
@@ -292,10 +318,11 @@ Workspace 支持自然语言和统一命令输入：`/run`、`/pause`、`/resume
 任务包字段缺失、无假设可审、预算耗尽、连续无信息增益、求解残差超标、
 跨网格结论不一致、假设被明确否定、最大迭代次数、插件组合非法
 
-### ❌ 缺失（P0 必须补）
+### 当前外部阻塞
 
-CUDA MEX 崩溃自动重启、NaN/Inf 运行时检测、PiAgent/DeepSeek API 超时重试、
-多条诊断规则同时触发的优先级裁决、两个假设结果无法区分时的区分性实验
+DashScope 在线门禁因当前凭据返回 HTTP 401，不能标记完整 release ready。MATLAB R2024a、
+官方 MCP 2D/3D、严格 F3、桌面 EXE 与默认中文门禁均已实机验证。模型错误会进入 Safe Mode；
+worker 异常、NaN/Inf、缓存损坏、竞争解释 DOE 与审批路径均有回归覆盖。
 
 ### ❌ 缺失（P1 重要）
 
@@ -322,7 +349,7 @@ CUDA MEX 崩溃自动重启、NaN/Inf 运行时检测、PiAgent/DeepSeek API 超
 
 ---
 
-## 改进方向 🚧
+## 历史改进路线（V5 已取代）
 
 ### P0 — 必须（不改则系统无法可靠运行）
 
@@ -358,7 +385,7 @@ CUDA MEX 崩溃自动重启、NaN/Inf 运行时检测、PiAgent/DeepSeek API 超
 | 时间 | 内容 | 核心信息 |
 |------|------|----------|
 | 0:00–0:50 | 问题与差距 | 方法多选择难，三维实验成本高 |
-| 0:50–1:40 | 系统架构 | PiAgent/DeepSeek决策→MATLAB方法→CUDA物理 |
+| 0:50–1:40 | 系统架构 | 官方 Pi/Qwen 决策→Policy→真实 Python/MATLAB FEM |
 | 1:40–2:40 | 上传论文与任务 | 真实PDF+支架边界条件 |
 | 2:40–3:40 | Paper-to-Plugin | 公式/页码/条件→方法卡片 |
 | 3:40–4:40 | 候选假设竞争 | 3项候选+审稿Agent反例 |
@@ -376,7 +403,7 @@ CUDA MEX 崩溃自动重启、NaN/Inf 运行时检测、PiAgent/DeepSeek API 超
 |----------|---------------------|
 | Problem Statement | 当前方法局限、适用场景与可证伪问题 |
 | Rationale | 论文证据、知识缺口、候选解释和推导链 |
-| Technical Details | PiAgent、DeepSeek、插件、FEM、CUDA、优化器、指标 |
+| Technical Details | 官方 Pi、Qwen、Policy、FEM、多保真、指标 |
 | Datasets — Source | 论文配置、基线实验和已有场数据 |
 | Datasets — Target | 待运行的密度、位移、柔度、残差数据 |
 | Paper Title/Abstract | 仅在真实结果完成后生成，禁止预写正向结论 |

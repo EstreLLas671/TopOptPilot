@@ -10,7 +10,16 @@ def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
     events, decisions = events or [], decisions or []
     completed = [item for item in experiments if item.get("result")]
     feasible = [item for item in completed if item["status"] == "SUCCESS"]
-    best = min((item["result"]["objective"]["compliance"] for item in feasible), default=None)
+    rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+    highest = max((rank.get(str(item.get("fidelity", "F0")).split()[0], 0)
+                   for item in feasible), default=0)
+    comparable = [item for item in feasible
+                  if rank.get(str(item.get("fidelity", "F0")).split()[0], 0) == highest]
+    best = min((item["result"]["objective"]["compliance"] for item in comparable), default=None)
+    best_raw = min((item["result"]["objective"]["compliance"] for item in completed),
+                   default=None)
+    best_gray_raw = min((item["result"]["quality"].get("gray_ratio", 1)
+                         for item in completed), default=None)
     first_feasible = next((index for index, item in enumerate(completed, 1)
                            if item["status"] == "SUCCESS"), None)
     high_fidelity = sum(str(item.get("fidelity", "F0")).startswith(("F2", "F3"))
@@ -39,9 +48,11 @@ def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
         "high_fidelity_runs": high_fidelity,
         "constraint_violation_rate": (None if not completed else
                                       sum(item["status"] != "SUCCESS" for item in completed) / len(completed)),
-        "best_compliance": best,
-        "best_gray_ratio": min((item["result"]["quality"].get("gray_ratio", 1)
-                                for item in feasible), default=None),
+        # Secondary metrics stay informative even if a short fixed budget never
+        # reaches the complete feasibility definition. The primary metric above
+        # remains strictly feasibility-gated.
+        "best_compliance": best_raw,
+        "best_gray_ratio": best_gray_raw,
         "total_fem_cost": costs,
         "human_interventions": len([item for item in events if item.get("kind") == "HUMAN OVERRIDE"]),
         "final_regret": (None if best is None or reference_best is None else best - reference_best),

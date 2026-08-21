@@ -24,6 +24,8 @@ class EvidenceCaseRunner:
         research = self.service.create_research({
             "name": definition["name"], "goal": definition["goal"], "mode": "CONTROLLED",
             "geometry": definition["geometry"], "constraints": definition["constraints"],
+            "material": definition.get("material", {}), "loads": definition.get("loads", []),
+            "boundary_conditions": definition.get("boundary_conditions", {}),
             "hypothesis": definition["hypothesis"], "budget_total": 12,
             "budgets": {"total": 12, "f0": 8, "f1": 2, "f2": 1, "f3": 1},
         })
@@ -49,15 +51,33 @@ class EvidenceCaseRunner:
 
     def _case_b(self, rid: str) -> None:
         current = self._intent(rid, "ESTABLISH_BASELINE")[0]
+        generated = [current]
         for _ in range(4):
             values = self._intent(rid, "REDUCE_GRAYNESS", source_experiment=current["id"])
             if not values: break
             current = values[0]
-        self._intent(rid, "TEST_COMPETING_EXPLANATIONS", source_experiment=current["id"],
+            generated.extend(values)
+        failures = [item for item in generated
+                    if item["result"]["quality"].get("connected_components", 1) != 1]
+        failure = min(failures, key=lambda item: item["result"]["quality"].get("gray_ratio", 1),
+                      default=current)
+        self._intent(rid, "TEST_COMPETING_EXPLANATIONS", source_experiment=failure["id"],
                      explanations=["beta too high", "rmin too low"], factors=["beta", "rmin"])
 
     def _case_c(self, rid: str) -> None:
-        current = self._intent(rid, "ESTABLISH_BASELINE")[0]
+        baseline = self._intent(rid, "ESTABLISH_BASELINE")[0]
+        explored = self._intent(rid, "EXPLORE_PARAMETER", factor="beta",
+                                source_experiment=baseline["id"])
+        feasible = [item for item in explored if item["status"] == "SUCCESS"]
+        current = (min(feasible, key=lambda item: item["result"]["objective"]["compliance"])
+                   if feasible else min(explored, key=lambda item: (
+                       item["result"]["quality"].get("connected_components", 1) != 1,
+                       item["result"]["quality"].get("gray_ratio", 1))))
+        for _ in range(2):
+            if current["status"] == "SUCCESS": break
+            refined = self._intent(rid, "REDUCE_GRAYNESS", source_experiment=current["id"])
+            if not refined: break
+            current = refined[0]
         for _ in range(3):
             values = self._intent(rid, "UPGRADE_FIDELITY", source_experiment=current["id"],
                                   approve=True)

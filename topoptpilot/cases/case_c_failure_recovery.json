@@ -1,5 +1,5 @@
 {
-  "id": "C", "name": "Multi-fidelity 3D transfer", "geometry": {"type": "cantilever3d", "dimensions": [3, 1, 0.75]},
-  "goal": "Promote a robust design from 2D coarse through 2D fine and Python 3D to protected high fidelity", "constraints": {"volume_fraction": 0.35, "gray_max": 0.08, "connected": true},
+  "id": "C", "name": "Multi-fidelity 3D transfer", "geometry": {"type": "cantilever3d", "dimensions": [3, 1, 0.75]}, "boundary_conditions": {"type": "cantilever"}, "loads": [{"type": "cantilever", "magnitude": 1.0}], "material": {"E": 1.0, "nu": 0.3},
+  "goal": "Promote a robust design from 2D coarse through 2D fine and Python 3D to protected high fidelity", "constraints": {"volume_fraction": 0.35, "gray_max": 0.08, "connected": true, "required_fidelity": "F3"},
   "hypothesis": "A connected low-gray 2D topology remains competitive after 3D fidelity promotion."
 }

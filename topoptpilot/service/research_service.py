@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -29,6 +30,7 @@ from topoptpilot.schemas import (
 from topoptpilot.tools import ResearchTools
 from topoptpilot.agent_runtime import PiBridge
 from agent.llm.client import PiAgentClient
+from mcp.matlab_mcp import MatlabMcpError, MatlabMcpWorker
 
 
 STATUS_SYMBOLS = {
@@ -38,31 +40,39 @@ STATUS_SYMBOLS = {
 
 
 class ResearchService:
-    def __init__(self, data_dir: str | Path = "topoptpilot/storage", max_workers: int = 2,
+    def __init__(self, data_dir: str | Path | None = None, max_workers: int = 2,
                  agent_client: PiAgentClient | None = None):
-        self.data_dir = Path(data_dir).resolve()
-        self.project_root = Path(__file__).resolve().parents[2]
+        configured_data = data_dir or os.environ.get("TOPPILOT_DATA_DIR") or "topoptpilot/storage"
+        self.data_dir = Path(configured_data).resolve()
+        self.project_root = Path(os.environ.get(
+            "TOPPILOT_RESOURCE_ROOT", Path(__file__).resolve().parents[2])).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.store = ResearchStateStore(self.data_dir / "research.db")
         self.queue = ExperimentQueue(self.data_dir / "progress", max_workers=max_workers)
+        self.matlab_worker = MatlabMcpWorker(self.data_dir, self.project_root)
         self.cache = ResultCache(self.data_dir / "cache")
         self.orchestrator = ResearchOrchestrator()
         self.agent_client = agent_client or PiAgentClient()
         self.tools = ResearchTools(self)
         self.pi_runtime = None
+        self.pi_runtime_error = None
         try:
             self.pi_runtime = PiBridge(self)
         except Exception as exc:
-            self.store.append_event("SYSTEM", EventKind.SYSTEM.value, "PI RPC UNAVAILABLE", str(exc))
+            self.pi_runtime_error = str(exc)
         self._completion_lock = threading.RLock()
 
     def health(self) -> dict[str, Any]:
-        runtime = self.pi_runtime.health() if self.pi_runtime else {"available": False, "status": "not_started"}
+        runtime = (self.pi_runtime.health() if self.pi_runtime else
+                   {"available": False, "status": "unavailable", "last_error": self.pi_runtime_error})
+        matlab_mcp = self.matlab_worker.health()
         return {"status": "ok", "solver_2d": True, "python_3d": True,
-                "matlab": self._matlab_available(), "database": str(self.store.db_path),
-                "agent_framework": self.agent_client.framework,
+                "matlab": matlab_mcp["state"] != "UNAVAILABLE", "matlab_mcp": matlab_mcp,
+                "database": str(self.store.db_path),
+                "agent_framework": "official-pi-rpc" if runtime.get("available") else "rule-safe-mode",
                 "agent_model": self.agent_client.model,
-                "agent_configured": bool(self.agent_client.api_key), "pi_rpc": runtime}
+                "agent_configured": bool(self.agent_client.api_key),
+                "python_agent_fallback": self.agent_client.framework, "pi_rpc": runtime}
 
     @staticmethod
     def _matlab_available() -> bool:
@@ -98,6 +108,8 @@ class ResearchService:
         fidelity = str(proposal["fidelity"])
         if budget["remaining"]["total"] <= 0 or budget["remaining"].get(fidelity, 0) <= 0:
             raise ValueError(f"No remaining {fidelity} budget")
+        if budget["time_remaining"] is not None and budget["time_remaining"] <= 0:
+            raise ValueError("Research time budget is exhausted")
         if fidelity == "F3" and self.pi_runtime:
             threading.Thread(target=self.pi_runtime.reviewer.review,
                              args=(research_id, "HIGH_FIDELITY_ESCALATION", proposal_id),
@@ -123,13 +135,16 @@ class ResearchService:
         """Start the Pi-owned closed loop; Policy remains the sole parameter compiler."""
         research = self._require_research(research_id)
         self.store.update_research(research_id, mode="AUTONOMOUS", status="RUNNING")
+        self.store.append_event(research_id, EventKind.SYSTEM.value, "ROUND_STARTED",
+                                f"Autonomous round {int(research.get('current_round', 0)) + 1} started.")
+        language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
         prompt = (
             "You are the primary Pi Research Agent. Begin or continue an autonomous topology-"
             "optimization campaign. First call research_get_context and research_get_budget. "
             "Choose one scientific intent, call policy_compile_intent, preview every returned proposal, "
             "then submit the safe bounded batch within the available budget. Never provide numeric solver "
             "parameters directly. Await all FEM evidence "
-            "before the next decision. Stop on goal, plateau, or exhausted budget."
+            f"before the next decision. Stop on goal, plateau, or exhausted budget. Reply in {language}."
         )
         threading.Thread(target=self._send_pi_or_fallback,
                          args=(research_id, prompt, "experiment-planning"), daemon=True).start()
@@ -184,17 +199,25 @@ class ResearchService:
         budget = FidelityManager.budget(research, experiments)
         if budget["remaining"]["total"] <= 0:
             return "BUDGET_EXHAUSTED"
+        if budget["time_remaining"] is not None and budget["time_remaining"] <= 0:
+            return "BUDGET_EXHAUSTED"
         successful = [item for item in experiments if item.get("result") and item["status"] == "SUCCESS"]
         if successful:
-            best = min(successful, key=lambda item: item["result"]["objective"]["compliance"])
-            q = best["result"].get("quality", {})
+            required = str(research["constraints"].get("required_fidelity", "F2"))
+            rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+            eligible = [item for item in successful
+                        if rank.get(str(item["fidelity"]).split()[0], 0) >= rank.get(required, 2)]
+            best = min(eligible, key=lambda item: item["result"]["objective"]["compliance"],
+                       default=None)
+            q = (best or {}).get("result", {}).get("quality", {})
             if (q.get("gray_ratio", 1) <= research["constraints"].get("gray_max", 0.05)
                     and (not research["constraints"].get("connected", True)
-                         or q.get("connected_components") == 1)
-                    and str(best["fidelity"]).startswith(("F2", "F3"))):
+                         or q.get("connected_components") == 1)):
                 return "GOAL_ACHIEVED"
-        if len(successful) >= 4:
-            values = [item["result"]["objective"]["compliance"] for item in successful[-4:]]
+        same_fidelity = [item for item in successful
+                         if str(item["fidelity"]).split()[0] == str(successful[-1]["fidelity"]).split()[0]] if successful else []
+        if len(same_fidelity) >= 4:
+            values = [item["result"]["objective"]["compliance"] for item in same_fidelity[-4:]]
             if (max(values) - min(values)) / max(min(values), 1e-12) < 0.005:
                 return "PLATEAU"
         return None
@@ -221,8 +244,12 @@ class ResearchService:
         research["events"] = self.store.list_events(research_id)
         research["decisions"] = self.store.list_decisions(research_id)
         successful = [e for e in research["experiments"] if e["status"] == "SUCCESS" and e["result"]]
+        rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+        highest = max((rank.get(str(item["fidelity"]).split()[0], 0) for item in successful), default=0)
+        comparable = [item for item in successful
+                      if rank.get(str(item["fidelity"]).split()[0], 0) == highest]
         research["best_experiment"] = min(
-            successful, key=lambda e: e["result"].get("objective", {}).get("compliance", float("inf")),
+            comparable, key=lambda e: e["result"].get("objective", {}).get("compliance", float("inf")),
             default=None,
         )
         return research
@@ -237,6 +264,8 @@ class ResearchService:
         budget = FidelityManager.budget(research, self.store.list_experiments(research_id))
         if code in {"F0", "F1", "F2", "F3"} and budget["remaining"].get(code, 0) <= 0:
             raise ValueError(f"No remaining {code} budget")
+        if budget["time_remaining"] is not None and budget["time_remaining"] <= 0:
+            raise ValueError("Research time budget is exhausted")
         parameters = {**model.parameters, **research["locks"]}
         experiment_id = self._next_experiment_id(research_id)
         draft = {"id": experiment_id, "research_id": research_id, **model.model_dump(),
@@ -292,7 +321,7 @@ class ResearchService:
             raise ValueError(f"Research is {research['status'].lower()}")
         if experiment["status"] not in {"WAITING", "FAILED", "CANCELLED"}:
             return experiment
-        task = build_solver_task(experiment)
+        task = build_solver_task(experiment, research)
         if experiment.get("warm_start"):
             source = self.store.get_experiment(experiment["warm_start"])
             density = ((source or {}).get("result") or {}).get("artifacts", {}).get("density")
@@ -300,18 +329,34 @@ class ResearchService:
                 task["params"]["initial_density"] = density
         cache_task = {**task, "backend": experiment["backend"]}
         cached = self.cache.get(cache_task)
+        if experiment["backend"] == "matlab" and cached is not None:
+            backend = str((cached.get("solver") or {}).get("backend", ""))
+            if not backend.startswith("matlab_mcp_"):
+                cached = None
         if cached is not None:
             from concurrent.futures import Future
             future = Future()
             future.set_result(cached)
             self.store.update_experiment(experiment_id, status="RUNNING", run_id="cache_hit",
                                          started_at=utc_now(), progress=1.0, cached=1)
-            self._complete_experiment(experiment_id, "cache_hit", future)
+            self._complete_experiment(experiment_id, "cache_hit", future, cache_task)
             return self.get_experiment(experiment_id)
-        run_id = self.queue.submit(
-            task, backend=experiment["backend"],
-            done=lambda rid, future: self._complete_experiment(experiment_id, rid, future),
-        )
+        if experiment["backend"] == "matlab":
+            run_id, _ = self.matlab_worker.submit(
+                task, research["id"], experiment_id,
+                done=lambda rid, future: self._complete_experiment(
+                    experiment_id, rid, future, cache_task),
+            )
+            self.store.append_event(research["id"], EventKind.EXPERIMENT.value,
+                                    "MATLAB MCP STARTED",
+                                    "Approved task was dispatched to the restricted topopt_run_task MCP tool.",
+                                    experiment_id, {"backend": "matlab_mcp", "tool": "topopt_run_task"})
+        else:
+            run_id = self.queue.submit(
+                task, backend=experiment["backend"],
+                done=lambda rid, future: self._complete_experiment(
+                    experiment_id, rid, future, cache_task),
+            )
         self.store.update_experiment(experiment_id, status="RUNNING", run_id=run_id,
                                      started_at=utc_now(), progress=0.0)
         self.store.update_research(research["id"], status="RUNNING",
@@ -332,7 +377,8 @@ class ResearchService:
             fields["status"] = status
         self.store.update_experiment(experiment["id"], **fields)
 
-    def _complete_experiment(self, experiment_id: str, run_id: str, future: Future) -> None:
+    def _complete_experiment(self, experiment_id: str, run_id: str, future: Future,
+                             cache_task: dict[str, Any] | None = None) -> None:
         with self._completion_lock:
             experiment = self.store.get_experiment(experiment_id)
             if not experiment:
@@ -349,7 +395,9 @@ class ResearchService:
                 analysis = self.orchestrator.analyze(research, result)
                 result["evaluation"] = analysis["evaluation"]
                 if run_id != "cache_hit":
-                    self.cache.put({**build_solver_task(experiment), "backend": experiment["backend"]}, result)
+                    self.cache.put(cache_task or {**build_solver_task(experiment, research),
+                                                  "backend": experiment["backend"]}, result)
+                result = self._persist_artifacts(research["id"], experiment_id, result)
                 status = "SUCCESS" if analysis["evaluation"]["success"] else "FAILED"
                 iterations = int(result.get("solver", {}).get("iterations", 0))
                 self.store.update_experiment(
@@ -372,7 +420,11 @@ class ResearchService:
                 self.store.update_experiment(experiment_id, status="FAILED", progress=1.0,
                                              completed_at=utc_now(), error=str(exc))
                 self.store.append_event(research["id"], EventKind.SYSTEM.value,
-                                        f"EXPERIMENT {experiment_id} FAILED", str(exc), experiment_id)
+                                        f"EXPERIMENT {experiment_id} FAILED", str(exc), experiment_id,
+                                        {"failure_type": ("MATLAB_INFRASTRUCTURE"
+                                                          if isinstance(exc, MatlabMcpError)
+                                                          or experiment["backend"] == "matlab"
+                                                          else "INFRASTRUCTURE")})
             running = [e for e in self.store.list_experiments(research["id"])
                        if e["status"] in {"WAITING", "RUNNING"} and e["run_id"]]
             if not running:
@@ -389,18 +441,64 @@ class ResearchService:
                         threading.Thread(target=self.pi_runtime.reviewer.review,
                                          args=(research["id"], "RESEARCH_CONCLUSION"), daemon=True).start()
                 elif current["mode"] == "AUTONOMOUS":
-                    completed_ids = [item["id"] for item in self.store.list_experiments(research["id"])
-                                     if item.get("completed_at")]
+                    completed_items = [item for item in self.store.list_experiments(research["id"])
+                                       if item.get("completed_at")]
+                    completed_ids = [item["id"] for item in completed_items]
+                    self.store.append_event(research["id"], EventKind.SYSTEM.value,
+                                            "EXPERIMENT_BATCH_COMPLETED",
+                                            f"Completed evidence batch: {completed_ids[-6:]}")
                     prompt = (
                         f"EXPERIMENT_BATCH_COMPLETED: {completed_ids[-6:]}. Read structured results, "
                         "compare relevant history, then choose the next scientific intent. You must call "
                         "policy_compile_intent; do not invent numeric parameters. Submit the complete safe "
                         "controlled batch within budget, or state a termination reason."
                     )
+                    skill = ("failure-diagnosis" if any(item["status"] == "FAILED" and item.get("result")
+                                                        for item in completed_items[-6:])
+                             else "hypothesis-evaluation")
                     threading.Thread(target=self._send_pi_or_fallback,
-                                     args=(research["id"], prompt, "hypothesis-evaluation"), daemon=True).start()
+                                     args=(research["id"], prompt, skill), daemon=True).start()
                 elif current["status"] != "STOPPED":
                     self.store.update_research(research["id"], status="READY")
+
+    def _persist_artifacts(self, research_id: str, experiment_id: str,
+                           result: dict[str, Any]) -> dict[str, Any]:
+        import numpy as np
+        directory = self.data_dir / research_id / "artifacts" / experiment_id
+        directory.mkdir(parents=True, exist_ok=True)
+        artifacts = result.setdefault("artifacts", {})
+        density = np.asarray(artifacts.get("density"), dtype=float)
+        density_path = directory / "density.npy"
+        np.save(density_path, density)
+        history_path = directory / "history.json"
+        history_path.write_text(json.dumps(artifacts.get("history", []), default=str), encoding="utf-8")
+        solver_path = directory / "solver.json"
+        solver_path.write_text(json.dumps(result.get("solver", {}), default=str), encoding="utf-8")
+        log_path = directory / "log.txt"
+        log_path.write_text(
+            f"experiment={experiment_id}\nstatus={result.get('status')}\n"
+            f"compliance={result.get('objective', {}).get('compliance')}\n"
+            f"gray_ratio={result.get('quality', {}).get('gray_ratio')}\n", encoding="utf-8")
+        vtk_path = directory / "density.vtk"
+        self._write_density_vtk(vtk_path, density)
+        artifacts.update({"density_path": str(density_path), "history_path": str(history_path),
+                          "solver_output_path": str(solver_path), "log": str(log_path),
+                          "vtk": str(vtk_path)})
+        return result
+
+    @staticmethod
+    def _write_density_vtk(path: Path, density) -> None:
+        import numpy as np
+        value = np.asarray(density, dtype=float)
+        if value.ndim == 2:
+            value = value[None, :, :]
+        nz, ny, nx = value.shape
+        header = ("# vtk DataFile Version 3.0\nTopOptPilot density\nASCII\n"
+                  "DATASET STRUCTURED_POINTS\n"
+                  f"DIMENSIONS {nx} {ny} {nz}\nORIGIN 0 0 0\nSPACING 1 1 1\n"
+                  f"POINT_DATA {value.size}\nSCALARS density float 1\nLOOKUP_TABLE default\n")
+        path.write_text(header + "\n".join(f"{item:.9g}" for item in value.ravel()) + "\n",
+                        encoding="utf-8")
 
     def approve_decision(self, decision_id: str) -> dict[str, Any]:
         decision = self._require_decision(decision_id)
@@ -413,6 +511,28 @@ class ResearchService:
         if decision["experiment_id"]:
             self.run_experiment(decision["experiment_id"])
         return self._require_decision(decision_id)
+
+    def edit_pending_experiment(self, experiment_id: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        experiment = self.get_experiment(experiment_id)
+        decision = next((item for item in self.store.list_decisions(experiment["research_id"])
+                         if item.get("experiment_id") == experiment_id and item["status"] == "PENDING"), None)
+        if not decision:
+            raise ValueError("Only a pending proposal can be edited")
+        merged = {**experiment["parameters"], **parameters,
+                  **self._require_research(experiment["research_id"])["locks"]}
+        safety = self.orchestrator.inspect_proposal({**experiment, "parameters": merged})
+        if not safety["safe"]:
+            self.store.append_event(experiment["research_id"], EventKind.SAFETY.value,
+                                    "EDIT REJECTED", str(safety["reason"]), experiment_id, safety)
+            raise ValueError(f"Safety Policy rejected edit: {safety['reason']}")
+        self.store.update_experiment(experiment_id, parameters=merged, safety=safety["risk"])
+        proposal = {**decision["proposal"], "parameters": merged}
+        self.store.update_decision(decision["id"], proposal=proposal, risk=str(safety["risk"]),
+                                   reason=f"Human-edited proposal: {experiment['purpose']}")
+        self.store.append_event(experiment["research_id"], EventKind.HUMAN.value,
+                                "PARAMETERS EDITED", f"Pending proposal updated to {merged}.",
+                                experiment_id, {"decision_id": decision["id"], "safety": safety})
+        return self.get_experiment(experiment_id)
 
     def reject_decision(self, decision_id: str) -> dict[str, Any]:
         decision = self._require_decision(decision_id)
@@ -540,10 +660,15 @@ class ResearchService:
 
     def _command_promote(self, research_id: str, args: list[str]) -> WorkspaceCommandResult:
         source = self._experiment_arg(research_id, args, "/promote <experiment>")
-        promoted = ExperimentCreate(purpose=f"Promote {source['id']} to fine fidelity",
-                                    fidelity="F1 — 2D Fine", mesh_level="medium",
-                                    backend=source["backend"], parameters=source["parameters"],
-                                    warm_start=source["id"], requires_approval=True)
+        current = str(source["fidelity"]).split()[0]
+        target = FidelityManager().promote_code(current)
+        labels = {"F0": "F0 — 2D Coarse", "F1": "F1 — 2D Fine",
+                  "F2": "F2 — Python 3D", "F3": "F3 — MATLAB 3D"}
+        promoted = ExperimentCreate(purpose=f"Promote {source['id']} to {target}",
+                                    fidelity=labels[target], mesh_level=FidelityManager.mesh_level(target),
+                                    backend=FidelityManager.backend_for(target), parameters=source["parameters"],
+                                    warm_start=source["id"], requires_approval=target in {"F2", "F3"},
+                                    intent="UPGRADE_FIDELITY")
         new = self.create_experiment(research_id, promoted)
         return WorkspaceCommandResult(ok=True, message=f"Created promoted run {new['id']}.",
                                       action="select", data={"experiment_id": new["id"]})
@@ -587,8 +712,15 @@ class ResearchService:
             archive.writestr("proposals.json", json.dumps(self.store.list_proposals(research_id),
                                                             ensure_ascii=False, indent=2, default=str))
             archive.writestr("manifest.json", json.dumps(manifest, indent=2))
+            archive.writestr("REPRODUCE.md", "# Reproduce\n\n1. `npm ci`\n2. `pip install -r requirements.txt`\n"
+                             "3. `python -m topoptpilot.replay research.json --output replay_result.json`\n\n"
+                             "Set `DASHSCOPE_API_KEY` only when replaying Pi decisions; FEM replay needs no LLM.\n")
             archive.write(self.project_root / "AGENTS.md", "AGENTS.md")
             archive.write(self.project_root / ".pi/models.example.json", "pi/models.example.json")
+            archive.write(self.project_root / "requirements.txt", "requirements.txt")
+            archive.write(self.project_root / "package-lock.json", "package-lock.json")
+            for case_path in (self.project_root / "topoptpilot/cases").glob("*.json"):
+                archive.write(case_path, f"cases/{case_path.name}")
         return WorkspaceCommandResult(ok=True, message=f"Reproduction bundle: {target}", action="export",
                                       data={"path": str(target)})
 
@@ -600,10 +732,19 @@ class ResearchService:
         memory = self.tools.memory.build(research, research["experiments"], research["events"],
                                          research["decisions"])
         budget = FidelityManager.budget(research, research["experiments"])
-        lines = [f"# TopOptPilot Research Report — {research_id}", "", "## Goal", "", research["goal"],
-                 "", "## Constraints", "", "```json",
+        zh = research.get("locale", "zh-CN") == "zh-CN"
+        headings = ({"title": "TopOptPilot 科研报告", "goal": "研究目标", "constraints": "约束条件",
+                     "experiments": "实验", "decisions": "决策", "hypothesis": "假设与证据",
+                     "failures": "已知失败", "pareto": "Pareto 候选", "budget": "预算与终止",
+                     "repro": "可复现性", "none": "未指定。"} if zh else
+                    {"title": "TopOptPilot Research Report", "goal": "Goal", "constraints": "Constraints",
+                     "experiments": "Experiments", "decisions": "Decisions", "hypothesis": "Hypothesis and evidence",
+                     "failures": "Known failures", "pareto": "Pareto candidates", "budget": "Budget and termination",
+                     "repro": "Reproducibility", "none": "Not specified."})
+        lines = [f"# {headings['title']} — {research_id}", "", f"## {headings['goal']}", "", research["goal"],
+                 "", f"## {headings['constraints']}", "", "```json",
                  json.dumps(research["constraints"], ensure_ascii=False, indent=2), "```", "",
-                 "## Experiments", ""]
+                 f"## {headings['experiments']}", ""]
         for experiment in research["experiments"]:
             metrics = (experiment.get("result") or {}).get("quality", {})
             objective = (experiment.get("result") or {}).get("objective", {})
@@ -611,18 +752,18 @@ class ResearchService:
                          f"compliance={objective.get('compliance', '—')} · "
                          f"gray={metrics.get('gray_ratio', '—')} · "
                          f"components={metrics.get('connected_components', '—')}")
-        lines.extend(["", "## Decisions", ""])
+        lines.extend(["", f"## {headings['decisions']}", ""])
         for decision in research["decisions"]:
             lines.append(f"- {decision['id']} · {decision['status']} · {decision['intent']}: {decision['reason']}")
-        lines.extend(["", "## Hypothesis and evidence", "", research.get("hypothesis") or "Not specified.",
-                      "", "## Known failures", "", "```json",
+        lines.extend(["", f"## {headings['hypothesis']}", "", research.get("hypothesis") or headings["none"],
+                      "", f"## {headings['failures']}", "", "```json",
                       json.dumps(memory["L3"]["known_failures"], ensure_ascii=False, indent=2), "```",
-                      "", "## Pareto candidates", "", "```json",
+                      "", f"## {headings['pareto']}", "", "```json",
                       json.dumps(memory["L2"]["pareto_candidates"], ensure_ascii=False, indent=2), "```",
-                      "", "## Budget and termination", "", "```json",
+                      "", f"## {headings['budget']}", "", "```json",
                       json.dumps({"budget": budget, "termination_reason": research.get("termination_reason")},
                                  ensure_ascii=False, indent=2), "```",
-                      "", "## Reproducibility", "",
+                      "", f"## {headings['repro']}", "",
                       f"- Agent runtime: official Pi JSON-RPC / {self.agent_client.model}",
                       "- Solver outputs are deterministic FEM evidence; cached results are content-addressed.",
                       "- Parameter proposals are compiled by Safety Policy from scientific intent."])
@@ -639,20 +780,29 @@ class ResearchService:
             values.append(experiment)
         return values
 
+    def matlab_health(self) -> dict[str, Any]:
+        return self.matlab_worker.health()
+
+    def restart_matlab(self) -> dict[str, Any]:
+        return self.matlab_worker.restart()
+
     def _answer_question(self, research_id: str, text: str, selected: str | None) -> str:
+        research = self._require_research(research_id)
+        zh = research.get("locale", "zh-CN") == "zh-CN"
+        language = "Simplified Chinese" if zh else "English"
         if self.pi_runtime and self.pi_runtime.health()["available"]:
             context = self.tools.research_get_context(research_id)
             message = (
                 "First use research_get_context to refresh authoritative state. Answer the researcher "
-                "in concise Chinese, grounded only in tool evidence; separate observations from hypotheses.\n\n"
+                f"in concise {language}, grounded only in tool evidence; separate observations from hypotheses.\n\n"
                 f"Current L3 context: {json.dumps(context, ensure_ascii=False, default=str)}\n\n"
                 f"Researcher message: {text}"
             )
             threading.Thread(target=self.pi_runtime.send,
                              args=(research_id, message, "causal-reasoning"), daemon=True).start()
-            return "已发送给常驻 Pi Research Agent；流式回复会出现在研究时间线中。"
+            return ("已发送给常驻 Pi Research Agent；流式回复会出现在研究时间线中。" if zh else
+                    "Sent to the persistent Pi Research Agent; streaming output will appear in the timeline.")
         experiment = self.store.get_experiment(selected) if selected else None
-        research = self._require_research(research_id)
         evidence = {
             "research_id": research_id,
             "goal": research["goal"],
@@ -668,7 +818,7 @@ class ResearchService:
             }
         response = self.agent_client.chat([
             {"role": "system", "content": (
-                "You are TopOptPilot's research analyst running on PiAgent. Answer in concise Chinese. "
+                f"You are TopOptPilot's research analyst running on PiAgent. Answer in concise {language}. "
                 "Use only the supplied research evidence. Distinguish observations from hypotheses, "
                 "recommend at most one next experiment, and never reveal chain-of-thought."
             )},
@@ -720,7 +870,8 @@ class ResearchService:
     def close(self) -> None:
         if self.pi_runtime:
             self.pi_runtime.close()
-        self.queue.shutdown(wait=False)
+        self.queue.shutdown(wait=True)
+        self.matlab_worker.close()
 
 
 def _parse_scalar(value: str) -> Any:

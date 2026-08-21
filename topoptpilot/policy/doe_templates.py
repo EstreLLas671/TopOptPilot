@@ -34,7 +34,7 @@ def discriminating_experiments(template: str, control: dict) -> list[dict]:
     if template == "projection_vs_controller":
         return [
             {"purpose": "Test projection explanation for oscillation",
-             "parameters": {**control, "beta": max(1.0, float(control.get("beta", 8)) / 2)},
+             "parameters": {**control, "projection": "none"},
              "controlled_factors": ["projection"]},
             {"purpose": "Test controller explanation for oscillation",
              "parameters": {**control, "controller": "joint_feedback_controller"},

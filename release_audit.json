@@ -1,0 +1,250 @@
+{
+  "timestamp": "2026-08-21T16:50:23+0800",
+  "gates": {
+    "artifacts": {
+      "pass": true,
+      "skills": 6,
+      "tools": 11,
+      "agents_constitution": true
+    },
+    "desktop_app": {
+      "pass": true,
+      "executable": "E:\\AAAwuliao2\\1A解绑挂帅\\desktop\\src-tauri\\target\\release\\topoptpilot-desktop.exe",
+      "installer": "E:\\AAAwuliao2\\1A解绑挂帅\\desktop\\src-tauri\\target\\release\\bundle\\nsis\\TopOptPilot_5.1.0_x64-setup.exe"
+    },
+    "strict_f3": {
+      "pass": true,
+      "evidence": "F3 requires a live approved MatlabMcpWorker; Python fallback is forbidden"
+    },
+    "i18n_zh_default": {
+      "pass": true,
+      "default": "zh-CN",
+      "locales": [
+        "zh-CN",
+        "en-US"
+      ]
+    },
+    "matlab_mcp_2d": {
+      "pass": true,
+      "backend": "matlab_mcp_2d",
+      "matlab_version": "24.1.0.2537033 (R2024a)",
+      "mcp_version": "0.12.0",
+      "solver_entry_sha256": "be63a49f815ea2c21b0d5e1b56f5b2102077a3a6e7b3fd1e6ea8943a25b19674"
+    },
+    "matlab_mcp_3d": {
+      "pass": true,
+      "backend": "matlab_mcp_3d",
+      "matlab_version": "24.1.0.2537033 (R2024a)",
+      "mcp_version": "0.12.0",
+      "solver_entry_sha256": "8c12a0b835d8ec34f683d923cb3967170933ec108831b72877c2fc23f12c8adc"
+    },
+    "cases": {
+      "pass": true
+    },
+    "baselines": {
+      "pass": true
+    },
+    "safe_mode": {
+      "pass": true
+    },
+    "online_qwen": {
+      "pass": null
+    }
+  },
+  "cases": {
+    "A": {
+      "research_id": "MBB-001",
+      "experiments": 6,
+      "fidelities": [
+        "F0",
+        "F0",
+        "F0",
+        "F0",
+        "F0",
+        "F0"
+      ],
+      "metrics": {
+        "best_feasible_objective": 99.07230692120531,
+        "experiments_to_feasible": 4,
+        "high_fidelity_runs": 0,
+        "constraint_violation_rate": 0.5,
+        "best_compliance": 99.07230692120531,
+        "best_gray_ratio": 0.0111,
+        "total_fem_cost": 6.0,
+        "human_interventions": 0,
+        "final_regret": null,
+        "invalid_intent_rate": 0.0,
+        "policy_rejection_rate": 0.0,
+        "repeated_experiment_rate": 0.0,
+        "unnecessary_fidelity_upgrade_rate": 0.0,
+        "approval_count": 0
+      },
+      "real_backends": [
+        "python",
+        "python",
+        "python",
+        "python",
+        "python",
+        "python"
+      ]
+    },
+    "B": {
+      "research_id": "MBB-002",
+      "experiments": 6,
+      "fidelities": [
+        "F0",
+        "F0",
+        "F0",
+        "F0",
+        "F0",
+        "F0"
+      ],
+      "metrics": {
+        "best_feasible_objective": 329.26004774381386,
+        "experiments_to_feasible": 5,
+        "high_fidelity_runs": 0,
+        "constraint_violation_rate": 0.8333333333333334,
+        "best_compliance": 201.21052829414828,
+        "best_gray_ratio": 0.0133,
+        "total_fem_cost": 6.0,
+        "human_interventions": 0,
+        "final_regret": null,
+        "invalid_intent_rate": 0.0,
+        "policy_rejection_rate": 0.0,
+        "repeated_experiment_rate": 0.0,
+        "unnecessary_fidelity_upgrade_rate": 0.0,
+        "approval_count": 0
+      },
+      "real_backends": [
+        "python",
+        "python",
+        "python",
+        "python",
+        "python",
+        "python"
+      ]
+    },
+    "C": {
+      "research_id": "MBB-003",
+      "experiments": 7,
+      "fidelities": [
+        "F0",
+        "F0",
+        "F0",
+        "F0",
+        "F1",
+        "F2",
+        "F3"
+      ],
+      "metrics": {
+        "best_feasible_objective": 103.90224642125148,
+        "experiments_to_feasible": 4,
+        "high_fidelity_runs": 2,
+        "constraint_violation_rate": 0.5714285714285714,
+        "best_compliance": 102.12836290266728,
+        "best_gray_ratio": 0.0078,
+        "total_fem_cost": 45.0,
+        "human_interventions": 2,
+        "final_regret": null,
+        "invalid_intent_rate": 0.0,
+        "policy_rejection_rate": 0.0,
+        "repeated_experiment_rate": 0.0,
+        "unnecessary_fidelity_upgrade_rate": 0.0,
+        "approval_count": 2
+      },
+      "real_backends": [
+        "python",
+        "python",
+        "python",
+        "python",
+        "python",
+        "python3d",
+        "matlab_mcp_3d"
+      ]
+    }
+  },
+  "baselines": {
+    "Random": {
+      "best_feasible_objective": null,
+      "experiments_to_feasible": null,
+      "high_fidelity_runs": 0,
+      "constraint_violation_rate": 1.0,
+      "best_compliance": 102.26938245984135,
+      "best_gray_ratio": 0.0556,
+      "total_fem_cost": 5.0,
+      "human_interventions": 0,
+      "final_regret": null,
+      "invalid_intent_rate": 0.0,
+      "policy_rejection_rate": 0.0,
+      "repeated_experiment_rate": 0.0,
+      "unnecessary_fidelity_upgrade_rate": 0.0,
+      "approval_count": 0
+    },
+    "Grid": {
+      "best_feasible_objective": null,
+      "experiments_to_feasible": null,
+      "high_fidelity_runs": 0,
+      "constraint_violation_rate": 1.0,
+      "best_compliance": 112.36240847279767,
+      "best_gray_ratio": 0.2267,
+      "total_fem_cost": 5.0,
+      "human_interventions": 0,
+      "final_regret": null,
+      "invalid_intent_rate": 0.0,
+      "policy_rejection_rate": 0.0,
+      "repeated_experiment_rate": 0.0,
+      "unnecessary_fidelity_upgrade_rate": 0.0,
+      "approval_count": 0
+    },
+    "TPE": {
+      "best_feasible_objective": 98.72298100399338,
+      "experiments_to_feasible": 2,
+      "high_fidelity_runs": 0,
+      "constraint_violation_rate": 0.8,
+      "best_compliance": 98.72298100399338,
+      "best_gray_ratio": 0.0089,
+      "total_fem_cost": 5.0,
+      "human_interventions": 0,
+      "final_regret": null,
+      "invalid_intent_rate": 0.0,
+      "policy_rejection_rate": 0.0,
+      "repeated_experiment_rate": 0.0,
+      "unnecessary_fidelity_upgrade_rate": 0.0,
+      "approval_count": 0
+    },
+    "Rule": {
+      "best_feasible_objective": null,
+      "experiments_to_feasible": null,
+      "high_fidelity_runs": 0,
+      "constraint_violation_rate": 1.0,
+      "best_compliance": 122.44026517243367,
+      "best_gray_ratio": 0.2778,
+      "total_fem_cost": 5.0,
+      "human_interventions": 0,
+      "final_regret": null,
+      "invalid_intent_rate": 0.0,
+      "policy_rejection_rate": 0.0,
+      "repeated_experiment_rate": 0.0,
+      "unnecessary_fidelity_upgrade_rate": 0.0,
+      "approval_count": 0
+    }
+  },
+  "safe_mode": {
+    "pass": true,
+    "termination": "BUDGET_EXHAUSTED",
+    "intents": [
+      "ESTABLISH_BASELINE",
+      "REDUCE_GRAYNESS"
+    ],
+    "real_fem_residuals": [
+      2.8755583770255844e-13,
+      3.4000736045753756e-13
+    ]
+  },
+  "online_qwen": {
+    "pass": null,
+    "skipped": true
+  },
+  "offline_release_ready": true,
+  "release_ready": false
+}

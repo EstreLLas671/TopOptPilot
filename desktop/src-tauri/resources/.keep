@@ -1,0 +1,1 @@
+Build staging directory. `scripts/build_desktop.ps1` populates packaged sidecars and resources.

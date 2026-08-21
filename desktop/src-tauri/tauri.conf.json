@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TopOptPilot",
+  "version": "5.1.0",
+  "identifier": "cn.topoptpilot.research",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "title": "TopOptPilot",
+      "width": 1440,
+      "height": 900,
+      "minWidth": 920,
+      "minHeight": 640,
+      "center": true,
+      "resizable": true,
+      "fullscreen": false,
+      "visible": true
+    }],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "受物理与安全策略约束的拓扑优化科研智能体",
+    "longDescription": "TopOptPilot 原生桌面科研工作台，集成 Pi Agent、真实 Python FEM 与 MATLAB MCP。",
+    "resources": ["resources/**/*"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
+    }
+  }
+}

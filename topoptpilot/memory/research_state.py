@@ -110,6 +110,7 @@ class ResearchStateStore:
                 "current_question": "TEXT",
                 "current_round": "INTEGER NOT NULL DEFAULT 0",
                 "termination_reason": "TEXT",
+                "locale": "TEXT NOT NULL DEFAULT 'zh-CN'",
             })
             self._ensure_columns(db, "experiments", {
                 "proposal_id": "TEXT",
@@ -144,14 +145,14 @@ class ResearchStateStore:
             db.execute("""INSERT INTO research
                 (id,name,goal,constraints_json,mode,status,budget_total,budget_used,locks_json,
                  created_at,updated_at,budgets_json,geometry_json,material_json,loads_json,
-                 boundary_conditions_json,hypothesis,current_question,current_round)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 boundary_conditions_json,hypothesis,current_question,current_round,locale)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["name"], data["goal"], json.dumps(data["constraints"]),
                  data["mode"], "READY", data["budget_total"], 0, "{}", now, now,
                  json.dumps(data.get("budgets", {})), json.dumps(data.get("geometry", {})),
                  json.dumps(data.get("material", {})), json.dumps(data.get("loads", [])),
                  json.dumps(data.get("boundary_conditions", {})), data.get("hypothesis"),
-                 None, 0))
+                 None, 0, data.get("locale", "zh-CN")))
         return self.get_research(data["id"])
 
     def list_research(self) -> list[dict]:
@@ -168,7 +169,7 @@ class ResearchStateStore:
 
     def update_research(self, research_id: str, **fields: Any) -> dict:
         allowed = {"name", "goal", "mode", "status", "budget_total", "budget_used",
-                   "hypothesis", "current_question", "current_round", "termination_reason"}
+                   "hypothesis", "current_question", "current_round", "termination_reason", "locale"}
         assignments, values = [], []
         for name, value in fields.items():
             if name in allowed:
@@ -292,6 +293,21 @@ class ResearchStateStore:
         with self._lock, self.connection() as db:
             db.execute("UPDATE decisions SET status=?, resolved_at=? WHERE id=?",
                        (status, utc_now(), decision_id))
+        return self.get_decision(decision_id)
+
+    def update_decision(self, decision_id: str, *, proposal: dict | None = None,
+                        risk: str | None = None, reason: str | None = None) -> dict:
+        assignments, values = [], []
+        if proposal is not None:
+            assignments.append("proposal_json=?"); values.append(json.dumps(proposal))
+        if risk is not None:
+            assignments.append("risk=?"); values.append(risk)
+        if reason is not None:
+            assignments.append("reason=?"); values.append(reason)
+        if assignments:
+            values.append(decision_id)
+            with self._lock, self.connection() as db:
+                db.execute(f"UPDATE decisions SET {', '.join(assignments)} WHERE id=?", values)
         return self.get_decision(decision_id)
 
     def create_proposal(self, data: dict[str, Any]) -> dict:

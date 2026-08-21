@@ -64,6 +64,20 @@ def _filter_kernel(rmin: float) -> np.ndarray:
     return np.maximum(0.0, rmin - distance)
 
 
+def _project(value: np.ndarray, beta: float, eta: float = .5) -> np.ndarray:
+    if beta <= 1:
+        return value
+    denominator = np.tanh(beta * eta) + np.tanh(beta * (1 - eta))
+    return (np.tanh(beta * eta) + np.tanh(beta * (value - eta))) / denominator
+
+
+def _project_derivative(value: np.ndarray, beta: float, eta: float = .5) -> np.ndarray:
+    if beta <= 1:
+        return np.ones_like(value)
+    denominator = np.tanh(beta * eta) + np.tanh(beta * (1 - eta))
+    return beta * (1 - np.tanh(beta * (value - eta)) ** 2) / denominator
+
+
 def run_topopt3d(task: dict, progress=None) -> dict:
     params = dict(task.get("params") or {})
     grid = params.get("grid3d") or ([12, 4, 3] if task.get("mesh_level") == "coarse3d"
@@ -71,6 +85,8 @@ def run_topopt3d(task: dict, progress=None) -> dict:
     nx, ny, nz = map(int, grid)
     volfrac = float(params.get("volfrac", 0.4))
     penal = float(params.get("penal", 3.0))
+    beta = float(params.get("beta", params.get("beta_max", 1.0)))
+    projected = beta > 1 and task.get("projection") == "heaviside_projection"
     rmin = float(params.get("rmin", 1.5))
     max_iter = min(int(params.get("max_iter", 40)), 80)
     E0, Emin, nu = float(params.get("E", 1.0)), 1e-6, float(params.get("nu", 0.3))
@@ -84,7 +100,8 @@ def run_topopt3d(task: dict, progress=None) -> dict:
     fixed = np.array([[3*n, 3*n+1, 3*n+2] for n in fixed_nodes]).ravel()
     free = np.setdiff1d(np.arange(ndof), fixed)
     load_node = ((nz // 2) * (ny + 1) + ny // 2) * (nx + 1) + nx
-    force = np.zeros(ndof); force[3 * load_node + 1] = -1.0
+    force = np.zeros(ndof)
+    force[3 * load_node + 1] = -float((task.get("bc_config") or {}).get("load_scale", 1.0))
     initial = params.get("initial_density")
     if initial is not None:
         initial = np.asarray(initial, dtype=float)
@@ -100,7 +117,11 @@ def run_topopt3d(task: dict, progress=None) -> dict:
     history, U = [], np.zeros(ndof)
     relative_residual, change = 0.0, 1.0
     for iteration in range(1, max_iter + 1):
-        flat = density.ravel()
+        beta_current = (min(beta, 2.0 ** max(0, (iteration - 1) // 20))
+                        if projected else 1.0)
+        filtered = ndimage.convolve(density, kernel, mode="constant") / denom
+        physical = _project(filtered, beta_current) if projected else density
+        flat = physical.ravel()
         scale = Emin + flat ** penal * (E0 - Emin)
         values = (scale[:, None, None] * ke).ravel()
         K = sparse.coo_matrix((values, (rows, cols)), shape=(ndof, ndof)).tocsr()
@@ -112,27 +133,58 @@ def run_topopt3d(task: dict, progress=None) -> dict:
         ue = U[edof]
         ce = np.einsum("ei,ij,ej->e", ue, ke, ue).reshape(density.shape)
         compliance = float(np.sum(scale.reshape(density.shape) * ce))
-        dc = -penal * (E0 - Emin) * density ** (penal - 1) * ce
-        dc = ndimage.convolve(density * dc, kernel, mode="constant") / np.maximum(density * denom, 1e-9)
-        low, high, move = 0.0, 1e9, 0.2
+        dc_physical = -penal * (E0 - Emin) * physical ** (penal - 1) * ce
+        if projected:
+            derivative = _project_derivative(filtered, beta_current)
+            dc = ndimage.convolve((dc_physical * derivative) / denom, kernel, mode="constant")
+            dv = ndimage.convolve(derivative / denom, kernel, mode="constant")
+            volume_fn = lambda value: float(_project(
+                ndimage.convolve(value, kernel, mode="constant") / denom, beta_current).mean())
+        else:
+            dc = (ndimage.convolve(density * dc_physical, kernel, mode="constant") /
+                  np.maximum(density * denom, 1e-9))
+            dv = np.ones_like(density)
+            volume_fn = lambda value: float(value.mean())
+        low, high = 0.0, 1e9
+        move = .2 if beta_current <= 2 else (.1 if beta_current <= 4 else .05)
         while (high - low) / (high + low + 1e-12) > 1e-4:
             mid = 0.5 * (low + high)
             candidate = np.maximum(1e-3, np.maximum(density - move,
-                np.minimum(1.0, np.minimum(density + move, density * np.sqrt(np.maximum(0, -dc / mid))))))
-            if candidate.mean() > volfrac: low = mid
+                np.minimum(1.0, np.minimum(density + move,
+                    density * np.sqrt(np.maximum(0, -dc / np.maximum(dv * mid, 1e-30)))))))
+            if volume_fn(candidate) > volfrac: low = mid
             else: high = mid
         change = float(np.max(np.abs(candidate - density))); density = candidate
+        candidate_filtered = ndimage.convolve(density, kernel, mode="constant") / denom
+        candidate_physical = _project(candidate_filtered, beta_current) if projected else density
         item = {"iteration": iteration, "compliance": compliance, "change": change,
-                "volume_fraction": float(density.mean()), "gray_ratio": gray_ratio(density),
-                "connected": connected_components(density), "beta": float(params.get("beta", 1)),
+                "volume_fraction": float(candidate_physical.mean()),
+                "gray_ratio": gray_ratio(candidate_physical),
+                "connected": connected_components(candidate_physical), "beta": beta_current,
                 "penal": penal, "residual": relative_residual}
         history.append(item)
         if progress: progress(iteration, item)
-        if change < 1e-3: break
+        if change < 1e-3 and beta_current >= beta: break
+    final_beta = float(history[-1]["beta"]) if history else 1.0
+    filtered = ndimage.convolve(density, kernel, mode="constant") / denom
+    physical = _project(filtered, final_beta) if projected else density
+    scale = Emin + physical.ravel() ** penal * (E0 - Emin)
+    K = sparse.coo_matrix(((scale[:, None, None] * ke).ravel(), (rows, cols)),
+                          shape=(ndof, ndof)).tocsr()
+    K = (K + K.T) * .5
+    U[:] = 0.0; U[free] = spsolve(K[free][:, free], force[free])
+    relative_residual = float(np.linalg.norm((K @ U - force)[free]) /
+                              max(np.linalg.norm(force[free]), 1e-12))
+    ue = U[edof]
+    ce = np.einsum("ei,ij,ej->e", ue, ke, ue)
+    compliance = float(np.sum(scale * ce))
     spec = {**task, "nelx": nx, "nely": ny, "nelz": nz, "volfrac": volfrac,
             "max_iter": max_iter, "bc_type": "cantilever3d", "controller": "fixed_controller",
-            "projection": "none"}
-    return build_result(task_spec=spec, status="converged", compliance=history[-1]["compliance"],
-                        xPhys=density, U=U, history=history, iterations=len(history),
+            "projection": "heaviside_projection" if projected else "none"}
+    result = build_result(task_spec=spec, status="converged", compliance=compliance,
+                        xPhys=physical, U=U, history=history, iterations=len(history),
                         final_change=change, relative_residual=relative_residual,
                         solve_time=time.time() - start, backend="python3d", density_design=density)
+    result["solver"]["target_beta"] = beta
+    result["solver"]["continuation_complete"] = final_beta >= beta
+    return result

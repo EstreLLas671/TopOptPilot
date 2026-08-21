@@ -6,6 +6,10 @@ __pycache__/
 dist/
 build/
 node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/resources/*
+!desktop/src-tauri/resources/.keep
 .npm-cache/
 
 # Environment
@@ -50,12 +54,16 @@ Thumbs.db
 
 # Test & verification artifacts
 tests/
+pytest.ini
 _ground_truth/
 test_phase0*.py
 test_phase0*.json
 
-# Third-party MATLAB reference modules (not part of the deliverable)
-求解器模块/
+# Vendored third-party binaries (Node runtime, MATLAB MCP Server exe)
+# See README "第三方依赖" section for how to obtain them.
+vendor/
+
+# MATLAB solver modules are authoritative product resources and are versioned.
 
 # Competition original materials
 XH-202619*.pdf

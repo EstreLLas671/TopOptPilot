@@ -1,0 +1,29 @@
+{
+  "tools": [
+    {
+      "name": "topopt_run_task",
+      "title": "Run an approved TopOptPilot MATLAB task",
+      "description": "Runs one Policy-approved topology optimization task from a validated JSON file and writes the raw MATLAB result to the paired output JSON file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "task_json_path": {"type": "string", "description": "Absolute path to the validated task JSON."},
+          "result_json_path": {"type": "string", "description": "Absolute path for the result JSON in the same job directory."}
+        },
+        "required": ["task_json_path", "result_json_path"]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ],
+  "signatures": {
+    "topopt_run_task": {
+      "function": "topopt_run_task",
+      "input": {"order": ["task_json_path", "result_json_path"]}
+    }
+  }
+}

@@ -13,7 +13,7 @@ class ResearchMemory:
         l0 = [{"experiment_id": item["id"], "artifacts": self._artifact_refs(item)}
               for item in experiments if item.get("result")]
         l1 = [self._experiment_record(item) for item in experiments]
-        l2 = self._scientific_memory(l1)
+        l2 = self._scientific_memory(l1, research.get("constraints", {}))
         budget = FidelityManager.budget(research, experiments)
         l3 = {
             "research_id": research["id"], "goal": research["goal"],
@@ -33,7 +33,7 @@ class ResearchMemory:
     def _artifact_refs(experiment: dict) -> dict:
         artifacts = (experiment.get("result") or {}).get("artifacts", {})
         return {key: value for key, value in artifacts.items()
-                if key in {"density_path", "history_path", "log", "vtk", "stl"}}
+                if key in {"density_path", "history_path", "solver_output_path", "log", "vtk", "stl"}}
 
     @staticmethod
     def _experiment_record(item: dict) -> dict:
@@ -48,17 +48,22 @@ class ResearchMemory:
         }
 
     @classmethod
-    def _scientific_memory(cls, records: list[dict]) -> dict:
+    def _scientific_memory(cls, records: list[dict], constraints: dict | None = None) -> dict:
+        constraints = constraints or {}
         completed = [item for item in records if item["objective"].get("compliance") is not None]
         feasible = [item for item in completed if item["status"] == "SUCCESS"]
-        best = min(feasible, key=lambda item: item["objective"]["compliance"], default=None)
+        rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+        highest = max((rank.get(str(item["fidelity"]).split()[0], 0) for item in feasible), default=0)
+        comparable = [item for item in feasible
+                      if rank.get(str(item["fidelity"]).split()[0], 0) == highest]
+        best = min(comparable, key=lambda item: item["objective"]["compliance"], default=None)
         failures = []
         for item in completed:
             quality = item["quality"]
             if quality.get("connected_components", 1) != 1:
                 failures.append({"type": "DISCONNECTION", "experiment_id": item["id"],
                                  "evidence": {"components": quality.get("connected_components")}})
-            if quality.get("gray_ratio", 0) > 0.05:
+            if quality.get("gray_ratio", 0) > float(constraints.get("gray_max", 0.05)):
                 failures.append({"type": "HIGH_GRAY", "experiment_id": item["id"],
                                  "evidence": {"gray_ratio": quality.get("gray_ratio")}})
         return {
@@ -94,6 +99,7 @@ class ResearchMemory:
             g = candidate["quality"]["gray_ratio"]
             dominated = any(
                 other is not candidate
+                and other["fidelity"] == candidate["fidelity"]
                 and other["objective"]["compliance"] <= c
                 and other["quality"]["gray_ratio"] <= g
                 and (other["objective"]["compliance"] < c or other["quality"]["gray_ratio"] < g)
@@ -108,4 +114,3 @@ class ResearchMemory:
     def _compact_event(event: dict) -> dict:
         return {"id": event["id"], "kind": event["kind"], "title": event["title"],
                 "experiment_id": event.get("experiment_id"), "payload": event.get("payload", {})}
-

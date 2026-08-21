@@ -44,13 +44,20 @@ class BenchmarkRunner:
                 "controller": "periodic_controller" if params["beta"] > 1 else "fixed_controller",
                 "filter": "density_filter" if params["beta"] > 1 else "sensitivity_filter",
                 "params": {**params, "beta_max": params["beta"], "max_iter": max_iter, "volfrac": .4}})
-            runs.append({"parameters": params, "objective": result["objective"], "quality": result["quality"]})
+            runs.append({"parameters": params, "objective": result["objective"],
+                         "constraints": result["constraints"], "quality": result["quality"]})
             history.append(runs[-1])
-        feasible = [r for r in runs if r["quality"]["connected_components"] == 1]
+        feasible = [r for r in runs if r["quality"]["connected_components"] == 1
+                    and r["quality"]["gray_ratio"] <= .05
+                    and abs(r["constraints"]["volume_fraction"] - .4) <= .02]
         best = min(feasible or runs, key=lambda r: r["objective"]["compliance"])
-        records = [{"id": f"{method}-{i}", "status": ("SUCCESS" if r["quality"]["connected_components"] == 1 else "FAILED"),
+        records = [{"id": f"{method}-{i}", "status": ("SUCCESS" if
+                    r["quality"]["connected_components"] == 1
+                    and r["quality"]["gray_ratio"] <= .05
+                    and abs(r["constraints"]["volume_fraction"] - .4) <= .02 else "FAILED"),
                     "fidelity": "F0", "parameters": r["parameters"],
-                    "result": {"objective": r["objective"], "quality": r["quality"]}}
+                    "result": {"objective": r["objective"], "constraints": r["constraints"],
+                               "quality": r["quality"]}}
                    for i, r in enumerate(runs, 1)]
         return {"method": method, "seed": self.seed, "budget": budget, "runs": runs, "best": best,
                 "metrics": campaign_metrics(records)}

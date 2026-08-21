@@ -20,4 +20,9 @@ class ReviewerWorkflow:
             f"and safety for proposal {proposal_id or 'none'}. Do not submit experiments. Return a "
             "short APPROVE, REVISE, or REJECT recommendation with cited experiment IDs."
         )
-        self.bridge.send(research_id, message, "hypothesis-evaluation")
+        try:
+            self.bridge.send(research_id, message, "hypothesis-evaluation")
+        except Exception as exc:
+            self.bridge.service.store.append_event(
+                research_id, "SYSTEM", "REVIEWER UNAVAILABLE",
+                f"Bounded reviewer could not run: {exc}")

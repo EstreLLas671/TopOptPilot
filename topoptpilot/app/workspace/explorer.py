@@ -22,7 +22,9 @@ def render_explorer(st, service, research: dict) -> None:
         for key, value in research["constraints"].items():
             st.markdown(f"`{key}`  {value}")
     session = service.store.get_agent_session(research["id"])
-    st.caption(f"Pi · {(session or {}).get('status', 'OFFLINE')} · {service.health()['agent_model']}")
+    context = float((session or {}).get("context_usage", 0) or 0)
+    st.caption(f"Pi · {(session or {}).get('status', 'OFFLINE')} · "
+               f"{service.health()['agent_model']} · context {context:.1%}")
     if research["status"] not in {"STOPPED"} and st.button("▶ Start autonomous Pi", use_container_width=True):
         service.start_autonomous_research(research["id"])
         st.rerun()

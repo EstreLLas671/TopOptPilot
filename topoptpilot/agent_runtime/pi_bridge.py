@@ -37,35 +37,38 @@ class PiProcess:
         self.retry_count = 0
         self._stream_buffer = ""
         self._write_lock = threading.Lock()
+        self._start_lock = threading.RLock()
 
     def start(self):
-        if self.process and self.process.poll() is None:
-            return self
-        env = os.environ.copy()
-        env.update({
-            "PI_CODING_AGENT_DIR": str(self.bridge.config_dir),
-            "TOPPILOT_TOOL_URL": self.bridge.gateway.url,
-            "TOPPILOT_RESEARCH_ID": self.research_id,
-            "TOPPILOT_TOOL_TOKEN": self.bridge.gateway.token,
-        })
-        session_id = self.bridge.sessions.session_id(self.research_id)
-        args = [str(self.bridge.node), str(self.bridge.cli), "--mode", "rpc",
+        with self._start_lock:
+            if self.process and self.process.poll() is None:
+                return self
+            env = os.environ.copy()
+            env.update({
+                "PI_CODING_AGENT_DIR": str(self.bridge.config_dir),
+                "TOPPILOT_TOOL_URL": self.bridge.gateway.url,
+                "TOPPILOT_RESEARCH_ID": self.research_id,
+                "TOPPILOT_TOOL_TOKEN": self.bridge.gateway.token,
+            })
+            session_id = self.bridge.sessions.session_id(self.research_id)
+            args = [str(self.bridge.node), str(self.bridge.cli), "--mode", "rpc",
                 "--provider", "dashscope", "--model", self.bridge.model,
                 "--session-id", session_id,
                 "--session-dir", str(self.bridge.session_dir),
                 "--no-extensions", "--extension", str(self.bridge.root / ".pi/extensions/topopt-tools.ts"),
                 "--no-skills", "--no-prompt-templates",
                 "--no-builtin-tools", "--tools", TOOLS, "--approve"]
-        self.process = subprocess.Popen(
-            args, cwd=self.bridge.root, env=env, stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-            errors="replace", bufsize=1, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        threading.Thread(target=self._stdout_loop, daemon=True).start()
-        threading.Thread(target=self._stderr_loop, daemon=True).start()
-        state = self.request("get_state", timeout=20)["data"]
-        self.bridge.sessions.record(self.research_id, state)
-        return self
+            self.process = subprocess.Popen(
+                args, cwd=self.bridge.root, env=env, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                errors="replace", bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            threading.Thread(target=self._stdout_loop, daemon=True).start()
+            threading.Thread(target=self._stderr_loop, daemon=True).start()
+            state = self.request("get_state", timeout=20)["data"]
+            self.bridge.sessions.record(self.research_id, state)
+            return self
 
     def request(self, command: str, timeout: float = 30, **data) -> dict:
         if not self.process or self.process.poll() is not None:
@@ -166,7 +169,8 @@ class PiProcess:
 class PiBridge:
     def __init__(self, service, root: str | Path | None = None):
         self.service = service
-        self.root = Path(root or Path(__file__).parents[2]).resolve()
+        self.root = Path(root or os.environ.get(
+            "TOPPILOT_RESOURCE_ROOT", Path(__file__).parents[2])).resolve()
         self.node = Path(os.environ.get("TOPPILOT_NODE", shutil_which("node") or "node"))
         self.cli = self.root / "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
         self.model = os.environ.get("QWEN_MODEL", "qwen3.7-plus")
@@ -194,6 +198,11 @@ class PiBridge:
 
     def send(self, research_id: str, message: str, skill: str | None = None,
              fallback_on_error: bool = False) -> None:
+        research = self.service.store.get_research(research_id) or {}
+        language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
+        message = (f"<response_language>{language}</response_language>\n"
+                   "Use this language for all user-visible text while keeping tool names and enum codes unchanged.\n\n"
+                   + message)
         if skill:
             skill_file = self.root / ".pi/skills" / skill / "SKILL.md"
             message = f"<active_skill>\n{skill_file.read_text(encoding='utf-8')}\n</active_skill>\n\n{message}"
@@ -206,8 +215,14 @@ class PiBridge:
         return self.start(research_id)
 
     def health(self) -> dict[str, Any]:
-        return {"available": self.cli.exists(), "status": "ready",
-                "model": self.model, "sessions": len(self.processes)}
+        sessions = [self.service.store.get_agent_session(item["id"])
+                    for item in self.service.store.list_research()]
+        errors = [item.get("last_error") for item in sessions if item and item.get("last_error")]
+        configured = bool(os.environ.get("DASHSCOPE_API_KEY"))
+        qwen_status = "ERROR" if errors else ("CONFIGURED" if configured else "UNCONFIGURED")
+        return {"available": self.cli.exists(), "status": "ready" if self.cli.exists() else "missing",
+                "model": self.model, "sessions": len(self.processes), "qwen_status": qwen_status,
+                "last_error": errors[-1][:300] if errors else None}
 
     def close(self):
         for process in list(self.processes.values()):

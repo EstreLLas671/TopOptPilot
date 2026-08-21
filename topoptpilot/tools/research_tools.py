@@ -34,7 +34,14 @@ class ResearchTools:
         method = getattr(self, name)
         self.service.store.append_event(research_id, "TOOL_CALL", name,
                                         f"Arguments: {arguments}", payload={"arguments": arguments})
-        result = method(research_id, **arguments)
+        try:
+            result = method(research_id, **arguments)
+        except Exception as exc:
+            title = "INVALID INTENT" if name == "policy_compile_intent" else name
+            self.service.store.append_event(research_id, "TOOL_RESULT", title,
+                                            f"Tool rejected request: {exc}",
+                                            payload={"error": str(exc)})
+            raise
         self.service.store.append_event(research_id, "TOOL_RESULT", name, "Tool completed.",
                                         payload={"result": _compact(result)})
         return result

@@ -5,8 +5,7 @@ openai>=1.0.0          # OpenAI-compatible fallback transport
 pydantic>=2.0.0        # Data modeling & validation
 pyyaml>=6.0            # Config & method cards
 
-# MCP & Integration
-mcp>=1.0.0             # Model Context Protocol (MATLAB/Solver bridges)
+# MCP integration uses the bundled official MathWorks server over JSON-RPC stdio.
 
 # Knowledge & Evidence
 pymupdf>=1.24.0        # PDF text extraction
@@ -22,8 +21,7 @@ numpy>=1.26            # Numerical arrays
 scipy>=1.11            # Sparse FEM and numerical solvers
 pandas>=2.0            # Workspace convergence tables
 
-# V4.1 Local Workspace + competition test API
-streamlit>=1.55,<1.56
+# Local authenticated desktop sidecar API
 fastapi>=0.110,<0.116
 uvicorn>=0.29
 

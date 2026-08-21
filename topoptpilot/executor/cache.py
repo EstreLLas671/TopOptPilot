@@ -21,10 +21,17 @@ class ResultCache:
 
     def get(self, task: dict) -> dict | None:
         path = self.directory / f"{self.key(task)}.json"
-        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
 
     def put(self, task: dict, result: dict) -> Path:
         path = self.directory / f"{self.key(task)}.json"
-        path.write_text(json.dumps(result, default=lambda value: value.tolist()
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(result, default=lambda value: value.tolist()
                                    if isinstance(value, np.ndarray) else str(value)), encoding="utf-8")
+        temp.replace(path)
         return path

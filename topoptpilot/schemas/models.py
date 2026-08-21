@@ -102,6 +102,14 @@ class ResearchCreate(BaseModel):
     loads: list[dict[str, Any]] = Field(default_factory=lambda: [{"type": "vertical", "magnitude": 1.0}])
     boundary_conditions: dict[str, Any] = Field(default_factory=lambda: {"type": "MBB"})
     hypothesis: str | None = None
+    locale: str = "zh-CN"
+
+    @field_validator("locale")
+    @classmethod
+    def validate_locale(cls, value: str) -> str:
+        if value not in {"zh-CN", "en-US"}:
+            raise ValueError("locale must be zh-CN or en-US")
+        return value
 
     def normalized_budgets(self) -> dict[str, Any]:
         value = self.budgets or BudgetSpec(total=self.budget_total)

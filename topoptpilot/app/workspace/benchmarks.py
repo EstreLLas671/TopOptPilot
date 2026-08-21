@@ -11,12 +11,12 @@ def render_benchmarks(st, service) -> None:
     if st.button("Run compact benchmark", type="primary"):
         runner = BenchmarkRunner()
         with st.spinner("Running real coarse 2D FEM baselines…"):
-            st.session_state.baseline_results = [runner.run(method, budget=3, max_iter=20)
+            st.session_state.baseline_results = [runner.run(method, budget=5, max_iter=20)
                                                  for method in runner.METHODS if method != "Pi"]
     if st.button("Run live Pi baseline"):
         runner = BenchmarkRunner()
         with st.spinner("Pi is planning; FEM runs asynchronously…"):
-            st.session_state.pi_baseline = runner.run_pi_campaign(service, budget=3, timeout=120)
+            st.session_state.pi_baseline = runner.run_pi_campaign(service, budget=5, timeout=180)
         st.session_state.baseline_results = [*st.session_state.get("baseline_results", []),
                                              st.session_state.pi_baseline]
     values = st.session_state.get("baseline_results", [])

@@ -1,9 +1,4 @@
-"""Truth-preserving F3 adapter.
-
-F3 never silently calls the legacy 2-D MATLAB routine. It either replays a
-content-addressed verified 3-D result, or executes the genuine Python Hex8
-backend and labels that fallback explicitly.
-"""
+"""Verified replay helper; live F3 execution is exclusively MATLAB MCP."""
 
 from __future__ import annotations
 
@@ -12,7 +7,6 @@ import json
 import os
 from pathlib import Path
 
-from solver.topopt3d import run_topopt3d
 
 
 def canonical_task_hash(task: dict) -> str:
@@ -35,10 +29,7 @@ def run_matlab3d_or_replay(task: dict, progress=None) -> dict:
         result.setdefault("solver", {})["backend"] = "matlab_verified_replay_3d"
         result["solver"]["replay_task_hash"] = expected
         return result
-    result = run_topopt3d(task, progress=progress)
-    result["solver"]["backend"] = "matlab_unavailable_fallback_python3d"
-    result["solver"]["f3_fallback_reason"] = "No content-addressed MATLAB 3D replay configured"
-    return result
+    raise RuntimeError("F3 requires a live approved MatlabMcpWorker; Python fallback is forbidden")
 
 
 def write_verified_replay(task: dict, result: dict, path: str | Path) -> Path:

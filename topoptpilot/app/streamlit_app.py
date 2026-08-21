@@ -49,12 +49,13 @@ def render_editor(service: ResearchService, experiment: dict | None) -> None:
             rmin = st.number_input("rmin", min_value=0.5, value=float(parameters.get("rmin", 1.5)))
             penal = st.number_input("penal", min_value=1.0, value=float(parameters.get("penal", 3)))
             if st.form_submit_button("Save human override"):
-                parameters.update(beta=beta, rmin=rmin, penal=penal)
-                service.store.update_experiment(experiment["id"], parameters=parameters)
-                service.store.append_event(experiment["research_id"], "HUMAN OVERRIDE", "PARAMETERS EDITED",
-                                           f"User set beta={beta}, rmin={rmin}, penal={penal}.", experiment["id"])
-                st.session_state.editing_experiment = None
-                st.rerun()
+                try:
+                    service.edit_pending_experiment(experiment["id"],
+                                                    {"beta": beta, "rmin": rmin, "penal": penal})
+                    st.session_state.editing_experiment = None
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
 
 
 def main() -> None:

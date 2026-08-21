@@ -45,6 +45,7 @@ LOAD_CASE_TO_BC = {
     "distributed": "simply_supported",
     "simply_supported": "simply_supported",
     "simply-supported": "simply_supported",
+    "custom": "custom",
 }
 
 FILTER_ALIASES = {
@@ -206,6 +207,7 @@ def normalize_task(task) -> dict:
     spec["task_id"] = str(raw.get("task_id", ""))
     spec["experiment_group"] = str(raw.get("experiment_group", ""))
     spec["hypothesis_id"] = str(raw.get("hypothesis_id", ""))
+    spec["bc_config"] = raw.get("bc_config") or wp.get("boundary_conditions")
 
     # rmin 为空/非正时退化为 1（最小 3×3 邻域）
     spec["rmin"] = max(float(spec["rmin"] or 0), 1.0)
