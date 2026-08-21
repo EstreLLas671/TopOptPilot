@@ -28,6 +28,9 @@ Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责�
 
 ## V5.1 快速开始
 
+> 已配置好 Python/Node 的老协作者可用下面的最短路径；从零开始的完整步骤见下文
+> **"本地环境配置（克隆到运行）"** 一节。
+
 ```powershell
 npm install
 pip install -r requirements.txt
@@ -138,6 +141,12 @@ TopOptPilot/
 │   ├── report_generator.py       # 研究报告生成
 │   └── visualization.py          # 收敛曲线/指标图表
 │
+├── desktop/                      # Tauri 2 + React 原生桌面应用（V5.1 主入口）
+│   ├── src/                      # React 前端（三栏工作台，zh-CN/en-US 双语）
+│   └── src-tauri/                # Rust 端（窗口/sidecar 编排/NSIS 打包）
+├── scripts/build_desktop.ps1     # 桌面安装包一键打包脚本
+├── 求解器模块/                    # 原始 MATLAB 求解器源码（F3 权威产品资源）
+├── vendor/                       # 第三方二进制（不入库，见"开发指南"获取方式）
 ├── app.py                        # Streamlit 稳定入口
 ├── launch.py                     # 环境检查 + Workspace 启动器
 ├── topoptpilot/                  # V5 Workspace / Pi RPC / Policy / Memory / Solver
@@ -267,26 +276,87 @@ Round 1 审计驱动调参：盲锐化对照 C≈113.5（退化）→ 灰度反�
 
 ---
 
-## 快速开始
+## 本地环境配置（克隆到运行）
 
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
+本节面向新协作者：在一台干净的 Windows 机器上，从克隆仓库到运行、测试、开发的完整步骤。
+Linux/macOS 可运行 Python 核心与 Streamlit/API 部分，但原生桌面打包目前只支持 Windows x64。
 
-# 2. 配置环境变量
-cp .env.example .env
-# 编辑 .env，填入 DASHSCOPE_API_KEY
+### 0. 环境要求清单
 
-# 3. 启动原生桌面主界面
+| 依赖 | 版本 | 必需 | 说明 |
+|------|------|:----:|------|
+| 操作系统 | Windows 10/11 x64 | 桌面端必需 | Python 核心跨平台 |
+| Python | 3.11（3.10+） | ✅ | 项目以 3.11 验证 |
+| Node.js | v22+（实测 v24.14.0） | ✅ | 官方 Pi RPC 运行时依赖 `node` |
+| Git | 任意近期版本 | ✅ | 克隆与协作 |
+| MATLAB R2024a | R2024a | ❌ 可选 | 仅 F3 高保真通道需要 |
+| Rust + MSVC 构建工具 | stable-msvc | ❌ 可选 | 仅桌面端开发/打包需要 |
+| 网络 | 可达 PyPI / npmjs / github.com / DashScope | ✅ | 国内建议配置代理 |
+
+### 1. 克隆仓库
+
+```powershell
+git clone https://github.com/wuliaoonly/TopOptPilot.git
+cd TopOptPilot
+```
+
+### 2. Python 环境
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # 每次新开终端需重新激活
+pip install -r requirements.txt   # 运行依赖
+pip install -r requirements-dev.txt  # 开发者追加：pytest/httpx/streamlit/pyinstaller
+```
+
+### 3. Node 依赖
+
+```powershell
+npm install                     # 根目录必装：@earendil-works/pi-coding-agent（Pi RPC 运行时）
+npm --prefix desktop install    # 仅桌面端开发需要；只用 Streamlit/API 可跳过
+```
+
+### 4. 配置 .env
+
+```powershell
+Copy-Item .env.example .env     # Linux/macOS: cp .env.example .env
+```
+
+编辑 `.env`，至少填写 `DASHSCOPE_API_KEY`。**没有密钥也能运行**：系统自动进入
+Safe Mode（确定性规则策略），`demo/run_solver_demo.py` 等真实求解演示完全不需要密钥。
+密钥仅由 `.env` 注入，绝不写入 session、报告或复现包；`.env` 已在 `.gitignore` 中，禁止提交。
+
+代码实际读取的环境变量如下（其余 `.env.example` 字段为保留配置）：
+
+| 变量 | 必需 | 默认值 | 作用 |
+|------|:----:|--------|------|
+| `DASHSCOPE_API_KEY` | 在线推理必需 | 无 | Qwen API 密钥；缺失或 401 时自动进入 Safe Mode |
+| `QWEN_BASE_URL` | ❌ | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI 兼容端点 |
+| `QWEN_MODEL` | ❌ | `qwen3.7-plus` | 模型名 |
+| `LLM_API_KEY` | ❌ | 无 | 旧 `agent/` CLI 编排器的备选密钥变量 |
+| `TOPPILOT_DATA_DIR` | ❌ | `topoptpilot/storage` | 研究数据目录（会话/实验/报告），建议保持默认 |
+| `TOPPILOT_NODE` | ❌ | PATH 中的 `node` | 自定义 Node 可执行文件路径 |
+| `TOPPILOT_MATLAB_MCP` | ❌ | `vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe` | MATLAB MCP Server 可执行文件 |
+| `TOPPILOT_MATLAB_ROOT` | ❌ | 自动探测（PATH → 注册表 → 常见安装目录） | MATLAB 安装根目录 |
+| `TOPPILOT_F3_REPLAY` | ❌ | 无 | F3 已验证回放文件（离线复现已审批实验） |
+| `TOPOPT_MATLAB_DRIVER` | ❌ | `top3d_main` | `solver/matlab_backend.py` 的 MATLAB Engine 入口函数名 |
+
+### 5. 启动与验证
+
+`python launch.py` 会先自检（Python 依赖、2D 求解器配置、Pi 运行时），再按以下优先级启动：
+已构建的桌面 EXE → `tauri dev` 开发模式（需 Rust）→ 提示安装桌面依赖。
+
+```powershell
+# 方式 A：原生桌面工作台（需第 6 节的 Rust 开发环境，或已构建出 EXE）
 python launch.py
 
-# 仅开发旧 Streamlit 页面
+# 方式 B：Streamlit 开发界面（无 Rust 时的推荐入口，浏览器打开）
 python launch.py --web
 
-# 4. （可选）启动赛题测试 API
+# 方式 C：赛题测试 API（FastAPI，供前端/脚本对接）
 uvicorn topoptpilot.api.fastapi_app:app --host 127.0.0.1 --port 8000
 
-# 5. （可选）赛题 B 演示：真实求解器逐步提升实验成效（无需 API Key）
+# 冒烟验证（无需 API Key，约 20 秒，真实求解器全流程）
 python demo/run_solver_demo.py
 ```
 
@@ -294,20 +364,83 @@ Workspace 支持自然语言和统一命令输入：`/run`、`/pause`、`/resume
 `/approve`、`/reject`、`/rollback E01`、`/compare E01 E02`、`/lock beta 8`、
 `/promote E01`、`/retry E01`、`/report`、`/export`。
 
+### 6. 桌面端开发 / 打包（可选）
+
+1. 安装 [Rust](https://www.rust-lang.org/tools/install)（stable-msvc 工具链）；
+2. 安装 **Visual Studio Build Tools**（勾选"使用 C++ 的桌面开发"）；
+3. WebView2 运行时（Windows 11 已内置）；
+4. 开发模式热重载：`npm --prefix desktop run tauri dev`；
+5. 打包 Windows x64 安装包：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
+```
+
+构建脚本自动完成：PyInstaller 打包后端 sidecar → 下载 vendor/node（v24.14.0 win-x64）
+→ 暂存 `.pi`、`mcp`、`求解器模块` 等资源 → `tauri build` 产出 NSIS 安装包
+（`desktop/src-tauri/target/release/bundle/nsis/`）。最终用户无需预装 Python/Node/Rust；
+MATLAB 本体不随包分发。
+
 ---
 
-## 第三方依赖（vendor/，不入库）
+## 测试
 
-桌面端打包（`scripts/build_desktop.ps1`）与 MATLAB MCP 后端依赖以下第三方组件，
-二进制不随仓库分发，按下表在本地准备：
+```powershell
+pip install -r requirements-dev.txt
+pytest                          # 默认套件（契约/服务/工作台测试；pytest.ini 驱动）
+pytest tests/test_solver.py     # 求解器物理验证 + 全链路集成（T1–T9，默认不含，较慢）
+python -m topoptpilot.release_audit   # V5 发布门禁全量审计
+```
+
+`release_audit` 依次检查：产物完整性（6 技能/11 工具/研究章程）、桌面 EXE、严格 F3、
+中文默认 i18n、MATLAB MCP 2D/3D 实机、三案例闭环、基线矩阵与 Safe Mode，
+输出 `release_audit.json`。其中 MATLAB 与桌面门禁需要第 6 节环境和真实 MATLAB；
+`online_qwen` 门禁需要有效 `DASHSCOPE_API_KEY`。
+
+> 本地验证套件 `tests/` 与 `pytest.ini` 不随仓库分发（按交付要求排除）；
+> 协作者如需，请向维护者索取或按 `pytest.ini` 自行组织。
+
+---
+
+## 开发指南
+
+**模块分工**（详见"目录结构"一节）：`agent/` 六角色 AI Scientist、`solver/` 真实
+拓扑优化引擎、`topoptpilot/` V5 运行时（Policy/Memory/Pi RPC/执行器/评价器）、
+`mcp/` MATLAB MCP 桥、`desktop/` Tauri 前端、`experiments/` 实验矩阵、`demo/` 演示。
+
+**MATLAB F3 通道准备（可选）**：
 
 | 本地路径 | 获取方式 | 用途 |
 |----------|----------|------|
-| `vendor/node/` | 构建脚本自动从 nodejs.org 下载 Node v24.14.0 win-x64 并解压 | 桌面端 sidecar 启动 Pi RPC，无需手动准备 |
-| `vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe` + `LICENSE.md` | 从 MathWorks 官方 MATLAB MCP Server 项目发布页下载（BSD-2 许可） | F3 高保真 MATLAB 求解通道（严格审批制） |
+| `vendor/node/` | `build_desktop.ps1` 自动下载，无需手动准备 | 桌面端 sidecar 启动 Pi RPC |
+| `vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe` + `LICENSE.md` | 从 MathWorks 官方 MATLAB MCP Server 项目发布页下载（BSD-2 许可） | F3 高保真 MATLAB 求解通道 |
 
-本地验证套件位于 `tests/`（入口 `pytest.ini`，`pip install -r requirements-dev.txt` 后
-`pytest` 运行），同样不随仓库分发。
+另需安装 MATLAB R2024a。F3 实验必须在 Workspace 中显式审批；MATLAB/许可证/MCP
+任何环节失败都会记为 `FAILED/MATLAB_INFRASTRUCTURE`，**不允许 Python 伪回退**。
+未配置 MATLAB 时 F1/F2（Python FEM）完全不受影响。
+
+**协作约定**：
+
+- 运行时数据在 `topoptpilot/storage/`（可用 `TOPPILOT_DATA_DIR` 迁移），已被
+  `.gitignore` 排除，不要提交；`tests/`、`vendor/`、`*.zip/*.rar`、密钥同样不入库；
+- 密钥只进 `.env`；新增配置先更新 `.env.example` 再改代码；
+- 提交前阅读根目录 `AGENTS.md`（研究章程）：不得伪造 FEM 结果、不得绕过
+  Policy 直改求解参数、失败实验也是有效证据；
+- 修改求解器后运行 `pytest tests/test_solver.py` 核对物理真值再提交。
+
+---
+
+## 常见问题（FAQ）
+
+| 现象 | 原因与处理 |
+|------|-----------|
+| `launch.py` 报 "Official Pi runtime is missing" | 根目录未执行 `npm install` |
+| `python launch.py` 提示缺桌面依赖 | 未执行 `npm --prefix desktop install`，或无 Rust 时改用 `--web` |
+| `tauri dev/build` 失败 | 检查 `cargo --version`、MSVC Build Tools 是否装全；国内网络需为 cargo 配置代理 |
+| `npm install` / `git clone` 超时 | github.com 连接不稳定，为 git/npm 配置可用代理后重试 |
+| 无 API Key 或 401 | 自动进入 Safe Mode，确定性策略照常推进；演示与求解测试不受影响 |
+| 找不到 MATLAB | 仅 F3 不可用并记为基础设施故障；安装 R2024a 并确认 `vendor/matlab-mcp-server/` 已就位 |
+| Streamlit 端口冲突 | `python -m streamlit run app.py --server.port 8502` |
 
 ---
 
