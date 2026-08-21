@@ -17,3 +17,12 @@ export interface Research {
   best_experiment?: Experiment; termination_reason?: string;
 }
 export interface MatlabHealth { state: string; server_version: string; matlab_root?: string; process_running: boolean; last_error?: string }
+export interface AppSettings {
+  locale: Locale; ui_density: "compact" | "standard" | "comfortable"; startup_behavior: "resume_last" | "research_list";
+  api_key_status: "environment" | "not_configured"; updated_at?: string;
+  agent: { model:string; base_url:string; timeout_seconds:number; max_retries:number; safe_mode:boolean };
+  compute: { matlab_root?:string|null; python_workers:number; matlab_timeout_seconds:number; matlab_retry_count:number };
+  new_research: { mode:string; budget_total:number; budgets:Record<string,number>; constraints:Record<string,unknown>; material:Record<string,number>; experiment:Record<string,unknown> };
+  data: { next_data_dir?:string|null };
+}
+export interface SettingsDiagnostics { data_dir:string; database:string; cache_bytes:number; log_dir:string; free_disk_bytes:number; sidecar_port?:string; version:string; health: Record<string, unknown> }

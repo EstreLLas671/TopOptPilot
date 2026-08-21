@@ -13,6 +13,9 @@ use std::os::windows::process::CommandExt;
 #[derive(Clone, Deserialize, Serialize)]
 struct BackendInfo { port: u16, token: String }
 
+#[derive(Deserialize)]
+struct DesktopBootstrap { next_data_dir: Option<String> }
+
 struct BackendState(Arc<Mutex<Option<BackendInfo>>>);
 struct ChildGuard(Mutex<Option<Child>>);
 impl Drop for ChildGuard {
@@ -38,13 +41,22 @@ fn spawn_backend(app: &tauri::AppHandle) -> Result<(Child, Arc<Mutex<Option<Back
     } else {
         let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
         let backend = resources.join("resources/bin/topoptpilot-backend.exe");
-        let data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+        let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(&app_data).map_err(|error| error.to_string())?;
+        let bootstrap_path = app_data.join("desktop-bootstrap.json");
+        let configured_root = std::fs::read_to_string(&bootstrap_path).ok()
+            .and_then(|text| serde_json::from_str::<DesktopBootstrap>(&text).ok())
+            .and_then(|value| value.next_data_dir).filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
+        // A configured directory is selected only on the next launch. No data is migrated.
+        let data = configured_root.unwrap_or_else(|| app_data.join("storage"));
         std::fs::create_dir_all(&data).map_err(|error| error.to_string())?;
         command = Command::new(backend);
         command.current_dir(&data)
             .env("TOPPILOT_PARENT_PID", std::process::id().to_string())
             .env("TOPPILOT_RESOURCE_ROOT", resources.join("resources"))
-            .env("TOPPILOT_DATA_DIR", data.join("storage"))
+            .env("TOPPILOT_DATA_DIR", &data)
+            .env("TOPPILOT_BOOTSTRAP_PATH", bootstrap_path)
             .env("TOPPILOT_NODE", resources.join("resources/node/node.exe"))
             .env("TOPPILOT_MATLAB_MCP", resources.join(
                 "resources/vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe"));

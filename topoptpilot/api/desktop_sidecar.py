@@ -38,6 +38,7 @@ def main() -> int:
     sock.bind(("127.0.0.1", 0))
     sock.listen(128)
     port = sock.getsockname()[1]
+    os.environ["TOPPILOT_SIDECAR_PORT"] = str(port)
     print("TOPPILOT_SIDECAR=" + json.dumps({"port": port, "token": token}), flush=True)
     config = uvicorn.Config("topoptpilot.api.fastapi_app:app", host="127.0.0.1", port=port,
                             log_level="warning", access_log=False)

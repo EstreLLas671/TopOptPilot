@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { BackendInfo, Locale, MatlabHealth, Research } from "./types";
+import type { AppSettings, BackendInfo, Locale, MatlabHealth, Research, SettingsDiagnostics } from "./types";
 
 let backend: BackendInfo | null = null;
 
@@ -54,5 +54,11 @@ export const api = {
   setLocale: (id: string, locale: Locale) => request<Research>(`/api/research/${id}/locale`, { method: "PATCH", body: JSON.stringify({ locale }) }),
   matlabHealth: () => request<MatlabHealth>("/api/matlab/health"),
   restartMatlab: () => request<MatlabHealth>("/api/matlab/restart", { method: "POST" }),
+  settings: () => request<AppSettings>("/api/settings"),
+  saveSettings: (settings: object) => request<AppSettings>("/api/settings", { method: "PATCH", body: JSON.stringify({ settings }) }),
+  testAgent: () => request<{ok:boolean;status:string;model:string;error?:string}>("/api/settings/test-agent", { method: "POST" }),
+  restartPi: () => request("/api/settings/restart-pi", { method: "POST" }),
+  diagnostics: () => request<SettingsDiagnostics>("/api/settings/diagnostics"),
+  clearCache: () => request<{message:string}>("/api/settings/clear-cache", { method: "POST", body: JSON.stringify({confirm:true}) }),
   stream(id: string): WebSocket { if (!backend) throw new Error("Backend not initialized"); return new WebSocket(`ws://127.0.0.1:${backend.port}/api/research/${id}/stream?token=${encodeURIComponent(backend.token)}`); }
 };

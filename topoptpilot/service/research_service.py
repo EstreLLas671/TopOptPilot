@@ -11,6 +11,7 @@ import uuid
 import zipfile
 import hashlib
 import platform
+import copy
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from topoptpilot.schemas import (
     DecisionStatus, EventKind, ExperimentCreate, ExperimentStatus,
     ResearchCreate, WorkspaceCommandResult,
 )
+from topoptpilot.schemas.models import AppSettings
 from topoptpilot.tools import ResearchTools
 from topoptpilot.agent_runtime import PiBridge
 from agent.llm.client import PiAgentClient
@@ -37,6 +39,18 @@ STATUS_SYMBOLS = {
     "WAITING": "○", "RUNNING": "▶", "SUCCESS": "✓",
     "FAILED": "✗", "CANCELLED": "⚠",
 }
+
+DEFAULT_APP_SETTINGS = AppSettings().model_dump()
+
+
+def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
 
 
 class ResearchService:
@@ -62,6 +76,105 @@ class ResearchService:
             self.pi_runtime_error = str(exc)
         self._completion_lock = threading.RLock()
 
+    def get_settings(self) -> dict[str, Any]:
+        persisted = self.store.get_app_settings() or {}
+        updated_at = persisted.pop("updated_at", None)
+        settings = AppSettings.model_validate(_deep_merge(DEFAULT_APP_SETTINGS, persisted)).model_dump()
+        settings["api_key_status"] = ("environment" if bool(os.getenv("DASHSCOPE_API_KEY"))
+                                      else "not_configured")
+        settings["updated_at"] = updated_at
+        return settings
+
+    def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(patch, dict):
+            raise ValueError("Settings patch must be an object")
+        forbidden = {"api_key", "apiKey", "DASHSCOPE_API_KEY", "key", "secret", "token"}
+        if any(key in forbidden for key in patch):
+            raise ValueError("API keys can only be supplied through environment variables")
+        current = self.get_settings()
+        current.pop("api_key_status", None)
+        current.pop("updated_at", None)
+        merged = AppSettings.model_validate(_deep_merge(current, patch)).model_dump()
+        requested_root = merged["data"].get("next_data_dir")
+        if requested_root:
+            target = Path(requested_root).expanduser().resolve()
+            if not target.is_dir() or not os.access(target, os.W_OK):
+                raise ValueError("Next data directory must be an existing writable directory")
+            merged["data"]["next_data_dir"] = str(target)
+        root_changed = merged["compute"]["matlab_root"] != current["compute"]["matlab_root"]
+        self.store.save_app_settings(merged)
+        # The bootstrap mirror contains only the delayed data-root selector; all normal
+        # preferences remain in SQLite and no secrets are ever copied here.
+        bootstrap = os.getenv("TOPPILOT_BOOTSTRAP_PATH")
+        if bootstrap:
+            Path(bootstrap).parent.mkdir(parents=True, exist_ok=True)
+            Path(bootstrap).write_text(json.dumps({"next_data_dir": merged["data"]["next_data_dir"]}, ensure_ascii=False), encoding="utf-8")
+        if root_changed:
+            try:
+                self.matlab_worker.configure(matlab_root=merged["compute"]["matlab_root"],
+                                             timeout=merged["compute"]["matlab_timeout_seconds"])
+            except Exception as exc:
+                # Persist the chosen root and surface concrete MCP evidence to the UI.
+                self.matlab_worker.connector.stderr.append(f"settings restart: {exc}")
+        return self.get_settings()
+
+    def restart_pi(self) -> dict[str, Any]:
+        if not self.pi_runtime:
+            raise RuntimeError(self.pi_runtime_error or "Pi runtime is unavailable")
+        self.pi_runtime.close()
+        self.pi_runtime = PiBridge(self)
+        return self.pi_runtime.health()
+
+    def restart_matlab(self) -> dict[str, Any]:
+        settings = self.get_settings()["compute"]
+        return self.matlab_worker.configure(matlab_root=settings.get("matlab_root"),
+                                            timeout=settings["matlab_timeout_seconds"])
+
+    def test_agent_settings(self) -> dict[str, Any]:
+        settings = self.get_settings()["agent"]
+        if not os.getenv("DASHSCOPE_API_KEY"):
+            return {"ok": False, "status": "not_configured", "model": settings["model"]}
+        # This invokes the configured environment credential without persisting it.
+        old_model = self.agent_client.model
+        self.agent_client.model = settings["model"]
+        try:
+            self.agent_client.chat([{"role": "user", "content": "Reply SETTINGS_CONNECTION_OK."}],
+                                   temperature=0, max_tokens=16)
+            return {"ok": True, "status": "verified", "model": settings["model"]}
+        except Exception as exc:
+            return {"ok": False, "status": "failed", "model": settings["model"], "error": str(exc)[:500]}
+        finally:
+            self.agent_client.model = old_model
+
+    def diagnostics(self) -> dict[str, Any]:
+        def directory_size(path: Path) -> int:
+            return sum(item.stat().st_size for item in path.rglob("*") if item.is_file()) if path.exists() else 0
+        disk = shutil.disk_usage(self.data_dir)
+        return {"health": self.health(), "data_dir": str(self.data_dir),
+                "database": str(self.store.db_path), "cache_bytes": directory_size(self.data_dir / "cache"),
+                "log_dir": str(self.data_dir / "logs"), "free_disk_bytes": disk.free,
+                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "5.1.1"}
+
+    def export_diagnostics(self) -> Path:
+        output = self.data_dir / "diagnostics" / f"topoptpilot-diagnostics-{uuid.uuid4().hex[:8]}.zip"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("diagnostics.json", json.dumps(self.diagnostics(), ensure_ascii=False, indent=2, default=str))
+            archive.writestr("settings.json", json.dumps(self.get_settings(), ensure_ascii=False, indent=2))
+        return output
+
+    def clear_regenerable_cache(self) -> dict[str, Any]:
+        removed = 0
+        for directory in (self.data_dir / "cache", self.data_dir / "progress"):
+            if directory.exists() and self.data_dir in directory.resolve().parents:
+                for item in directory.iterdir():
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    removed += 1
+        return {"removed_entries": removed, "message": "Only regenerable cache and progress files were removed."}
+
     def health(self) -> dict[str, Any]:
         runtime = (self.pi_runtime.health() if self.pi_runtime else
                    {"available": False, "status": "unavailable", "last_error": self.pi_runtime_error})
@@ -83,11 +196,19 @@ class ResearchService:
             return False
 
     def create_research(self, request: ResearchCreate | dict[str, Any]) -> dict[str, Any]:
-        model = request if isinstance(request, ResearchCreate) else ResearchCreate.model_validate(request)
+        if isinstance(request, ResearchCreate):
+            model, inherited = request, {}
+        else:
+            defaults = self.get_settings()["new_research"]
+            inherited = {"defaults": {"experiment": defaults["experiment"]}}
+            seed = {"mode": defaults["mode"], "budget_total": defaults["budget_total"],
+                    "budgets": defaults["budgets"], "constraints": defaults["constraints"],
+                    "material": defaults["material"], "locale": self.get_settings()["locale"]}
+            model = ResearchCreate.model_validate(_deep_merge(seed, request))
         research_id = self._next_research_id()
         payload = model.model_dump()
         payload["budgets"] = model.normalized_budgets()
-        research = self.store.create_research({"id": research_id, **payload})
+        research = self.store.create_research({"id": research_id, **payload, **inherited})
         self.store.append_event(research_id, EventKind.USER.value, "RESEARCH GOAL",
                                 f"{model.goal}\n\nConstraints: {json.dumps(model.constraints, ensure_ascii=False)}")
         self.store.append_event(research_id, EventKind.PLANNER.value, "ROUND 1 STRATEGY",
@@ -259,7 +380,13 @@ class ResearchService:
         research = self._require_research(research_id)
         if research["budget_used"] >= research["budget_total"]:
             raise ValueError("Research budget is exhausted")
-        model = request if isinstance(request, ExperimentCreate) else ExperimentCreate.model_validate(request)
+        if isinstance(request, ExperimentCreate):
+            model = request
+        else:
+            defaults = (research.get("defaults") or {}).get("experiment", {})
+            seed = {"mesh_level": defaults.get("mesh_level", "coarse"),
+                    "parameters": defaults.get("parameters", {})}
+            model = ExperimentCreate.model_validate(_deep_merge(seed, request))
         code = str(model.fidelity).split()[0]
         budget = FidelityManager.budget(research, self.store.list_experiments(research_id))
         if code in {"F0", "F1", "F2", "F3"} and budget["remaining"].get(code, 0) <= 0:
@@ -784,7 +911,9 @@ class ResearchService:
         return self.matlab_worker.health()
 
     def restart_matlab(self) -> dict[str, Any]:
-        return self.matlab_worker.restart()
+        settings = self.get_settings()["compute"]
+        return self.matlab_worker.configure(matlab_root=settings.get("matlab_root"),
+                                            timeout=settings["matlab_timeout_seconds"])
 
     def _answer_question(self, research_id: str, text: str, selected: str | None) -> str:
         research = self._require_research(research_id)

@@ -115,6 +115,11 @@ class MatlabMcpWorker:
         with self._lock:
             return self.connector.restart()
 
+    def configure(self, *, matlab_root: str | Path | None = None,
+                  timeout: float | None = None) -> dict[str, Any]:
+        with self._lock:
+            return self.connector.configure(matlab_root=matlab_root, timeout=timeout)
+
     def close(self) -> None:
         self.connector.stop()
         self.pool.shutdown(wait=False, cancel_futures=True)

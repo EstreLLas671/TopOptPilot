@@ -5,7 +5,8 @@ import { Activity, Bot, Boxes, Check, ChevronRight, CircleAlert, FlaskConical,
   ShieldCheck, SquareTerminal, X } from "lucide-react";
 import i18n from "./i18n";
 import { api, initializeBackend } from "./api";
-import type { Decision, EventRecord, Experiment, Locale, MatlabHealth, Research } from "./types";
+import type { AppSettings, Decision, EventRecord, Experiment, Locale, MatlabHealth, Research } from "./types";
+import SettingsWorkspace from "./SettingsWorkspace";
 
 const statusClass = (status: string) => `status status-${status.toLowerCase().replaceAll("_", "-")}`;
 const fmt = (value: unknown, digits = 4) => typeof value === "number" && Number.isFinite(value)
@@ -57,6 +58,7 @@ function App() {
   const [command, setCommand] = useState(""), [busy, setBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false), [editDecision, setEditDecision] = useState<Decision | null>(null);
   const [streamText, setStreamText] = useState("");
+  const [settings, setSettings] = useState<AppSettings | null>(null), [settingsOpen, setSettingsOpen] = useState(false);
 
   const refreshList = useCallback(async () => {
     const values = await api.listResearch(); setResearches(values);
@@ -67,7 +69,9 @@ function App() {
   }, [selectedId]);
 
   useEffect(() => { (async () => {
-    try { await initializeBackend(); await refreshList(); setMatlab(await api.matlabHealth()); setReady(true); }
+    try { await initializeBackend(); const appSettings=await api.settings(); setSettings(appSettings);
+      await i18n.changeLanguage(appSettings.locale); document.documentElement.lang=appSettings.locale;
+      document.documentElement.dataset.density=appSettings.ui_density; await refreshList(); setMatlab(await api.matlabHealth()); setReady(true); }
     catch (reason) { setError(String(reason)); }
   })(); }, []);
   useEffect(() => { refreshResearch().catch(reason => setError(String(reason))); }, [refreshResearch]);
@@ -97,6 +101,7 @@ function App() {
     await i18n.changeLanguage(locale); localStorage.setItem("topoptpilot.locale", locale);
     document.documentElement.lang = locale;
     if (research) { await api.setLocale(research.id, locale); await refreshResearch(); }
+    if (settings) setSettings(await api.saveSettings({locale}));
   }
   async function resolveDecision(decision: Decision, action: "approve" | "reject" | "why") {
     try {
@@ -108,12 +113,14 @@ function App() {
   }
 
   if (!ready) return <div className="boot"><LoaderCircle className="spin"/><h2>{t("loading")}</h2>{error && <><p>{t("serviceError")}: {error}</p><button onClick={() => window.location.reload()}><RefreshCw size={15}/>{t("retry")}</button></>}</div>;
+  if (settingsOpen && settings) return <SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={async value => { setSettings(value); await i18n.changeLanguage(value.locale); document.documentElement.lang=value.locale; document.documentElement.dataset.density=value.ui_density; if(research) await api.setLocale(research.id,value.locale); }}/>
   return <div className="app-shell">
     <header className="titlebar" data-tauri-drag-region>
       <div className="brand"><div className="brand-mark"><Boxes size={18}/></div><span>{t("appName")}</span><small>RESEARCH WORKSPACE</small></div>
       <div className="title-center">{research?.id || "LOCAL"} {research && <span className={statusClass(research.status)}>{research.status}</span>}</div>
       <div className="title-actions">
         <button className="ghost" onClick={changeLanguage}><Languages size={16}/>{t("language")}</button>
+        <button className="ghost" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/>{i18n.language === "zh-CN" ? "设置" : "Settings"}</button>
         <span className={`service-dot ${matlab?.state === "READY" ? "online" : ""}`}/><span>MATLAB</span>
       </div>
     </header>
@@ -173,8 +180,8 @@ function DecisionCard({decision,t,onAction,onEdit}:{decision:Decision;t:(key:str
 }
 function Metric({label,value}:{label:string;value:unknown}) { return <div><span>{label}</span><b>{String(value)}</b></div>; }
 function CreateResearch({t,locale,onClose,onCreate}:{t:(k:string)=>string;locale:Locale;onClose:()=>void;onCreate:(v:object)=>Promise<void>}) {
-  const [name,setName]=useState(locale==="zh-CN"?"新拓扑优化研究":"New topology study"), [goal,setGoal]=useState(locale==="zh-CN"?"在满足体积分数、灰度率和连通性约束下最小化柔度。":"Minimize compliance subject to volume, gray-ratio and connectivity constraints."), [budget,setBudget]=useState(12);
-  return <div className="modal-backdrop"><form className="modal" onSubmit={e=>{e.preventDefault();onCreate({name,goal,budget_total:budget,locale,mode:"COPILOT"})}}><header><h2>{t("newResearch")}</h2><button type="button" onClick={onClose}><X/></button></header><p>{t("createHint")}</p><label>{t("name")}<input value={name} onChange={e=>setName(e.target.value)}/></label><label>{t("goal")}<textarea value={goal} onChange={e=>setGoal(e.target.value)}/></label><label>{t("budget")}<input type="number" min="1" max="100" value={budget} onChange={e=>setBudget(Number(e.target.value))}/></label><footer><button type="button" onClick={onClose}>{t("cancel")}</button><button className="approve" type="submit">{t("create")}</button></footer></form></div>;
+  const [name,setName]=useState(locale==="zh-CN"?"新拓扑优化研究":"New topology study"), [goal,setGoal]=useState(locale==="zh-CN"?"在满足体积分数、灰度率和连通性约束下最小化柔度。":"Minimize compliance subject to volume, gray-ratio and connectivity constraints.");
+  return <div className="modal-backdrop"><form className="modal" onSubmit={e=>{e.preventDefault();onCreate({name,goal,locale})}}><header><h2>{t("newResearch")}</h2><button type="button" onClick={onClose}><X/></button></header><p>{t("createHint")}</p><label>{t("name")}<input value={name} onChange={e=>setName(e.target.value)}/></label><label>{t("goal")}<textarea value={goal} onChange={e=>setGoal(e.target.value)}/></label><p>预算、模式和求解器模板使用设置中心中的“新研究默认值”。</p><footer><button type="button" onClick={onClose}>{t("cancel")}</button><button className="approve" type="submit">{t("create")}</button></footer></form></div>;
 }
 function EditDecision({t,decision,onClose,onSave}:{t:(k:string)=>string;decision:Decision;onClose:()=>void;onSave:(p:Record<string,unknown>)=>Promise<void>}) {
   const [text,setText]=useState(JSON.stringify(decision.proposal.parameters||{},null,2)), [error,setError]=useState("");

@@ -83,6 +83,64 @@ class BudgetSpec(BaseModel):
     f1: int = Field(default=4, ge=0)
     f2: int = Field(default=2, ge=0)
     f3: int = Field(default=1, ge=0)
+
+
+class AgentSettings(BaseModel):
+    """Non-sensitive defaults for newly created Pi sessions."""
+
+    model: str = Field(default="qwen3.7-plus", min_length=1, max_length=120)
+    base_url: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        min_length=8,
+        max_length=500,
+    )
+    timeout_seconds: int = Field(default=120, ge=5, le=600)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    safe_mode: bool = True
+
+
+class ComputeSettings(BaseModel):
+    matlab_root: str | None = Field(default=None, max_length=500)
+    python_workers: int = Field(default=2, ge=1, le=32)
+    matlab_timeout_seconds: int = Field(default=600, ge=30, le=7200)
+    matlab_retry_count: int = Field(default=1, ge=0, le=5)
+
+
+class NewResearchSettings(BaseModel):
+    mode: str = Field(default="COPILOT", pattern="^(COPILOT|AUTONOMOUS)$")
+    budget_total: int = Field(default=12, ge=1, le=10000)
+    budgets: BudgetSpec = Field(default_factory=BudgetSpec)
+    constraints: dict[str, Any] = Field(
+        default_factory=lambda: {"volume_fraction": 0.4, "gray_max": 0.05, "connected": True}
+    )
+    material: dict[str, float] = Field(default_factory=lambda: {"E": 1.0, "nu": 0.3})
+    experiment: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "mesh_level": "coarse",
+            "parameters": {"volfrac": 0.4, "rmin": 1.5, "penal": 3.0, "beta": 1.0, "max_iter": 80},
+        }
+    )
+
+
+class DataSettings(BaseModel):
+    # This only selects the root for the *next* desktop start.  It never moves data.
+    next_data_dir: str | None = Field(default=None, max_length=500)
+
+
+class AppSettings(BaseModel):
+    """Persisted, non-secret application preferences.
+
+    API keys deliberately do not appear in this model. They are read only from the
+    process environment at the moment a connection is tested or a session starts.
+    """
+
+    locale: str = Field(default="zh-CN", pattern="^(zh-CN|en-US)$")
+    ui_density: str = Field(default="standard", pattern="^(compact|standard|comfortable)$")
+    startup_behavior: str = Field(default="resume_last", pattern="^(resume_last|research_list)$")
+    agent: AgentSettings = Field(default_factory=AgentSettings)
+    compute: ComputeSettings = Field(default_factory=ComputeSettings)
+    new_research: NewResearchSettings = Field(default_factory=NewResearchSettings)
+    data: DataSettings = Field(default_factory=DataSettings)
     time_seconds: float | None = Field(default=None, gt=0)
 
 

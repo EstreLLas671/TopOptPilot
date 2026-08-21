@@ -168,6 +168,21 @@ class MatlabConnector:
         self.start()
         return self.health()
 
+    def configure(self, *, matlab_root: str | Path | None = None,
+                  timeout: float | None = None) -> dict[str, Any]:
+        """Apply controlled runtime settings; callers cannot alter MCP tool access."""
+        with self._start_lock:
+            if matlab_root is not None:
+                candidate = Path(matlab_root).resolve()
+                executable = candidate / "bin" / ("matlab.exe" if os.name == "nt" else "matlab")
+                if not candidate.is_dir() or not executable.exists():
+                    raise MatlabMcpError("MATLAB root must contain bin/matlab")
+                self.matlab_root = candidate
+            if timeout is not None:
+                self.timeout = float(timeout)
+            self.stop()
+        return self.restart()
+
     def _write(self, payload: dict[str, Any]) -> None:
         if not self.process or not self.process.stdin:
             raise MatlabMcpError("MATLAB MCP stdin is unavailable")

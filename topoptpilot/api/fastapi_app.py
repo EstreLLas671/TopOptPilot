@@ -47,6 +47,14 @@ class LocaleRequest(BaseModel):
     locale: str
 
 
+class SettingsPatchRequest(BaseModel):
+    settings: dict
+
+
+class CacheClearRequest(BaseModel):
+    confirm: bool = False
+
+
 @app.middleware("http")
 async def desktop_token_guard(request: Request, call_next):
     expected = os.environ.get("TOPPILOT_DESKTOP_TOKEN")
@@ -65,7 +73,7 @@ def health():
 
 
 @app.post("/api/research", status_code=201)
-def create_research(request: ResearchCreate):
+def create_research(request: dict):
     return service.create_research(request)
 
 
@@ -226,8 +234,60 @@ def matlab_health():
 def matlab_restart():
     try:
         return service.restart_matlab()
-    except RuntimeError as exc:
+    except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/settings")
+def get_settings():
+    return service.get_settings()
+
+
+@app.patch("/api/settings")
+def patch_settings(request: SettingsPatchRequest):
+    try:
+        return service.update_settings(request.settings)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/settings/test-agent")
+def test_agent_settings():
+    return service.test_agent_settings()
+
+
+@app.post("/api/settings/restart-pi")
+def restart_pi_settings():
+    try:
+        return service.restart_pi()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/settings/restart-matlab")
+def restart_matlab_settings():
+    try:
+        return service.restart_matlab()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/settings/diagnostics")
+def settings_diagnostics():
+    return service.diagnostics()
+
+
+@app.post("/api/settings/export-diagnostics")
+def export_diagnostics():
+    path = service.export_diagnostics()
+    return FileResponse(path, media_type="application/zip", filename=path.name)
+
+
+@app.post("/api/settings/clear-cache")
+def clear_cache(request: CacheClearRequest):
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation is required; research and MATLAB evidence are retained.")
+    return service.clear_regenerable_cache()
 
 
 @app.get("/api/report/{research_id}")

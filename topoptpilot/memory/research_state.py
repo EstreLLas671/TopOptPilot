@@ -99,6 +99,10 @@ class ResearchStateStore:
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(research_id) REFERENCES research(id)
                 );
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1), settings_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             """)
             self._ensure_columns(db, "research", {
                 "budgets_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -111,6 +115,7 @@ class ResearchStateStore:
                 "current_round": "INTEGER NOT NULL DEFAULT 0",
                 "termination_reason": "TEXT",
                 "locale": "TEXT NOT NULL DEFAULT 'zh-CN'",
+                "defaults_json": "TEXT NOT NULL DEFAULT '{}'",
             })
             self._ensure_columns(db, "experiments", {
                 "proposal_id": "TEXT",
@@ -145,27 +150,27 @@ class ResearchStateStore:
             db.execute("""INSERT INTO research
                 (id,name,goal,constraints_json,mode,status,budget_total,budget_used,locks_json,
                  created_at,updated_at,budgets_json,geometry_json,material_json,loads_json,
-                 boundary_conditions_json,hypothesis,current_question,current_round,locale)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 boundary_conditions_json,hypothesis,current_question,current_round,locale,defaults_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["name"], data["goal"], json.dumps(data["constraints"]),
                  data["mode"], "READY", data["budget_total"], 0, "{}", now, now,
                  json.dumps(data.get("budgets", {})), json.dumps(data.get("geometry", {})),
                  json.dumps(data.get("material", {})), json.dumps(data.get("loads", [])),
                  json.dumps(data.get("boundary_conditions", {})), data.get("hypothesis"),
-                 None, 0, data.get("locale", "zh-CN")))
+                 None, 0, data.get("locale", "zh-CN"), json.dumps(data.get("defaults", {}))))
         return self.get_research(data["id"])
 
     def list_research(self) -> list[dict]:
         with self.connection() as db:
             rows = db.execute("SELECT * FROM research ORDER BY updated_at DESC").fetchall()
         return [self._decode(row, ("constraints", "locks", "budgets", "geometry", "material",
-                                   "loads", "boundary_conditions")) for row in rows]
+                                   "loads", "boundary_conditions", "defaults")) for row in rows]
 
     def get_research(self, research_id: str) -> dict | None:
         with self.connection() as db:
             row = db.execute("SELECT * FROM research WHERE id=?", (research_id,)).fetchone()
         return self._decode(row, ("constraints", "locks", "budgets", "geometry", "material",
-                                  "loads", "boundary_conditions"))
+                                  "loads", "boundary_conditions", "defaults"))
 
     def update_research(self, research_id: str, **fields: Any) -> dict:
         allowed = {"name", "goal", "mode", "status", "budget_total", "budget_used",
@@ -183,7 +188,7 @@ class ResearchStateStore:
         return self.get_research(research_id)
 
     def update_research_json(self, research_id: str, **fields: Any) -> dict:
-        allowed = {"constraints", "budgets", "geometry", "material", "loads", "boundary_conditions"}
+        allowed = {"constraints", "budgets", "geometry", "material", "loads", "boundary_conditions", "defaults"}
         assignments, values = [], []
         for name, value in fields.items():
             if name in allowed:
@@ -389,6 +394,23 @@ class ResearchStateStore:
         with self.connection() as db:
             row = db.execute("SELECT * FROM agent_sessions WHERE research_id=?", (research_id,)).fetchone()
         return dict(row) if row else None
+
+    def get_app_settings(self) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT settings_json, updated_at FROM app_settings WHERE id=1").fetchone()
+        if row is None:
+            return None
+        value = json.loads(row["settings_json"] or "{}")
+        value["updated_at"] = row["updated_at"]
+        return value
+
+    def save_app_settings(self, settings: dict[str, Any]) -> dict:
+        now = utc_now()
+        with self._lock, self.connection() as db:
+            db.execute("""INSERT INTO app_settings (id, settings_json, updated_at) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET settings_json=excluded.settings_json,
+                updated_at=excluded.updated_at""", (json.dumps(settings), now))
+        return self.get_app_settings() or {**settings, "updated_at": now}
 
 
 def _json_default(value: Any):
