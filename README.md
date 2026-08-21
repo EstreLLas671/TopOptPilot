@@ -4,6 +4,7 @@
 > 每个 Research ID 对应一个可恢复 Pi session。Pi 只接触 11 个科研工具；参数由确定性
 > Safety Policy 编译。F3 只通过 MathWorks MATLAB MCP Server v0.12.0 调用仓库内原始 `.m`
 > 求解器，失败时严格记录为 MATLAB 基础设施故障，不允许 Python 伪回退。界面默认中文，支持英文。
+> 保留web网页接口可以供大家来设计前端
 
 ## 📑 快速导航
 
