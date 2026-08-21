@@ -1,6 +1,6 @@
 [package]
 name = "topoptpilot-desktop"
-version = "5.1.0"
+version = "5.1.1"
 description = "Pi-native topology optimization research workspace"
 authors = ["TopOptPilot"]
 edition = "2021"

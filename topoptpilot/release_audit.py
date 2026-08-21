@@ -76,7 +76,7 @@ def _artifact_gate() -> dict:
 
 def _desktop_gate() -> dict:
     executable = ROOT / "desktop/src-tauri/target/release/topoptpilot-desktop.exe"
-    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_5.1.0_x64-setup.exe"
+    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_5.1.1_x64-setup.exe"
     return {"pass": executable.exists() and installer.exists(),
             "executable": str(executable), "installer": str(installer)}
 

@@ -26,8 +26,12 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="TopOptPilot Test API", version="5.0", lifespan=lifespan,
               description="Programmatic interface to the same ResearchService used by Streamlit.")
-app.add_middleware(CORSMiddleware, allow_origins=["tauri://localhost", "http://tauri.localhost"],
-                   allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"],
+    allow_origin_regex=r"^https?://(tauri\.localhost|localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_methods=["*"], allow_headers=["*"], allow_credentials=False,
+)
 
 
 class CommandRequest(BaseModel):
@@ -46,7 +50,9 @@ class LocaleRequest(BaseModel):
 @app.middleware("http")
 async def desktop_token_guard(request: Request, call_next):
     expected = os.environ.get("TOPPILOT_DESKTOP_TOKEN")
-    if expected and request.url.path != "/api/health":
+    # Browser CORS preflights intentionally carry no application token. They
+    # must reach CORSMiddleware; the subsequent real request is still guarded.
+    if expected and request.method != "OPTIONS" and request.url.path != "/api/health":
         if request.headers.get("x-topoptpilot-token") != expected:
             from fastapi.responses import JSONResponse
             return JSONResponse({"detail": "Invalid desktop session token"}, status_code=401)

@@ -107,7 +107,7 @@ function App() {
     } catch (reason) { setError(String(reason)); }
   }
 
-  if (!ready) return <div className="boot"><LoaderCircle className="spin"/><h2>{t("loading")}</h2>{error && <p>{t("serviceError")}: {error}</p>}</div>;
+  if (!ready) return <div className="boot"><LoaderCircle className="spin"/><h2>{t("loading")}</h2>{error && <><p>{t("serviceError")}: {error}</p><button onClick={() => window.location.reload()}><RefreshCw size={15}/>{t("retry")}</button></>}</div>;
   return <div className="app-shell">
     <header className="titlebar" data-tauri-drag-region>
       <div className="brand"><div className="brand-mark"><Boxes size={18}/></div><span>{t("appName")}</span><small>RESEARCH WORKSPACE</small></div>
