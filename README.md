@@ -1,10 +1,11 @@
-# TopOptPilot V5.1 — 原生桌面科研工作台
+# TopOptPilot V6.0.0 — 原生桌面科研工作台
 
-> **V5.1 当前实现**：Windows 正式入口为 Tauri 2 + React 原生桌面应用；官方 `@earendil-works/pi-coding-agent` 以 JSON-RPC 常驻运行，
-> 每个 Research ID 对应一个可恢复 Pi session。Pi 只接触 11 个科研工具；参数由确定性
+> **V6.0.0 当前实现**：Windows 正式入口为 Tauri 2 + React 原生桌面应用（v6.0.0），含 **SettingsWorkspace 设置中心**；官方 `@earendil-works/pi-coding-agent` 以 JSON-RPC 常驻运行，
+> 每个 Research ID 对应一个可恢复 Pi session。Pi 只接触科研工具白名单；参数由确定性
 > Safety Policy 编译。F3 只通过 MathWorks MATLAB MCP Server v0.12.0 调用仓库内原始 `.m`
 > 求解器，失败时严格记录为 MATLAB 基础设施故障，不允许 Python 伪回退。界面默认中文，支持英文。
-> 保留web网页接口可以供大家来设计前端
+> 应用设置（AppSettings）持久化到 SQLite 8 张表（含 app_settings）；API Key 仅从环境变量读取。
+> 保留 web 网页接口可以供大家来设计前端
 
 ## 📑 快速导航
 
@@ -40,7 +41,7 @@ TopOptPilot 不是"自然语言调一次拓扑优化"的工具。它是：
 **核心原则**：大模型不代替有限元求解器。Pi 负责科研意图、证据解释与工具编排；
 Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责确定性计算，Evaluator 客观裁决。
 
-## V5.1 快速开始
+## V6.0.0 快速开始
 
 > 已配置好 Python/Node 的老协作者可用下面的最短路径；从零开始的完整步骤见下文
 > **"本地环境配置（克隆到运行）"** 一节。
@@ -61,17 +62,18 @@ python launch.py
 powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
 ```
 
-安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`，最终用户无需预装
+安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`（TopOptPilot_6.0.0_x64-setup.exe，220 MB），最终用户无需预装
 Python、Node 或 Rust；MATLAB 本体不随包分发，首次验收版本为 R2024a。
 
 模型默认使用 `qwen3.7-plus` 与 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
 密钥仅由 `.env` 注入，不写入 session、报告或复现包。无模型或调用失败时进入
 Safe Mode，确定性规则策略仍通过同一 Policy 编译器推进实验。
 
-V5 核心目录：`.pi/extensions/topopt-tools.ts`（11 工具沙箱）、`.pi/skills/`（六项动态技能）、
-`topoptpilot/agent_runtime/`（Pi RPC/会话/网关）、`topoptpilot/memory/`（L0–L3）、
+V6 核心目录：`.pi/extensions/topopt-tools.ts`（工具沙箱）、`.pi/skills/`（六项动态技能）、
+`topoptpilot/agent_runtime/`（Pi RPC/会话/网关）、`topoptpilot/memory/`（L0–L3，8 张 SQLite 表含 app_settings）、
 `topoptpilot/policy/`（意图与安全策略）、`solver/topopt3d.py`（Hex8 FEM）、
-`topoptpilot/benchmarks/`（Random/Grid/TPE/Rule/Pi 与消融）。
+`topoptpilot/benchmarks/`（Random/Grid/TPE/Rule/Pi 与消融）、
+`desktop/src/SettingsWorkspace.tsx`（设置中心，5 Tab）。
 
 ---
 
@@ -155,9 +157,11 @@ TopOptPilot/
 │   ├── report_generator.py       # 研究报告生成
 │   └── visualization.py          # 收敛曲线/指标图表
 │
-├── desktop/                      # Tauri 2 + React 原生桌面应用（V5.1 主入口）
-│   ├── src/                      # React 前端（三栏工作台，zh-CN/en-US 双语）
-│   └── src-tauri/                # Rust 端（窗口/sidecar 编排/NSIS 打包）
+├── desktop/                      # Tauri 2 + React 原生桌面应用（V6.0.0 主入口）
+│   ├── src/                      # React 前端（三栏工作台 + Settings 设置中心，zh-CN/en-US 双语）
+│   │   ├── SettingsWorkspace.tsx # 设置页面（通用/Agent/MATLAB/默认值/诊断 5 Tab）
+│   │   └── settings.css          # 设置页面样式
+│   └── src-tauri/                # Rust 端（窗口/sidecar 编排/NSIS 打包/CREATE_NO_WINDOW）
 ├── scripts/build_desktop.ps1     # 桌面安装包一键打包脚本
 ├── 求解器模块/                    # 原始 MATLAB 求解器源码（F3 权威产品资源）
 ├── vendor/                       # 第三方二进制（不入库，见"开发指南"获取方式）
@@ -283,8 +287,8 @@ Round 1 审计驱动调参：盲锐化对照 C≈113.5（退化）→ 灰度反�
 | Knowledge | 证据库+方法卡片 | ✅ 关键词检索 | 待升级为SQLite+FAISS三级架构 |
 | Solver | 真实拓扑优化引擎+双后端 | ✅ 完成 | numpy/scipy移植，与MATLAB地面真值逐点验证 |
 | Experiment | 任务生成+运行器+结果管理 | ✅ 完成 | 预定义六组实验矩阵 |
-| Frontend | Tauri 2 + React 桌面 App | ✅ V5.1 | Codex 式三栏工作台，中英双语 |
-| Sidecar API | FastAPI + WebSocket | ✅ V5.1 | 随机端口、一次性令牌、仅本机访问 |
+| Frontend | Tauri 2 + React 桌面 App | ✅ V6.0.0 | Codex 式三栏工作台 + Settings 设置中心，中英双语 |
+| Sidecar API | FastAPI + WebSocket + Settings API | ✅ V6.0.0 | 随机端口、一次性令牌、仅本机访问、Settings 8 端点 |
 | Legacy UI | Streamlit Workspace | 开发专用 | `python launch.py --web` |
 | Demo | 10分钟演示编排 | ✅ 完成 | 9阶段时间线+Paper-to-Plugin流水线 |
 
