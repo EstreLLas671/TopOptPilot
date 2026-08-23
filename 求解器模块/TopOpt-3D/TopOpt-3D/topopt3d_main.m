@@ -34,6 +34,8 @@ config = set_default(config, 'penal_start', 1.0);
 config = set_default(config, 'penal_schedule_power', 1.0);
 config = set_default(config, 'Emin', 1e-9);
 config = set_default(config, 'rmin', 1.5);
+config = set_default(config, 'E', 1.0);
+config = set_default(config, 'nu', 0.3);
 config = set_default(config, 'xmin', 1e-3);
 config = set_default(config, 'max_iterations', accuracyDefaults.max_iterations);
 config = set_default(config, 'min_iterations', accuracyDefaults.min_iterations);
@@ -60,6 +62,8 @@ config = set_default(config, 'verbose', true);
 validateattributes(config.nelx, {'numeric'}, {'scalar','integer','positive'});
 validateattributes(config.nely, {'numeric'}, {'scalar','integer','positive'});
 validateattributes(config.nelz, {'numeric'}, {'scalar','integer','positive'});
+validateattributes(config.E, {'numeric'}, {'scalar','real','finite','positive'});
+validateattributes(config.nu, {'numeric'}, {'scalar','real','finite','>=',0,'<',0.5});
 validateattributes(config.volfrac, {'numeric'}, ...
     {'scalar','real','finite','>=',0,'<=',1});
 validateattributes(config.penal, {'numeric'}, ...
@@ -123,6 +127,8 @@ if isfield(config, 'bc_config') && ~isempty(config.bc_config)
 end
 bcConfig.domain_mask = domainMask;
 bcConfig.Emin = config.Emin;
+bcConfig.E = config.E;
+bcConfig.nu = config.nu;
 
 filterConfig = struct();
 filterConfig.filter_type = 'sensitivity';
@@ -142,7 +148,7 @@ ocOptions.passive_void = passiveVoid;
 ocOptions.passive_solid = passiveSolid;
 ocOptions.volume_mask = domainMask;
 
-KE = lk_3d();
+KE = lk_3d(config.E, config.nu);
 objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);
@@ -201,7 +207,7 @@ finalPenal = penalHistory(iteration);
     nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, KE);
 [vonMises, stress] = compute_von_mises_3d( ...
     nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, ...
-    config.stress_measure);
+    config.stress_measure, config.E, config.nu);
 objectiveHistory(iteration) = finalObjective;
 
 result = struct();
@@ -231,22 +237,28 @@ end
 
 function [objective, dc] = compliance_and_sensitivity_3d( ...
         nelx, nely, nelz, x, penal, Emin, U, KE)
-objective = 0.0;
-dc = zeros(nely, nelx, nelz);
-for elz = 1:nelz
-    for elx = 1:nelx
-        for ely = 1:nely
-            edof = element_dofs_3d(elx, ely, elz, nely, nelx);
-            Ue = U(edof);
-            energy = Ue' * KE * Ue;
-            density = x(ely,elx,elz);
-            effectiveE = Emin + (1-Emin) * density^penal;
-            objective = objective + effectiveE * energy;
-            dc(ely,elx,elz) = -(1-Emin) * penal ...
-                * density^(penal-1) * energy;
+persistent cachedNelx cachedNely cachedNelz cachedEdof
+if isempty(cachedNelx) || cachedNelx ~= nelx || cachedNely ~= nely || cachedNelz ~= nelz
+    cachedEdof = zeros(nelx*nely*nelz, 24);
+    index = 0;
+    for elz = 1:nelz
+        for elx = 1:nelx
+            for ely = 1:nely
+                index = index + 1;
+                cachedEdof(index,:) = element_dofs_3d(elx, ely, elz, nely, nelx).';
+            end
         end
     end
+    cachedNelx = nelx;
+    cachedNely = nely;
+    cachedNelz = nelz;
 end
+Ue = U(cachedEdof);
+energy = sum((Ue*KE).*Ue, 2);
+density = x(:);
+effectiveE = Emin + (1-Emin)*density.^penal;
+objective = sum(effectiveE.*energy);
+dc = reshape(-(1-Emin)*penal*density.^(penal-1).*energy, nely, nelx, nelz);
 end
 
 function show_result_3d(result)

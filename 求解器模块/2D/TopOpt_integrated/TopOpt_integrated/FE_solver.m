@@ -2,29 +2,39 @@
 function [U, K, freedofs, fixeddofs] = FE_solver(nelx, nely, x, penal, bc_config)
 
     % ===== 1. 计算单元刚度矩阵 =====
-    [KE] = lk_matrix();                        % 四节点四边形单元的8×8刚度矩阵
+    E = 1.0; nu = 0.3;
+    if isfield(bc_config, 'E'), E = bc_config.E; end
+    if isfield(bc_config, 'nu'), nu = bc_config.nu; end
+    [KE] = lk_matrix(E, nu);                   % 四节点四边形单元的8×8刚度矩阵
 
     % ===== 2. 组装全局刚度矩阵 =====
     ndof = 2 * (nelx + 1) * (nely + 1);        % 总自由度数 = 节点数 × 2
-    K = sparse(ndof, ndof);                    % 稀疏矩阵（大多数元素为零）
     F = sparse(ndof, 1);                       % 全局力向量
     U = zeros(ndof, 1);                        % 全局位移向量
 
-    for elx = 1:nelx                           % 遍历x方向每个单元
-        for ely = 1:nely                       % 遍历y方向每个单元
-            % 当前单元左下和右下节点的编号
-            n1 = (nely + 1) * (elx - 1) + ely;      % 左下节点
-            n2 = (nely + 1) * elx       + ely;      % 右下节点
-
-            % 该单元8个自由度的编号（每个节点x,y两个自由度）
-            % 顺序：左下(x,y) 右下(x,y) 右上(x,y) 左上(x,y)
-            edof = [2*n1-1; 2*n1; 2*n2-1; 2*n2; ...
-                    2*n2+1; 2*n2+2; 2*n1+1; 2*n1+2];
-
-            % SIMP插值：单元刚度按 x^penal 缩放后叠加进全局刚度矩阵
-            K(edof, edof) = K(edof, edof) + x(ely, elx)^penal * KE;
+    % 批量稀疏装配。自由度拓扑只与网格有关，因此在同一 MATLAB 会话内缓存。
+    persistent cachedNelx cachedNely cachedIK cachedJK
+    if isempty(cachedNelx) || cachedNelx ~= nelx || cachedNely ~= nely
+        edofMat = zeros(nelx*nely, 8);
+        index = 0;
+        for elx = 1:nelx
+            for ely = 1:nely
+                index = index + 1;
+                n1 = (nely+1)*(elx-1)+ely;
+                n2 = (nely+1)*elx+ely;
+                edofMat(index,:) = [2*n1-1,2*n1,2*n2-1,2*n2, ...
+                    2*n2+1,2*n2+2,2*n1+1,2*n1+2];
+            end
         end
+        cachedIK = reshape(kron(edofMat,ones(8,1)).', [], 1);
+        cachedJK = reshape(kron(edofMat,ones(1,8)).', [], 1);
+        cachedNelx = nelx;
+        cachedNely = nely;
     end
+    densityScale = x(:)'.^penal;
+    sK = reshape(KE(:)*densityScale, [], 1);
+    K = sparse(cachedIK, cachedJK, sK, ndof, ndof);
+    K = (K+K')/2;
 
     % ===== 3. 根据bc_type施加边界条件（载荷和约束） =====
     bc_type = bc_config.bc_type;
@@ -152,6 +162,10 @@ function [U, K, freedofs, fixeddofs] = FE_solver(nelx, nely, x, penal, bc_config
             error('未知的边界条件类型: %s。支持: MBB, cantilever, L-bracket, simply_supported, custom', bc_type);
     end
 
+    if isfield(bc_config, 'load_scale') && ~strcmpi(bc_type, 'custom')
+        F = F * double(bc_config.load_scale);
+    end
+
     % ===== 4. 求解线性系统 K*u = F =====
     alldofs  = 1 : ndof;                       % 全部自由度
     freedofs = setdiff(alldofs, fixeddofs);    % 自由自由度 = 全部 - 固定
@@ -164,9 +178,7 @@ end
 
 
 
-function [KE] = lk_matrix()
-    E  = 1.0;                                % 杨氏模量
-    nu = 0.3;                                % 泊松比
+function [KE] = lk_matrix(E, nu)
 
     % 刚度矩阵的8个独立分量（利用单元几何和材料对称性）
     k = [1/2-nu/6,   1/8+nu/8,  -1/4-nu/12, -1/8+3*nu/8, ...

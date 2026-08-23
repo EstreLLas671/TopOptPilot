@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
+import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -13,9 +16,12 @@ from pydantic import BaseModel, Field
 
 from topoptpilot.schemas import ExperimentCreate, ResearchCreate, ToolRequest
 from topoptpilot.service import ResearchService
+from mcp.matlab_mcp import MatlabMcpError
 
 
 service = ResearchService()
+_ws_tickets: dict[str, tuple[str, float]] = {}
+_ws_ticket_lock = threading.Lock()
 
 
 @asynccontextmanager
@@ -53,6 +59,24 @@ class SettingsPatchRequest(BaseModel):
 
 class CacheClearRequest(BaseModel):
     confirm: bool = False
+
+
+class GuideRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    locale: str = "zh-CN"
+
+
+class AgentKeyRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=2048)
+
+
+class GeometryPreviewRequest(BaseModel):
+    dimension: int = Field(ge=2, le=3)
+    geometry: dict = Field(default_factory=dict)
+    bc_type: str = Field(default="MBB", min_length=1, max_length=80)
+    load_scale: float = Field(default=1.0, gt=0)
+    grid: list[int]
+    mask: list | None = None
 
 
 @app.middleware("http")
@@ -96,10 +120,25 @@ def get_events(research_id: str, after: int = 0):
     return [item for item in service.store.list_events(research_id) if item["id"] > after]
 
 
+@app.post("/api/research/{research_id}/stream-ticket")
+def create_stream_ticket(research_id: str):
+    service._require_research(research_id)
+    ticket = secrets.token_urlsafe(32)
+    with _ws_ticket_lock:
+        now = time.monotonic()
+        for key, (_, expires) in list(_ws_tickets.items()):
+            if expires <= now:
+                _ws_tickets.pop(key, None)
+        _ws_tickets[ticket] = (research_id, now + 20.0)
+    return {"ticket": ticket, "expires_in": 20}
+
+
 @app.websocket("/api/research/{research_id}/stream")
 async def stream_research(websocket: WebSocket, research_id: str):
-    expected = os.environ.get("TOPPILOT_DESKTOP_TOKEN")
-    if expected and websocket.query_params.get("token") != expected:
+    ticket = websocket.query_params.get("ticket", "")
+    with _ws_ticket_lock:
+        record = _ws_tickets.pop(ticket, None)
+    if not record or record[0] != research_id or record[1] <= time.monotonic():
         await websocket.close(code=4401)
         return
     try:
@@ -124,7 +163,8 @@ async def stream_research(websocket: WebSocket, research_id: str):
                 await websocket.send_json({"type": "agent_session", "session": session})
             experiments = service.store.list_experiments(research_id)
             running = [item for item in experiments if item["status"] in {"WAITING", "RUNNING"}]
-            await websocket.send_json({"type": "progress", "experiments": running})
+            if running:
+                await websocket.send_json({"type": "progress", "experiments": running})
             await asyncio.sleep(.5)
     except (WebSocketDisconnect, RuntimeError):
         return
@@ -145,6 +185,65 @@ def get_research(research_id: str):
         return service.get_research(research_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/research/{research_id}/compare")
+def compare_experiments(research_id: str, a: str, b: str):
+    try:
+        return service.tools.experiment_compare(research_id, a, b)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/research/{research_id}/guide")
+def guide_research(research_id: str, request: GuideRequest):
+    try:
+        return service.guide_research(research_id, request.text)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/guide")
+def preview_guide(request: GuideRequest):
+    if request.locale not in {"zh-CN", "en-US"}:
+        raise HTTPException(status_code=422, detail="locale must be zh-CN or en-US")
+    return service.preview_guidance(request.text, request.locale)
+
+
+@app.get("/api/research/{research_id}/agent-tasks")
+def list_agent_tasks(research_id: str):
+    service._require_research(research_id)
+    return service.store.list_subagent_tasks(research_id)
+
+
+@app.get("/api/knowledge/search")
+def search_knowledge(q: str = "", locale: str = "zh-CN", category: str | None = None,
+                     limit: int = 8):
+    if locale not in {"zh-CN", "en-US"}:
+        raise HTTPException(status_code=422, detail="locale must be zh-CN or en-US")
+    return {"items": service.knowledge.search(q, locale, category, limit),
+            "categories": service.knowledge.categories(locale)}
+
+
+@app.get("/api/knowledge/{document_id}")
+def get_knowledge(document_id: str, locale: str = "zh-CN"):
+    try:
+        return service.knowledge.get(document_id, locale)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/solvers/capabilities")
+def solver_capabilities():
+    return service.solver_capabilities()
+
+
+@app.post("/api/solvers/geometry-preview")
+def geometry_preview(request: GeometryPreviewRequest):
+    try:
+        return service.preview_geometry(request.model_dump())
+    except (ValueError, MatlabMcpError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/api/research/{research_id}/commands")
@@ -256,6 +355,22 @@ def test_agent_settings():
     return service.test_agent_settings()
 
 
+@app.post("/api/settings/agent-key")
+def set_agent_key(request: AgentKeyRequest):
+    try:
+        return service.set_agent_key(request.api_key)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/settings/agent-key")
+def delete_agent_key():
+    try:
+        return service.delete_agent_key()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/api/settings/restart-pi")
 def restart_pi_settings():
     try:
@@ -297,3 +412,12 @@ def get_report(research_id: str):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path, media_type="text/markdown", filename=f"{research_id}_report.md")
+
+
+@app.get("/api/report/{research_id}/pdf")
+def get_report_pdf(research_id: str):
+    try:
+        path = service.report_path(research_id, "pdf")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(path, media_type="application/pdf", filename=f"{research_id}_report.pdf")

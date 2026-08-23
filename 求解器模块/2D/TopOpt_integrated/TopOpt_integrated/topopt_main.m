@@ -25,6 +25,8 @@ end
 config = set_default(config, 'volfrac', 0.5);
 config = set_default(config, 'penal', 3.0);
 config = set_default(config, 'rmin', 1.5);
+config = set_default(config, 'E', 1.0);
+config = set_default(config, 'nu', 0.3);
 config = set_default(config, 'geometry', struct());
 config = set_default(config, 'display', true);
 config = set_default(config, 'verbose', true);
@@ -43,6 +45,8 @@ nelx = config.nelx;
 nely = config.nely;
 validateattributes(nelx, {'numeric'}, {'scalar','integer','positive'});
 validateattributes(nely, {'numeric'}, {'scalar','integer','positive'});
+validateattributes(config.E, {'numeric'}, {'scalar','real','finite','positive'});
+validateattributes(config.nu, {'numeric'}, {'scalar','real','finite','>=',0,'<',0.5});
 
 if isfield(config, 'domain_mask') && ~isempty(config.domain_mask)
     domainMask = logical(config.domain_mask);
@@ -74,6 +78,8 @@ if isfield(config, 'bc_config') && ~isempty(config.bc_config)
     bcConfig.bc_type = config.bc_type;
 end
 bcConfig.domain_mask = domainMask;
+bcConfig.E = config.E;
+bcConfig.nu = config.nu;
 
 filterConfig = struct();
 filterConfig.filter_type = 'sensitivity';
@@ -94,7 +100,7 @@ ocOptions.passive_void = passiveVoid;
 ocOptions.passive_solid = passiveSolid;
 ocOptions.volume_mask = domainMask;
 
-KE = element_stiffness_matrix();
+KE = element_stiffness_matrix(config.E, config.nu);
 objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);
@@ -158,24 +164,30 @@ end
 
 function [objective, dc] = compliance_and_sensitivity( ...
     nelx, nely, x, penal, U, KE)
-objective = 0;
-dc = zeros(nely, nelx);
-for elx = 1:nelx
-    for ely = 1:nely
-        n1 = (nely+1)*(elx-1)+ely;
-        n2 = (nely+1)*elx+ely;
-        edof = [2*n1-1;2*n1;2*n2-1;2*n2; ...
-            2*n2+1;2*n2+2;2*n1+1;2*n1+2];
-        elementEnergy = U(edof)'*KE*U(edof);
-        objective = objective + x(ely,elx)^penal*elementEnergy;
-        dc(ely,elx) = -penal*x(ely,elx)^(penal-1)*elementEnergy;
+persistent cachedNelx cachedNely cachedEdof
+if isempty(cachedNelx) || cachedNelx ~= nelx || cachedNely ~= nely
+    cachedEdof = zeros(nelx*nely, 8);
+    index = 0;
+    for elx = 1:nelx
+        for ely = 1:nely
+            index = index + 1;
+            n1 = (nely+1)*(elx-1)+ely;
+            n2 = (nely+1)*elx+ely;
+            cachedEdof(index,:) = [2*n1-1,2*n1,2*n2-1,2*n2, ...
+                2*n2+1,2*n2+2,2*n1+1,2*n1+2];
+        end
     end
+    cachedNelx = nelx;
+    cachedNely = nely;
 end
+Ue = U(cachedEdof);
+elementEnergy = sum((Ue*KE).*Ue, 2);
+density = x(:);
+objective = sum((density.^penal).*elementEnergy);
+dc = reshape(-penal*density.^(penal-1).*elementEnergy, nely, nelx);
 end
 
-function KE = element_stiffness_matrix()
-E = 1.0;
-nu = 0.3;
+function KE = element_stiffness_matrix(E, nu)
 k = [1/2-nu/6,1/8+nu/8,-1/4-nu/12,-1/8+3*nu/8, ...
     -1/4+nu/12,-1/8-nu/8,nu/6,1/8-3*nu/8];
 KE = E/(1-nu^2)* ...

@@ -16,5 +16,6 @@ result = eng.top3d_main(nargout=1)
 """
 from .matlab_connector import MatlabConnector, MatlabMcpError
 from .matlab_mcp_server import MatlabMcpWorker
+from .gateway import MatlabGateway
 
-__all__ = ["MatlabConnector", "MatlabMcpError", "MatlabMcpWorker"]
+__all__ = ["MatlabConnector", "MatlabMcpError", "MatlabMcpWorker", "MatlabGateway"]

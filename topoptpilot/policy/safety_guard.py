@@ -38,11 +38,12 @@ def evaluate_safety(parameters: dict[str, Any], fidelity: str = "") -> dict[str,
     if beta >= 16 and rmin < 2.0:
         risk = "MEDIUM"
         reasons.append("High beta with a narrow filter radius can increase disconnection risk.")
-    if "F3" in fidelity.upper() or "MATLAB" in fidelity.upper():
+    fidelity_code = str(fidelity).upper().split()[0] if fidelity else ""
+    if fidelity_code == "F3":
         risk = "HIGH"
         requires_approval = True
         reasons.append("MATLAB high-fidelity execution consumes protected compute budget.")
-    elif "F2" in fidelity.upper() or "3D" in fidelity.upper() or max_iter > 250:
+    elif fidelity_code == "F2" or max_iter > 250:
         risk = "MEDIUM"
         reasons.append("3D or long execution consumes protected compute budget.")
     return {

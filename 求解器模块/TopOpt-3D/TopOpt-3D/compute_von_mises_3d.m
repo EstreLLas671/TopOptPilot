@@ -1,5 +1,5 @@
 function [vonMises, stress] = compute_von_mises_3d( ...
-        nelx, nely, nelz, x, penal, Emin, U, measure)
+        nelx, nely, nelz, x, penal, Emin, U, measure, E, nu)
 %COMPUTE_VON_MISES_3D 计算每个六面体单元高斯点处的 Von Mises 应力。
 %   应力采用与 FE_solver_3d 相同的 SIMP 有效模量：
 %   Eeff = Emin + (1-Emin)*x^penal。
@@ -9,10 +9,12 @@ function [vonMises, stress] = compute_von_mises_3d( ...
 if nargin < 8 || isempty(measure)
     measure = 'gauss_max';
 end
+if nargin < 9 || isempty(E), E = 1.0; end
+if nargin < 10 || isempty(nu), nu = 0.3; end
 validateattributes(x, {'numeric'}, {'real','finite','size',[nely,nelx,nelz]});
 validateattributes(Emin, {'numeric'}, {'real','finite','scalar','>=',0,'<',1});
 
-D0 = elastic_matrix_unit_modulus();
+D0 = E * elastic_matrix_unit_modulus(nu);
 gauss = [-1, 1] / sqrt(3);
 Bmatrices = cell(8,1);
 index = 0;
@@ -59,8 +61,7 @@ for elz = 1:nelz
 end
 end
 
-function D = elastic_matrix_unit_modulus()
-nu = 0.3;
+function D = elastic_matrix_unit_modulus(nu)
 D = 1 / ((1+nu)*(1-2*nu)) * [ ...
     1-nu, nu,   nu,   0,              0,              0; ...
     nu,   1-nu, nu,   0,              0,              0; ...

@@ -25,6 +25,7 @@ def run_audit(include_online: bool = True) -> dict:
     report["gates"]["desktop_app"] = _desktop_gate()
     report["gates"]["strict_f3"] = _strict_f3_gate()
     report["gates"]["i18n_zh_default"] = _i18n_gate()
+    report["gates"].update(_v6_source_gates())
     report["gates"].update(_matlab_mcp_gates())
     with tempfile.TemporaryDirectory(prefix="topoptpilot_release_") as directory:
         service = ResearchService(directory, max_workers=2)
@@ -58,9 +59,16 @@ def run_audit(include_online: bool = True) -> dict:
             report["gates"]["safe_mode"] = {"pass": report["safe_mode"]["pass"]}
             report["online_qwen"] = _online_gate(service) if include_online else {"pass": None, "skipped": True}
             report["gates"]["online_qwen"] = {"pass": report["online_qwen"].get("pass")}
+            report["gates"]["pi_closed_loop"] = {
+                "pass": report["online_qwen"].get("closed_loop") if include_online else None}
+            report["gates"]["benchmark_pi_vs_baselines"] = {
+                "pass": report["online_qwen"].get("pass") if include_online else None}
+            if report["online_qwen"].get("metrics"):
+                report["baselines"]["Pi"] = report["online_qwen"]["metrics"]
         finally:
             service.close()
-    required = [value["pass"] for key, value in report["gates"].items() if key != "online_qwen"]
+    online_only = {"online_qwen", "pi_closed_loop", "benchmark_pi_vs_baselines"}
+    required = [value["pass"] for key, value in report["gates"].items() if key not in online_only]
     report["offline_release_ready"] = all(required)
     report["release_ready"] = report["offline_release_ready"] and report["online_qwen"].get("pass") is True
     return report
@@ -76,7 +84,7 @@ def _artifact_gate() -> dict:
 
 def _desktop_gate() -> dict:
     executable = ROOT / "desktop/src-tauri/target/release/topoptpilot-desktop.exe"
-    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_5.1.1_x64-setup.exe"
+    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_6.0.0_x64-setup.exe"
     return {"pass": executable.exists() and installer.exists(),
             "executable": str(executable), "installer": str(installer)}
 
@@ -97,6 +105,46 @@ def _i18n_gate() -> dict:
     return {"pass": passed, "default": "zh-CN", "locales": ["zh-CN", "en-US"]}
 
 
+def _v6_source_gates() -> dict:
+    store = (ROOT / "topoptpilot/memory/research_state.py").read_text(encoding="utf-8")
+    service = (ROOT / "topoptpilot/service/research_service.py").read_text(encoding="utf-8")
+    app = (ROOT / "desktop/src/App.tsx").read_text(encoding="utf-8")
+    canvas = (ROOT / "desktop/src/ExperimentCanvas.tsx").read_text(encoding="utf-8")
+    styles = (ROOT / "desktop/src/styles.css").read_text(encoding="utf-8")
+    api = (ROOT / "topoptpilot/api/fastapi_app.py").read_text(encoding="utf-8")
+    subagents = (ROOT / "topoptpilot/agent_runtime/subagents.py").read_text(encoding="utf-8")
+    knowledge = (ROOT / "topoptpilot/knowledge/base.py").read_text(encoding="utf-8")
+    fidelity = (ROOT / "topoptpilot/fidelity/manager.py").read_text(encoding="utf-8")
+    report = (ROOT / "topoptpilot/reports/generator.py").read_text(encoding="utf-8")
+    setup = (ROOT / "desktop/src/ResearchSetup.tsx").read_text(encoding="utf-8")
+    return {
+        "v5_visual_consistency": {"pass": "#101114" in styles and "#346bd8" in styles},
+        "research_contract": {"pass": "contract_json" in store and '"immutable": True' in service},
+        "agent_provenance": {"pass": all(value in store for value in
+            ("decision_source", "intent_source", "policy_version", "evidence_ids_json"))},
+        "evaluator_first": {"pass": service.find('EventKind.EVIDENCE.value') <
+            service.find('EXPERIMENT_BATCH_COMPLETED')},
+        "websocket_realtime": {"pass": "stream-ticket" in api and "_ws_tickets.pop" in api
+            and "?ticket=" in (ROOT / "desktop/src/api.ts").read_text(encoding="utf-8")},
+        "experiment_canvas": {"pass": "ExperimentCanvas" in app and all(
+            value in canvas for value in ("SETUP", "HYPOTHESIS", "PLAN", "RUN", "ANALYZE",
+                                          "COMPARE", "DECIDE", "REPORT", "TIMELINE"))},
+        "guided_setup": {"pass": "previewGuide" in setup and "AI_SUGGESTED" in setup
+            and "Confirm Research Contract" in setup},
+        "offline_knowledge": {"pass": "knowledge_fts" in knowledge
+            and len(list((ROOT / "topoptpilot/knowledge/documents").glob("*.md"))) >= 10},
+        "isolated_subagents": {"pass": all(role in subagents for role in
+            ("GUIDE", "HYPOTHESIS", "EXPERIMENT_PLANNER", "EXPERIMENT_EXECUTOR",
+             "INDEPENDENT_REVIEWER", "REPORT_WRITER")) and "ROLE_TOOLS" in subagents},
+        "all_matlab_fidelities": {"pass": 'return "matlab"' in fidelity
+            and "MATLAB 2D Coarse" in fidelity and "MATLAB 3D Fine" in fidelity},
+        "fact_grounded_reports": {"pass": "未计算" in report and "evaluation" in report
+            and "Artifact" in report},
+        "credential_not_in_sqlite": {"pass": "api_key" not in store.lower()
+            and "/api/settings/agent-key" in api},
+    }
+
+
 def _matlab_mcp_gates() -> dict:
     output = {}
     with tempfile.TemporaryDirectory(prefix="topoptpilot_matlab_gate_") as directory:
@@ -106,6 +154,7 @@ def _matlab_mcp_gates() -> dict:
                       "params": {"volfrac": .4, "penal": 3, "rmin": 1.5, "max_iter": 2}}
             for dimension, mesh, grid in ((2, "coarse", None), (3, "coarse3d", [4, 2, 2])):
                 task = {**common, "task_id": f"audit-{dimension}d", "mesh_level": mesh,
+                        "fidelity": "F0" if dimension == 2 else "F2",
                         "params": {**common["params"]}}
                 if grid:
                     task["params"]["grid3d"] = grid
@@ -144,26 +193,30 @@ def _safe_mode_gate(service: ResearchService) -> dict:
 
 
 def _online_gate(service: ResearchService) -> dict:
-    research = service.create_research({"name": "Online Qwen gate", "mode": "CONTROLLED"})
-    process = service.pi_runtime.start(research["id"])
-    process.prompt("Call research_get_context exactly once, then answer QWEN_TOOL_GATE_OK.")
-    deadline, events = time.time() + 60, []
-    while time.time() < deadline:
-        try:
-            event = process.events.get(timeout=1)
-            events.append(event)
-            if event.get("type") == "agent_end": break
-        except Exception:
-            pass
-    tool_seen = any(event.get("type") in {"tool_execution_start", "tool_call_start"}
-                    and event.get("toolName") == "research_get_context" for event in events)
-    messages = next((event.get("messages", []) for event in reversed(events)
-                     if event.get("type") == "agent_end"), [])
-    assistant = next((item for item in reversed(messages) if item.get("role") == "assistant"), {})
-    error = assistant.get("errorMessage")
-    return {"pass": bool(tool_seen and not error), "tool_seen": tool_seen,
-            "model": assistant.get("model"), "provider": assistant.get("provider"),
-            "error": str(error)[:300] if error else None}
+    try:
+        campaign = BenchmarkRunner().run_pi_campaign(service, budget=3, timeout=240)
+    except Exception as exc:
+        return {"pass": False, "closed_loop": False, "error": str(exc)[:300]}
+    research = service.get_research(campaign["research_id"])
+    events = research["events"]
+    evaluator_positions = [index for index, item in enumerate(events)
+                           if item.get("source") == "EVALUATOR"]
+    later_pi_compile = any(index > min(evaluator_positions, default=10**9)
+                           and item.get("source") == "PI_AGENT"
+                           and item.get("title") == "policy_compile_intent"
+                           for index, item in enumerate(events))
+    pi_experiments = [item for item in research["experiments"]
+                      if item.get("decision_source") == "PI_AGENT"]
+    fallback = any(item.get("source") == "RULE_FALLBACK" for item in events)
+    session = service.store.get_agent_session(research["id"]) or {}
+    closed_loop = bool(len(pi_experiments) >= 2 and evaluator_positions and later_pi_compile
+                       and not fallback)
+    return {"pass": closed_loop, "closed_loop": closed_loop,
+            "tool_seen": any(item.get("type") == "AGENT_TOOL_CALL" for item in events),
+            "model": service.pi_runtime.model if service.pi_runtime else None,
+            "provider": "dashscope", "metrics": campaign.get("metrics"),
+            "pi_experiments": [item["id"] for item in pi_experiments],
+            "fallback": fallback, "error": str(session.get("last_error") or "")[:300] or None}
 
 
 def main() -> int:

@@ -23,8 +23,10 @@ class ToolGateway:
                 try:
                     size = min(int(self.headers.get("content-length", "0")), 1_000_000)
                     request = ToolRequest.model_validate_json(self.rfile.read(size))
+                    role = self.headers.get("x-topopt-agent-role", "RESEARCH_LEAD")
                     result = gateway.service.tools.invoke(request.research_id, request.tool,
-                                                          request.arguments)
+                                                          request.arguments, source="PI_AGENT",
+                                                          role=role)
                     self._reply(200, {"ok": True, "result": result})
                 except Exception as exc:
                     self._reply(400, {"ok": False, "error": str(exc)})

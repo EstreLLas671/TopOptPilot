@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 
 
 class FidelityManager:
-    LEVELS = ("F0 — 2D Coarse", "F1 — 2D Fine", "F2 — Python 3D", "F3 — MATLAB 3D")
+    LEVELS = ("F0 — MATLAB 2D Coarse", "F1 — MATLAB 2D Fine",
+              "F2 — MATLAB 3D Coarse", "F3 — MATLAB 3D Fine")
 
     def promote(self, current: str) -> str:
         try:
@@ -25,11 +26,13 @@ class FidelityManager:
 
     @staticmethod
     def backend_for(fidelity: str) -> str:
-        return {"F0": "python", "F1": "python", "F2": "python3d", "F3": "matlab"}[fidelity]
+        if fidelity not in {"F0", "F1", "F2", "F3"}:
+            raise ValueError(f"Unknown fidelity: {fidelity}")
+        return "matlab"
 
     @staticmethod
     def mesh_level(fidelity: str) -> str:
-        return {"F0": "coarse", "F1": "medium", "F2": "coarse3d", "F3": "fine3d"}[fidelity]
+        return {"F0": "coarse", "F1": "fine", "F2": "coarse3d", "F3": "fine3d"}[fidelity]
 
     @staticmethod
     def estimated_cost(fidelity: str) -> float:

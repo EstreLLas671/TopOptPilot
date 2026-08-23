@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import threading
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
@@ -14,6 +15,7 @@ import numpy as np
 
 from solver.result_schema import connected_components, gray_ratio
 from .matlab_connector import MatlabConnector, MatlabMcpError
+from .gateway import MatlabGateway
 
 
 class MatlabMcpWorker:
@@ -21,12 +23,19 @@ class MatlabMcpWorker:
         self.data_dir = Path(data_dir).resolve()
         self.root = Path(project_root or Path(__file__).parents[2]).resolve()
         self.connector = MatlabConnector(self.root, job_root=self.data_dir)
+        self.gateway = MatlabGateway(self.connector, self.data_dir)
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="matlab-mcp")
         self._lock = threading.RLock()
+        self._capability_cache: dict[str, Any] = {
+            "variants": ["reference_cpu", "optimized_cpu"], "selected_variant": "optimized_cpu",
+            "acceleration_mode": "vectorized_cpu", "parallel_available": None,
+            "gpu_available": None, "mex_2d_available": False, "mex_3d_available": False,
+            "probed": False,
+        }
 
     def submit(self, task: dict[str, Any], research_id: str, experiment_id: str,
                done: Callable[[str, Future], None] | None = None) -> tuple[str, Future]:
-        run_id = f"matlab_mcp_{experiment_id.lower()}"
+        run_id = f"run_matlab_mcp_{experiment_id.lower()}"
         future = self.pool.submit(self.run, task, research_id, experiment_id)
         if done:
             future.add_done_callback(lambda current: done(run_id, current))
@@ -37,12 +46,16 @@ class MatlabMcpWorker:
         if self.data_dir not in job_dir.parents:
             raise MatlabMcpError("MATLAB job path escaped the research data directory")
         job_dir.mkdir(parents=True, exist_ok=True)
-        dimension = 3 if "3d" in str(task.get("mesh_level", "")).lower() else 2
+        fidelity = str(task.get("fidelity", "F0")).upper()
+        dimension = 3 if fidelity in {"F2", "F3"} or "3d" in str(task.get("mesh_level", "")).lower() else 2
         payload = {"dimension": dimension, "config": self._config(task, dimension),
-                   "task_id": task.get("task_id")}
+                   "task_id": task.get("task_id"), "operation": "solve"}
         task_path, result_path = job_dir / "task.json", job_dir / "raw_result.json"
         task_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        raw = self.connector.call_topopt(task_path, result_path)
+        raw = self.gateway.run_topopt_task(task_path, result_path)
+        if isinstance(raw.get("capabilities"), dict):
+            self._capability_cache.update(raw["capabilities"])
+            self._capability_cache["probed"] = True
         return self._normalize(raw, task, dimension, task_path, result_path)
 
     @staticmethod
@@ -58,8 +71,15 @@ class MatlabMcpWorker:
             "display": False, "verbose": False,
             "bc_config": dict(task.get("bc_config") or {}),
             "geometry": task.get("geometry") or {},
+            "E": float(params.get("E", 1.0)),
+            "nu": float(params.get("nu", 0.3)),
+            "solver_variant": str(task.get("solver_variant", "auto")),
+            "acceleration_mode": str(task.get("acceleration_mode", "auto")),
         }
         config["bc_config"].setdefault("load_scale", 1.0)
+        geometry = config["geometry"]
+        if isinstance(geometry, dict) and geometry.get("mask") is not None:
+            config["domain_mask"] = geometry["mask"]
         if dimension == 3:
             grid = params.get("grid3d") or ([12, 4, 3] if task.get("mesh_level") == "coarse3d"
                                              else [18, 6, 4])
@@ -70,8 +90,18 @@ class MatlabMcpWorker:
             from solver.params import normalize_task
             spec = normalize_task(task)
             config.update({"nelx": int(spec["nelx"]), "nely": int(spec["nely"])})
+        if "domain_mask" in config:
+            mask_shape = np.asarray(config["domain_mask"]).shape
+            if dimension == 2 and len(mask_shape) == 2:
+                config.update({"nely": int(mask_shape[0]), "nelx": int(mask_shape[1])})
+            elif dimension == 3 and len(mask_shape) == 3:
+                config.update({"nely": int(mask_shape[0]), "nelx": int(mask_shape[1]),
+                               "nelz": int(mask_shape[2])})
+            else:
+                raise MatlabMcpError(f"Custom mask must have {dimension} dimensions")
         if not (.1 <= config["volfrac"] <= .7 and .75 <= config["rmin"] <= 4
-                and 1 <= config["penal"] <= 5):
+                and 1 <= config["penal"] <= 5 and config["E"] > 0
+                and 0 <= config["nu"] < .5):
             raise MatlabMcpError("Task escaped the approved MATLAB parameter envelope")
         return config
 
@@ -100,8 +130,14 @@ class MatlabMcpWorker:
                         "connected_components": int(connected_components(density)),
                         "max_displacement_mm": None},
             "solver": {"backend": f"matlab_mcp_{dimension}d", "matlab_version": raw.get("matlab_version"),
-                       "mcp_version": "0.12.0", "solver_entry": raw.get("solver_entry"),
+                       "mcp_version": self.gateway.health().get("server_version"),
+                       "mcp_binary_sha256": self.gateway.health().get("binary_sha256"),
+                       "task_sha256": hashlib.sha256(task_path.read_bytes()).hexdigest(),
+                       "solver_entry": raw.get("solver_entry"),
                        "solver_entry_sha256": hashlib.sha256(entry.read_bytes()).hexdigest(),
+                       "solver_variant": raw.get("solver_variant", "optimized_cpu"),
+                       "acceleration_mode": raw.get("acceleration_mode", "vectorized_cpu"),
+                       "capabilities": raw.get("capabilities", self._capability_cache),
                        "iterations": int(raw.get("iterations", len(history))),
                        "relative_residual": None},
             "artifacts": {"density": density, "density_design": density, "history": history,
@@ -109,11 +145,63 @@ class MatlabMcpWorker:
         }
 
     def health(self) -> dict[str, Any]:
-        return self.connector.health()
+        return self.gateway.health()
+
+    def capabilities(self, *, probe: bool = False) -> dict[str, Any]:
+        if probe:
+            job_dir = (self.data_dir / "_system" / "matlab_capabilities").resolve()
+            job_dir.mkdir(parents=True, exist_ok=True)
+            task_path, result_path = job_dir / "task.json", job_dir / "result.json"
+            payload = {"operation": "capabilities", "dimension": 2,
+                       "config": {"volfrac": .4, "rmin": 1.5, "penal": 3.0}}
+            task_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            raw = self.gateway.run_topopt_task(task_path, result_path)
+            if isinstance(raw.get("capabilities"), dict):
+                self._capability_cache.update(raw["capabilities"])
+                self._capability_cache["probed"] = True
+        return dict(self._capability_cache)
+
+    def preview_geometry(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Return only MATLAB-generated mask/support/load mappings; never run FEM."""
+        dimension = int(request.get("dimension", 2))
+        if dimension not in {2, 3}:
+            raise MatlabMcpError("Geometry preview dimension must be 2 or 3")
+        grid = request.get("grid") or ([48, 16] if dimension == 2 else [18, 6, 4])
+        if len(grid) != dimension or any(int(value) < 2 or int(value) > 240 for value in grid):
+            raise MatlabMcpError("Geometry preview grid is outside the controlled envelope")
+        config = {
+            "bc_type": str(request.get("bc_type") or "MBB"),
+            "geometry": request.get("geometry") or {},
+            "bc_config": {"load_scale": float(request.get("load_scale", 1.0))},
+            "volfrac": .4, "rmin": 1.5, "penal": 3.0,
+            "nelx": int(grid[0]), "nely": int(grid[1]),
+        }
+        if dimension == 3:
+            config["nelz"] = int(grid[2])
+        mask = request.get("mask")
+        if mask is not None:
+            array = np.asarray(mask)
+            expected = (config["nely"], config["nelx"]) if dimension == 2 else (config["nely"], config["nelx"], config["nelz"])
+            if array.shape != expected or array.size > 250_000:
+                raise MatlabMcpError(f"Custom mask must have MATLAB shape {expected}")
+            if not np.isin(array, [0, 1, False, True]).all():
+                raise MatlabMcpError("Custom mask may contain only zero/one values")
+            config["domain_mask"] = array.astype(bool).tolist()
+        job_dir = (self.data_dir / "_system" / "geometry_preview" / uuid.uuid4().hex).resolve()
+        job_dir.mkdir(parents=True, exist_ok=True)
+        task_path, result_path = job_dir / "task.json", job_dir / "result.json"
+        task_path.write_text(json.dumps({"operation": "preview_geometry", "dimension": dimension,
+                                         "config": config}, ensure_ascii=False), encoding="utf-8")
+        return self.gateway.run_topopt_task(task_path, result_path)
 
     def restart(self) -> dict[str, Any]:
         with self._lock:
-            return self.connector.restart()
+            health = self.connector.restart()
+            try:
+                self.capabilities(probe=True)
+            except Exception as exc:
+                self._capability_cache["probe_error"] = str(exc)
+            return {**health, "capabilities": self.capabilities(probe=False)}
 
     def configure(self, *, matlab_root: str | Path | None = None,
                   timeout: float | None = None) -> dict[str, Any]:
@@ -122,4 +210,5 @@ class MatlabMcpWorker:
 
     def close(self) -> None:
         self.connector.stop()
-        self.pool.shutdown(wait=False, cancel_futures=True)
+        # Stop callbacks before the owning research directory is removed.
+        self.pool.shutdown(wait=True, cancel_futures=True)

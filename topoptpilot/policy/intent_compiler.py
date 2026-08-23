@@ -16,8 +16,8 @@ from topoptpilot.schemas import ExperimentProposal, Fidelity, IntentRequest, Int
 
 
 FIDELITY_LABELS = {
-    Fidelity.F0: "F0 — 2D Coarse", Fidelity.F1: "F1 — 2D Fine",
-    Fidelity.F2: "F2 — Python 3D", Fidelity.F3: "F3 — MATLAB 3D",
+    Fidelity.F0: "F0 — MATLAB 2D Coarse", Fidelity.F1: "F1 — MATLAB 2D Fine",
+    Fidelity.F2: "F2 — MATLAB 3D Coarse", Fidelity.F3: "F3 — MATLAB 3D Fine",
 }
 
 

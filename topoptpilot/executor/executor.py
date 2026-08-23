@@ -11,6 +11,9 @@ def build_solver_task(experiment: dict, research: dict | None = None) -> dict:
     filter_name = str(parameters.get("filter", "density_filter" if projection != "none" else "sensitivity_filter"))
     return {
         "task_id": experiment["id"], "experiment_group": experiment["id"],
+        "fidelity": str(experiment.get("fidelity", "F0")).split()[0],
+        "solver_variant": experiment.get("solver_variant", "auto"),
+        "acceleration_mode": experiment.get("acceleration_mode", "auto"),
         "hypothesis_id": research.get("hypothesis") or "workspace",
         "load_case": _load_case(research),
         "mesh_level": experiment["mesh_level"],

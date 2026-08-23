@@ -103,6 +103,29 @@ class ResearchStateStore:
                     id INTEGER PRIMARY KEY CHECK (id = 1), settings_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS subagent_tasks (
+                    id TEXT PRIMARY KEY, research_id TEXT NOT NULL, role TEXT NOT NULL,
+                    objective TEXT NOT NULL, status TEXT NOT NULL, evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+                    proposal_id TEXT, session_id TEXT, result_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT, created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT,
+                    FOREIGN KEY(research_id) REFERENCES research(id)
+                );
+                CREATE TABLE IF NOT EXISTS hypotheses (
+                    id TEXT PRIMARY KEY, research_id TEXT NOT NULL, round_number INTEGER NOT NULL,
+                    statement TEXT NOT NULL, competing_json TEXT NOT NULL DEFAULT '[]',
+                    evidence_ids_json TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'ACTIVE', created_at TEXT NOT NULL,
+                    FOREIGN KEY(research_id) REFERENCES research(id)
+                );
+                CREATE TABLE IF NOT EXISTS artifact_lineage (
+                    id TEXT PRIMARY KEY, research_id TEXT NOT NULL, experiment_id TEXT,
+                    artifact_type TEXT NOT NULL, path TEXT, sha256 TEXT, parents_json TEXT NOT NULL DEFAULT '[]',
+                    metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
+                    FOREIGN KEY(research_id) REFERENCES research(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_subagent_research ON subagent_tasks(research_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_hypothesis_research ON hypotheses(research_id, round_number);
+                CREATE INDEX IF NOT EXISTS idx_artifact_research ON artifact_lineage(research_id, experiment_id);
             """)
             self._ensure_columns(db, "research", {
                 "budgets_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -116,11 +139,47 @@ class ResearchStateStore:
                 "termination_reason": "TEXT",
                 "locale": "TEXT NOT NULL DEFAULT 'zh-CN'",
                 "defaults_json": "TEXT NOT NULL DEFAULT '{}'",
+                "contract_json": "TEXT NOT NULL DEFAULT '{}'",
             })
             self._ensure_columns(db, "experiments", {
                 "proposal_id": "TEXT",
                 "intent": "TEXT NOT NULL DEFAULT 'MANUAL'",
                 "cached": "INTEGER NOT NULL DEFAULT 0",
+                "round_number": "INTEGER NOT NULL DEFAULT 1",
+                "decision_source": "TEXT NOT NULL DEFAULT 'HUMAN'",
+                "intent_source": "TEXT NOT NULL DEFAULT 'HUMAN'",
+                "policy_version": "TEXT",
+                "model": "TEXT",
+                "provider": "TEXT",
+                "session_id": "TEXT",
+                "evidence_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "result_source": "TEXT NOT NULL DEFAULT 'LIVE_REAL_RUN'",
+                "knowledge_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "subagent_task_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "solver_variant": "TEXT NOT NULL DEFAULT 'auto'",
+                "acceleration_mode": "TEXT NOT NULL DEFAULT 'auto'",
+                "solver_sha256": "TEXT",
+                "task_hash": "TEXT",
+                "review_verdict": "TEXT",
+                "human_decision": "TEXT",
+            })
+            self._ensure_columns(db, "events", {
+                "event_id": "TEXT",
+                "event_type": "TEXT",
+                "source": "TEXT NOT NULL DEFAULT 'SYSTEM'",
+            })
+            self._ensure_columns(db, "decisions", {
+                "source": "TEXT NOT NULL DEFAULT 'HUMAN'",
+                "evidence_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+            })
+            self._ensure_columns(db, "proposals", {
+                "decision_source": "TEXT NOT NULL DEFAULT 'HUMAN'",
+                "intent_source": "TEXT NOT NULL DEFAULT 'HUMAN'",
+                "policy_version": "TEXT NOT NULL DEFAULT 'v6-intent-compiler-1'",
+                "model": "TEXT",
+                "provider": "TEXT",
+                "session_id": "TEXT",
+                "evidence_ids_json": "TEXT NOT NULL DEFAULT '[]'",
             })
             self._ensure_columns(db, "agent_sessions", {
                 "stream_text": "TEXT NOT NULL DEFAULT ''",
@@ -150,27 +209,29 @@ class ResearchStateStore:
             db.execute("""INSERT INTO research
                 (id,name,goal,constraints_json,mode,status,budget_total,budget_used,locks_json,
                  created_at,updated_at,budgets_json,geometry_json,material_json,loads_json,
-                 boundary_conditions_json,hypothesis,current_question,current_round,locale,defaults_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 boundary_conditions_json,hypothesis,current_question,current_round,locale,defaults_json,
+                 contract_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["name"], data["goal"], json.dumps(data["constraints"]),
                  data["mode"], "READY", data["budget_total"], 0, "{}", now, now,
                  json.dumps(data.get("budgets", {})), json.dumps(data.get("geometry", {})),
                  json.dumps(data.get("material", {})), json.dumps(data.get("loads", [])),
                  json.dumps(data.get("boundary_conditions", {})), data.get("hypothesis"),
-                 None, 0, data.get("locale", "zh-CN"), json.dumps(data.get("defaults", {}))))
+                 None, 0, data.get("locale", "zh-CN"), json.dumps(data.get("defaults", {})),
+                 json.dumps(data.get("contract", {}))))
         return self.get_research(data["id"])
 
     def list_research(self) -> list[dict]:
         with self.connection() as db:
             rows = db.execute("SELECT * FROM research ORDER BY updated_at DESC").fetchall()
         return [self._decode(row, ("constraints", "locks", "budgets", "geometry", "material",
-                                   "loads", "boundary_conditions", "defaults")) for row in rows]
+                                   "loads", "boundary_conditions", "defaults", "contract")) for row in rows]
 
     def get_research(self, research_id: str) -> dict | None:
         with self.connection() as db:
             row = db.execute("SELECT * FROM research WHERE id=?", (research_id,)).fetchone()
         return self._decode(row, ("constraints", "locks", "budgets", "geometry", "material",
-                                  "loads", "boundary_conditions", "defaults"))
+                                  "loads", "boundary_conditions", "defaults", "contract"))
 
     def update_research(self, research_id: str, **fields: Any) -> dict:
         allowed = {"name", "goal", "mode", "status", "budget_total", "budget_used",
@@ -215,29 +276,44 @@ class ResearchStateStore:
             ).fetchone()[0]
             db.execute("""INSERT INTO experiments
                 (id,research_id,ordinal,purpose,fidelity,mesh_level,backend,parameters_json,
-                 warm_start,status,safety,created_at,proposal_id,intent) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 warm_start,status,safety,created_at,proposal_id,intent,round_number,decision_source,
+                 intent_source,policy_version,model,provider,session_id,evidence_ids_json,result_source,
+                 knowledge_ids_json,subagent_task_ids_json,solver_variant,acceleration_mode,
+                 review_verdict,human_decision)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], ordinal, data["purpose"], data["fidelity"],
                  data["mesh_level"], data["backend"], json.dumps(data["parameters"]),
                  data.get("warm_start"), data["status"], data.get("safety", "LOW"), now,
-                 data.get("proposal_id"), data.get("intent", "MANUAL")))
+                 data.get("proposal_id"), data.get("intent", "MANUAL"), data.get("round_number", 1),
+                 data.get("decision_source", "HUMAN"), data.get("intent_source", "HUMAN"),
+                 data.get("policy_version"), data.get("model"), data.get("provider"),
+                 data.get("session_id"), json.dumps(data.get("evidence_ids", [])),
+                 data.get("result_source", "LIVE_REAL_RUN"),
+                 json.dumps(data.get("knowledge_ids", [])),
+                 json.dumps(data.get("subagent_task_ids", [])),
+                 data.get("solver_variant", "auto"), data.get("acceleration_mode", "auto"),
+                 data.get("review_verdict"), data.get("human_decision")))
         return self.get_experiment(data["id"])
 
     def get_experiment(self, experiment_id: str) -> dict | None:
         with self.connection() as db:
             row = db.execute("SELECT * FROM experiments WHERE id=?", (experiment_id,)).fetchone()
-        return self._decode(row, ("parameters", "result"))
+        return self._decode(row, ("parameters", "result", "evidence_ids", "knowledge_ids",
+                                  "subagent_task_ids"))
 
     def list_experiments(self, research_id: str) -> list[dict]:
         with self.connection() as db:
             rows = db.execute(
                 "SELECT * FROM experiments WHERE research_id=? ORDER BY ordinal", (research_id,)
             ).fetchall()
-        return [self._decode(row, ("parameters", "result")) for row in rows]
+        return [self._decode(row, ("parameters", "result", "evidence_ids", "knowledge_ids",
+                                   "subagent_task_ids")) for row in rows]
 
     def update_experiment(self, experiment_id: str, **fields: Any) -> dict:
         allowed = {"status", "progress", "current_iteration", "run_id", "safety",
                    "error", "started_at", "completed_at", "purpose", "fidelity", "proposal_id",
-                   "intent", "cached"}
+                   "intent", "cached", "result_source", "solver_variant", "acceleration_mode",
+                   "solver_sha256", "task_hash", "review_verdict", "human_decision"}
         assignments, values = [], []
         for name, value in fields.items():
             if name in allowed:
@@ -256,43 +332,51 @@ class ResearchStateStore:
         return self.get_experiment(experiment_id)
 
     def append_event(self, research_id: str, kind: str, title: str, body: str,
-                     experiment_id: str | None = None, payload: dict | None = None) -> dict:
+                     experiment_id: str | None = None, payload: dict | None = None,
+                     *, source: str | None = None, event_type: str | None = None) -> dict:
+        import uuid
+        event_id = f"EV-{uuid.uuid4().hex[:12].upper()}"
+        resolved_type = event_type or _event_type(kind, title)
+        resolved_source = source or _event_source(kind, title)
         with self._lock, self.connection() as db:
             cursor = db.execute("""INSERT INTO events
-                (research_id,experiment_id,kind,title,body,payload_json,created_at)
-                VALUES (?,?,?,?,?,?,?)""",
+                (research_id,experiment_id,kind,title,body,payload_json,created_at,event_id,event_type,source)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (research_id, experiment_id, kind, title, body,
-                 json.dumps(payload or {}, default=_json_default), utc_now()))
+                 json.dumps(payload or {}, default=_json_default), utc_now(), event_id,
+                 resolved_type, resolved_source))
             event_id = cursor.lastrowid
             row = db.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
-        return self._decode(row, ("payload",))
+        return _event_envelope(self._decode(row, ("payload",)))
 
     def list_events(self, research_id: str, limit: int = 300) -> list[dict]:
         with self.connection() as db:
             rows = db.execute("""SELECT * FROM events WHERE research_id=?
                 ORDER BY id DESC LIMIT ?""", (research_id, limit)).fetchall()
-        return [self._decode(row, ("payload",)) for row in reversed(rows)]
+        return [_event_envelope(self._decode(row, ("payload",))) for row in reversed(rows)]
 
     def create_decision(self, data: dict[str, Any]) -> dict:
         with self._lock, self.connection() as db:
             db.execute("""INSERT INTO decisions
-                (id,research_id,experiment_id,intent,reason,proposal_json,risk,status,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (id,research_id,experiment_id,intent,reason,proposal_json,risk,status,created_at,
+                 source,evidence_ids_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], data.get("experiment_id"), data["intent"],
                  data["reason"], json.dumps(data["proposal"]), data["risk"],
-                 data["status"], utc_now()))
+                 data["status"], utc_now(), data.get("source", "HUMAN"),
+                 json.dumps(data.get("evidence_ids", []))))
         return self.get_decision(data["id"])
 
     def get_decision(self, decision_id: str) -> dict | None:
         with self.connection() as db:
             row = db.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
-        return self._decode(row, ("proposal",))
+        return self._decode(row, ("proposal", "evidence_ids"))
 
     def list_decisions(self, research_id: str) -> list[dict]:
         with self.connection() as db:
             rows = db.execute("SELECT * FROM decisions WHERE research_id=? ORDER BY created_at",
                               (research_id,)).fetchall()
-        return [self._decode(row, ("proposal",)) for row in rows]
+        return [self._decode(row, ("proposal", "evidence_ids")) for row in rows]
 
     def resolve_decision(self, decision_id: str, status: str) -> dict:
         with self._lock, self.connection() as db:
@@ -321,26 +405,30 @@ class ResearchStateStore:
             db.execute("""INSERT INTO proposals
                 (id,research_id,intent,purpose,fidelity,backend,parameters_json,estimated_cost,
                  risk,safety_status,approval_required,source_experiment,controlled_factors_json,
-                 status,experiment_id,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 status,experiment_id,created_at,updated_at,decision_source,intent_source,
+                 policy_version,model,provider,session_id,evidence_ids_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], data["intent"], data["purpose"],
                  data["fidelity"], data["backend"], json.dumps(data["parameters"]),
                  data["estimated_cost"], data["risk"], data["safety_status"],
                  int(data.get("approval_required", False)), data.get("source_experiment"),
                  json.dumps(data.get("controlled_factors", [])), data.get("status", "PREVIEW"),
-                 data.get("experiment_id"), now, now))
+                 data.get("experiment_id"), now, now, data.get("decision_source", "HUMAN"),
+                 data.get("intent_source", "HUMAN"), data.get("policy_version", "v6-intent-compiler-1"),
+                 data.get("model"), data.get("provider"), data.get("session_id"),
+                 json.dumps(data.get("evidence_ids", []))))
         return self.get_proposal(data["id"])
 
     def get_proposal(self, proposal_id: str) -> dict | None:
         with self.connection() as db:
             row = db.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()
-        return self._decode(row, ("parameters", "controlled_factors"))
+        return self._decode(row, ("parameters", "controlled_factors", "evidence_ids"))
 
     def list_proposals(self, research_id: str) -> list[dict]:
         with self.connection() as db:
             rows = db.execute("SELECT * FROM proposals WHERE research_id=? ORDER BY created_at",
                               (research_id,)).fetchall()
-        return [self._decode(row, ("parameters", "controlled_factors")) for row in rows]
+        return [self._decode(row, ("parameters", "controlled_factors", "evidence_ids")) for row in rows]
 
     def update_proposal(self, proposal_id: str, **fields: Any) -> dict:
         allowed = {"status", "experiment_id", "safety_status"}
@@ -395,6 +483,89 @@ class ResearchStateStore:
             row = db.execute("SELECT * FROM agent_sessions WHERE research_id=?", (research_id,)).fetchone()
         return dict(row) if row else None
 
+    def create_subagent_task(self, data: dict[str, Any]) -> dict:
+        with self._lock, self.connection() as db:
+            db.execute("""INSERT INTO subagent_tasks
+                (id,research_id,role,objective,status,evidence_ids_json,proposal_id,session_id,
+                 result_json,error,created_at,started_at,completed_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (data["id"], data["research_id"], data["role"], data["objective"],
+                 data.get("status", "QUEUED"), json.dumps(data.get("evidence_ids", [])),
+                 data.get("proposal_id"), data.get("session_id"),
+                 json.dumps(data.get("result", {}), default=_json_default), data.get("error"),
+                 data.get("created_at", utc_now()), data.get("started_at"), data.get("completed_at")))
+        return self.get_subagent_task(data["id"])
+
+    def get_subagent_task(self, task_id: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM subagent_tasks WHERE id=?", (task_id,)).fetchone()
+        return self._decode(row, ("evidence_ids", "result"))
+
+    def list_subagent_tasks(self, research_id: str) -> list[dict]:
+        with self.connection() as db:
+            rows = db.execute("""SELECT * FROM subagent_tasks WHERE research_id=?
+                ORDER BY created_at""", (research_id,)).fetchall()
+        return [self._decode(row, ("evidence_ids", "result")) for row in rows]
+
+    def update_subagent_task(self, task_id: str, **fields: Any) -> dict:
+        allowed = {"status", "session_id", "error", "started_at", "completed_at"}
+        assignments, values = [], []
+        for name, value in fields.items():
+            if name in allowed:
+                assignments.append(f"{name}=?")
+                values.append(value)
+        if "result" in fields:
+            assignments.append("result_json=?")
+            values.append(json.dumps(fields["result"], default=_json_default))
+        if assignments:
+            values.append(task_id)
+            with self._lock, self.connection() as db:
+                db.execute(f"UPDATE subagent_tasks SET {', '.join(assignments)} WHERE id=?", values)
+        return self.get_subagent_task(task_id)
+
+    def create_hypothesis(self, data: dict[str, Any]) -> dict:
+        with self._lock, self.connection() as db:
+            db.execute("""INSERT INTO hypotheses
+                (id,research_id,round_number,statement,competing_json,evidence_ids_json,
+                 source,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (data["id"], data["research_id"], int(data.get("round_number", 1)),
+                 data["statement"], json.dumps(data.get("competing", [])),
+                 json.dumps(data.get("evidence_ids", [])), data.get("source", "PI_AGENT"),
+                 data.get("status", "ACTIVE"), utc_now()))
+        return self.get_hypothesis(data["id"])
+
+    def get_hypothesis(self, hypothesis_id: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM hypotheses WHERE id=?", (hypothesis_id,)).fetchone()
+        return self._decode(row, ("competing", "evidence_ids"))
+
+    def list_hypotheses(self, research_id: str) -> list[dict]:
+        with self.connection() as db:
+            rows = db.execute("SELECT * FROM hypotheses WHERE research_id=? ORDER BY created_at",
+                              (research_id,)).fetchall()
+        return [self._decode(row, ("competing", "evidence_ids")) for row in rows]
+
+    def create_artifact(self, data: dict[str, Any]) -> dict:
+        with self._lock, self.connection() as db:
+            db.execute("""INSERT INTO artifact_lineage
+                (id,research_id,experiment_id,artifact_type,path,sha256,parents_json,metadata_json,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (data["id"], data["research_id"], data.get("experiment_id"), data["artifact_type"],
+                 data.get("path"), data.get("sha256"), json.dumps(data.get("parents", [])),
+                 json.dumps(data.get("metadata", {}), default=_json_default), utc_now()))
+        return self.get_artifact(data["id"])
+
+    def get_artifact(self, artifact_id: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM artifact_lineage WHERE id=?", (artifact_id,)).fetchone()
+        return self._decode(row, ("parents", "metadata"))
+
+    def list_artifacts(self, research_id: str) -> list[dict]:
+        with self.connection() as db:
+            rows = db.execute("SELECT * FROM artifact_lineage WHERE research_id=? ORDER BY created_at",
+                              (research_id,)).fetchall()
+        return [self._decode(row, ("parents", "metadata")) for row in rows]
+
     def get_app_settings(self) -> dict | None:
         with self.connection() as db:
             row = db.execute("SELECT settings_json, updated_at FROM app_settings WHERE id=1").fetchone()
@@ -419,3 +590,61 @@ def _json_default(value: Any):
     if hasattr(value, "item"):
         return value.item()
     return str(value)
+
+
+def _event_type(kind: str, title: str) -> str:
+    upper = f"{kind} {title}".upper()
+    if "AGENT" in upper or "PI " in upper:
+        return "AGENT_MESSAGE"
+    if "TOOL_CALL" in upper:
+        return "AGENT_TOOL_CALL"
+    if "POLICY" in upper or "PROPOSAL" in upper:
+        return "POLICY_DECISION"
+    if "SAFETY" in upper:
+        return "SAFETY_RESULT"
+    if "HUMAN" in upper or "APPROV" in upper or "REJECT" in upper:
+        return "HUMAN_DECISION"
+    if "PROGRESS" in upper:
+        return "EXPERIMENT_PROGRESS"
+    if "EVIDENCE" in upper or "EVALUAT" in upper:
+        return "EVALUATOR_RESULT"
+    if "MATLAB" in upper:
+        return "MATLAB_STATUS"
+    if "FAIL" in upper:
+        return "FAILURE"
+    if "REPORT" in upper:
+        return "REPORT_READY"
+    if "START" in upper or "QUEUED" in upper:
+        return "EXPERIMENT_QUEUED"
+    if "EXPERIMENT" in upper or "ANALYSIS" in upper:
+        return "EXPERIMENT_RESULT"
+    return "SYSTEM_EVENT"
+
+
+def _event_source(kind: str, title: str) -> str:
+    upper = f"{kind} {title}".upper()
+    if "RULE" in upper or "SAFE MODE" in upper:
+        return "RULE_FALLBACK"
+    if "AGENT" in upper or "PI " in upper or "TOOL_" in upper:
+        return "PI_AGENT"
+    if "POLICY" in upper or "SAFETY" in upper or "PROPOSAL" in upper:
+        return "POLICY_ENGINE"
+    if "EVIDENCE" in upper or "EVALUAT" in upper or "ANALYSIS" in upper:
+        return "EVALUATOR"
+    if "HUMAN" in upper or "APPROV" in upper or "REJECT" in upper:
+        return "HUMAN"
+    if "MATLAB" in upper:
+        return "MATLAB_MCP"
+    if "EXPERIMENT" in upper:
+        return "EXECUTOR"
+    return "SYSTEM"
+
+
+def _event_envelope(value: dict | None) -> dict | None:
+    if value is None:
+        return None
+    value["event_id"] = value.get("event_id") or f"EV-LEGACY-{value['id']}"
+    value["type"] = value.get("event_type") or _event_type(value["kind"], value["title"])
+    value["source"] = value.get("source") or _event_source(value["kind"], value["title"])
+    value["timestamp"] = value.get("created_at")
+    return value

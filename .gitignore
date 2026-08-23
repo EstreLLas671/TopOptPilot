@@ -24,6 +24,8 @@ venv/
 slprj/
 *.mexw64
 *.mexa64
+mcp/matlab_mcp/MathWorks/
+.pytest-v6-*/
 
 # CUDA
 *.o

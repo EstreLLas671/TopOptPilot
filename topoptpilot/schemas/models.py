@@ -37,6 +37,42 @@ class EventKind(str, Enum):
     EVIDENCE = "EVIDENCE"
 
 
+class AgentRole(str, Enum):
+    RESEARCH_LEAD = "RESEARCH_LEAD"
+    GUIDE = "GUIDE"
+    HYPOTHESIS = "HYPOTHESIS"
+    EXPERIMENT_PLANNER = "EXPERIMENT_PLANNER"
+    EXPERIMENT_EXECUTOR = "EXPERIMENT_EXECUTOR"
+    INDEPENDENT_REVIEWER = "INDEPENDENT_REVIEWER"
+    REPORT_WRITER = "REPORT_WRITER"
+
+
+class SubagentStatus(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ReviewVerdict(str, Enum):
+    APPROVE = "APPROVE"
+    REVISE = "REVISE"
+    REJECT = "REJECT"
+
+
+# Public V6 name retained separately from the persistence field name.
+SubagentVerdict = ReviewVerdict
+
+
+class SolverVariant(str, Enum):
+    REFERENCE_CPU = "reference_cpu"
+    OPTIMIZED_CPU = "optimized_cpu"
+    PARALLEL_CPU = "parallel_cpu"
+    MEX = "mex"
+    GPU = "gpu"
+
+
 class Fidelity(str, Enum):
     F0 = "F0"
     F1 = "F1"
@@ -62,6 +98,7 @@ class FailureType(str, Enum):
     VOLUME_VIOLATION = "VOLUME_VIOLATION"
     POOR_COMPLIANCE = "POOR_COMPLIANCE"
     INFRASTRUCTURE = "INFRASTRUCTURE"
+    MATLAB_INFRASTRUCTURE = "MATLAB_INFRASTRUCTURE"
 
 
 class SafetyStatus(str, Enum):
@@ -75,6 +112,43 @@ class TerminationReason(str, Enum):
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
     PLATEAU = "PLATEAU"
     USER_STOPPED = "USER_STOPPED"
+
+
+class SubagentTask(BaseModel):
+    id: str
+    research_id: str
+    role: AgentRole
+    objective: str
+    status: SubagentStatus = SubagentStatus.QUEUED
+    evidence_ids: list[str] = Field(default_factory=list)
+    proposal_id: str | None = None
+
+
+class ExperimentHypothesis(BaseModel):
+    id: str
+    research_id: str
+    round_number: int = Field(ge=1)
+    statement: str
+    competing: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    status: str = "ACTIVE"
+
+
+class ControlledComparison(BaseModel):
+    experiment_ids: list[str] = Field(min_length=2)
+    parameter_differences: dict[str, Any] = Field(default_factory=dict)
+    controlled: bool
+    deterministic_delta: dict[str, float | int | None] = Field(default_factory=dict)
+
+
+class ArtifactLineage(BaseModel):
+    id: str
+    research_id: str
+    experiment_id: str | None = None
+    artifact_type: str
+    path: str | None = None
+    sha256: str | None = None
+    parents: list[str] = Field(default_factory=list)
 
 
 class BudgetSpec(BaseModel):
@@ -131,7 +205,7 @@ class AppSettings(BaseModel):
     """Persisted, non-secret application preferences.
 
     API keys deliberately do not appear in this model. They are read only from the
-    process environment at the moment a connection is tested or a session starts.
+    process environment or Windows Credential Manager at connection/session start.
     """
 
     locale: str = Field(default="zh-CN", pattern="^(zh-CN|en-US)$")
@@ -147,6 +221,7 @@ class AppSettings(BaseModel):
 class ResearchCreate(BaseModel):
     name: str = Field(default="MBB Beam", min_length=1, max_length=120)
     goal: str = "Minimize compliance while satisfying constraints."
+    description: str | None = Field(default=None, max_length=4000)
     constraints: dict[str, Any] = Field(default_factory=lambda: {
         "volume_fraction": 0.40,
         "gray_max": 0.05,
@@ -161,6 +236,7 @@ class ResearchCreate(BaseModel):
     boundary_conditions: dict[str, Any] = Field(default_factory=lambda: {"type": "MBB"})
     hypothesis: str | None = None
     locale: str = "zh-CN"
+    field_sources: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("locale")
     @classmethod
@@ -178,9 +254,9 @@ class ResearchCreate(BaseModel):
 
 class ExperimentCreate(BaseModel):
     purpose: str = "Establish a topology optimization baseline."
-    fidelity: str = "F0 — 2D Coarse"
+    fidelity: str = "F0 — MATLAB 2D Coarse"
     mesh_level: str = "coarse"
-    backend: str = "python"
+    backend: str = "matlab"
     parameters: dict[str, Any] = Field(default_factory=lambda: {
         "volfrac": 0.40,
         "rmin": 1.5,
@@ -192,6 +268,19 @@ class ExperimentCreate(BaseModel):
     requires_approval: bool = False
     proposal_id: str | None = None
     intent: str = "MANUAL"
+    decision_source: str = "HUMAN"
+    intent_source: str = "HUMAN"
+    policy_version: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    session_id: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    knowledge_ids: list[str] = Field(default_factory=list)
+    subagent_task_ids: list[str] = Field(default_factory=list)
+    solver_variant: str = "auto"
+    acceleration_mode: str = "auto"
+    review_verdict: str | None = None
+    human_decision: str | None = None
 
     @field_validator("backend")
     @classmethod
@@ -237,3 +326,32 @@ class ToolRequest(BaseModel):
     research_id: str
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class SubagentDispatchRequest(BaseModel):
+    role: AgentRole
+    objective: str = Field(min_length=1, max_length=4000)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=50)
+    proposal_id: str | None = None
+
+
+class KnowledgeDocument(BaseModel):
+    id: str
+    locale: str
+    category: str
+    title: str
+    summary: str
+    tags: list[str] = Field(default_factory=list)
+    content: str
+    version: str = "1.0"
+
+
+class SolverCapability(BaseModel):
+    fidelity: Fidelity
+    dimension: int
+    mesh_level: str
+    backend: str = "matlab"
+    variants: list[str] = Field(default_factory=lambda: ["reference_cpu"])
+    selected_variant: str = "reference_cpu"
+    acceleration_mode: str = "cpu"
+    available: bool = False

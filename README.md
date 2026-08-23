@@ -1,11 +1,14 @@
-# TopOptPilot V6.0.0 — 原生桌面科研工作台
+# TopOptPilot V6.1.0 — 知识驱动的拓扑优化科研智能体
 
-> **V6.0.0 当前实现**：Windows 正式入口为 Tauri 2 + React 原生桌面应用（v6.0.0），含 **SettingsWorkspace 设置中心**；官方 `@earendil-works/pi-coding-agent` 以 JSON-RPC 常驻运行，
-> 每个 Research ID 对应一个可恢复 Pi session。Pi 只接触科研工具白名单；参数由确定性
-> Safety Policy 编译。F3 只通过 MathWorks MATLAB MCP Server v0.12.0 调用仓库内原始 `.m`
-> 求解器，失败时严格记录为 MATLAB 基础设施故障，不允许 Python 伪回退。界面默认中文，支持英文。
-> 应用设置（AppSettings）持久化到 SQLite 8 张表（含 app_settings）；API Key 仅从环境变量读取。
-> 保留 web 网页接口可以供大家来设计前端
+> **V6.1.0 核心升级**：Windows 正式入口仍为 Tauri 2 + React 原生桌面应用（v6.1.0），
+> 在 V6.0.0 基础上升级为**知识驱动的科研智能体系统**。官方 `@earendil-works/pi-coding-agent`
+> 以 JSON-RPC 常驻运行，每个 Research ID 对应一个可恢复 Pi session，由 **Pi Research Lead**
+> 统一编排 **Guide / Hypothesis / Planner / Executor / Reviewer / Report Writer** 六个 Subagent。
+> Qwen API Key 保存到 **Windows Credential Manager**（不进入 SQLite/日志/报告）；
+> 新建研究支持 **AI 引导式向导**（自然语言描述 → AI 提取 → 分步确认 → 冻结 Research Contract）。
+> **F0–F3 全部通过 MATLAB MCP 求解**（F0/F1=2D，F2/F3=3D），Python 求解器退出正式执行路径。
+> 新增 **离线知识库**（SQLite FTS5 + 模板案例）、**阶段报告**（Markdown + PDF）和 **Knowledge Center**。
+> 界面默认中文，支持英文。保留 web 网页接口可以供大家来设计前端。
 
 ## 📑 快速导航
 
@@ -41,7 +44,7 @@ TopOptPilot 不是"自然语言调一次拓扑优化"的工具。它是：
 **核心原则**：大模型不代替有限元求解器。Pi 负责科研意图、证据解释与工具编排；
 Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责确定性计算，Evaluator 客观裁决。
 
-## V6.0.0 快速开始
+## V6.1.0 快速开始
 
 > 已配置好 Python/Node 的老协作者可用下面的最短路径；从零开始的完整步骤见下文
 > **"本地环境配置（克隆到运行）"** 一节。
@@ -50,9 +53,8 @@ Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责�
 npm install
 pip install -r requirements.txt
 npm --prefix desktop install
-Copy-Item .env.example .env
-# 在 .env 中填写 DASHSCOPE_API_KEY
 python launch.py
+# 首次启动后，在设置中心填写 Qwen API Key（保存到 Windows Credential Manager）
 ```
 
 `python launch.py` 启动 Tauri 原生窗口，不打开浏览器。仅开发旧界面时使用
@@ -62,18 +64,23 @@ python launch.py
 powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
 ```
 
-安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`（TopOptPilot_6.0.0_x64-setup.exe，220 MB），最终用户无需预装
+安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`（TopOptPilot_6.1.0_x64-setup.exe，~220 MB），最终用户无需预装
 Python、Node 或 Rust；MATLAB 本体不随包分发，首次验收版本为 R2024a。
 
-模型默认使用 `qwen3.7-plus` 与 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
-密钥仅由 `.env` 注入，不写入 session、报告或复现包。无模型或调用失败时进入
-Safe Mode，确定性规则策略仍通过同一 Policy 编译器推进实验。
+### V6.1 新功能
 
-V6 核心目录：`.pi/extensions/topopt-tools.ts`（工具沙箱）、`.pi/skills/`（六项动态技能）、
-`topoptpilot/agent_runtime/`（Pi RPC/会话/网关）、`topoptpilot/memory/`（L0–L3，8 张 SQLite 表含 app_settings）、
-`topoptpilot/policy/`（意图与安全策略）、`solver/topopt3d.py`（Hex8 FEM）、
-`topoptpilot/benchmarks/`（Random/Grid/TPE/Rule/Pi 与消融）、
-`desktop/src/SettingsWorkspace.tsx`（设置中心，5 Tab）。
+- **Qwen API Key 安全管理**：设置中心支持 OpenAI-compatible 配置（API Key + 模型 ID + Base URL），密钥保存到 Windows Credential Manager，不进入 SQLite/日志/报告
+- **AI 引导式 Research Setup**：用自然语言描述需求 → AI 提取参数 → 分步确认 → 冻结 Research Contract
+- **MATLAB 全保真度求解**：F0/F1 为 MATLAB 2D，F2/F3 为 MATLAB 3D；仅 F3 强制人工审批
+- **Subagent 多角色审查**：Guide/Hypothesis/Planner/Executor/Reviewer/Report Writer 各司其职
+- **离线知识库**：SQLite FTS5 检索 + 模板案例 + Knowledge Center
+- **阶段报告**：每轮 Markdown 报告 + 研究终止时 Markdown + PDF
+
+V6.1 核心目录：`.pi/extensions/topopt-tools.ts`（工具沙箱）、`.pi/skills/`（六项动态技能）、
+`topoptpilot/agent_runtime/`（Pi RPC/会话/网关/Subagent 编排）、`topoptpilot/memory/`（L0–L3，8 张 SQLite 表含 app_settings）、
+`topoptpilot/policy/`（意图与安全策略）、`topoptpilot/knowledge/`（离线知识库）、
+`solver/topopt3d.py`（Hex8 FEM）、`topoptpilot/benchmarks/`（Random/Grid/TPE/Rule/Pi 与消融）、
+`desktop/src/SettingsWorkspace.tsx`（设置中心，5 Tab）、`desktop/src/KnowledgeCenter.tsx`（知识库界面）。
 
 ---
 
@@ -82,20 +89,22 @@ V6 核心目录：`.pi/extensions/topopt-tools.ts`（工具沙箱）、`.pi/skil
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                      输入与知识层                                 │
-│  论文PDF · 工程需求 · 体素模型 · 边界条件 · 材料 · 基线 · 历史结果 │
+│  工程需求 · 体素模型/掩膜 · 边界条件 · 材料 · 基线 · 历史结果     │
+│  + 离线知识库（SQLite FTS5 检索 + 模板案例 + Knowledge Center）   │
 ├──────────────────────────────────────────────────────────────────┤
 │                     AI Scientist 层                               │
-│  研究主管 → 证据Agent → 假设Agent → 审稿Agent                   │
-│         → 实验Agent → 审计Agent（六角色协作）                    │
-│  状态机：输入验证→文献挖掘→假设生成→审稿→实验→审计→迭代/终止     │
+│  Pi Research Lead（常驻）→ Subagent 按需调度：                    │
+│  Guide · Hypothesis · Planner · Executor · Reviewer · Report      │
+│  状态机：SETUP→HYPOTHESIZE→PLAN→REVIEW→SUBMIT→RUN→EVALUATE     │
+│         →ANALYZE→COMPARE→DECIDE→REPORT                           │
 ├──────────────────────────────────────────────────────────────────┤
 │               方法与求解层                                        │
-│  MATLAB可组合插件（OC/MMA/滤波/投影/控制器/评价器）              │
-│  + CUDA MEX（Matrix-free FEM · PCG/MGCG · 单元柔度 · 灵敏度）    │
-│  + 知识库（SQLite结构化 + FAISS语义检索）                         │
+│  MATLAB MCP 全保真度求解（F0/F1=2D, F2/F3=3D）                  │
+│  + 加速变体（预计算/向量化/可选 MEX/GPU）                         │
+│  + 工程模板（MBB/悬臂梁/简支梁/L型/桥式）+ 掩膜导入              │
 ├──────────────────────────────────────────────────────────────────┤
 │               资产与输出层                                        │
-│  3D结构(STL/VTK) · 指标曲线 · 研究报告 · 独立复核 · 一键复现包   │
+│  密度场 · 指标曲线 · 阶段报告(MD) · 最终报告(MD+PDF) · 复现包   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -281,14 +290,15 @@ Round 1 审计驱动调参：盲锐化对照 C≈113.5（退化）→ 灰度反�
 
 | 层级 | 模块 | 状态 | 说明 |
 |------|------|------|------|
-| Agent | 6角色+编排器+状态机+提示词 | ✅ 完成 | 39个Python文件，3,241行代码，全部语法通过 |
+| Agent | Pi Research Lead + 6 Subagent | ✅ V6.1 设计完成 | 常驻 Lead + 按需 Subagent，工具白名单隔离 |
 | Plugin | 6个MATLAB基类+Python注册表 | ✅ 接口层完成 | 实现层为空，等待人工开发 |
-| MCP | 官方 MATLAB MCP v0.12.0 + 受控工具 | ✅ 实机通过 | R2024a 真实 2D/3D `.m` 求解 |
-| Knowledge | 证据库+方法卡片 | ✅ 关键词检索 | 待升级为SQLite+FAISS三级架构 |
-| Solver | 真实拓扑优化引擎+双后端 | ✅ 完成 | numpy/scipy移植，与MATLAB地面真值逐点验证 |
-| Experiment | 任务生成+运行器+结果管理 | ✅ 完成 | 预定义六组实验矩阵 |
-| Frontend | Tauri 2 + React 桌面 App | ✅ V6.0.0 | Codex 式三栏工作台 + Settings 设置中心，中英双语 |
-| Sidecar API | FastAPI + WebSocket + Settings API | ✅ V6.0.0 | 随机端口、一次性令牌、仅本机访问、Settings 8 端点 |
+| MCP | 官方 MATLAB MCP v0.12.0 + 受控工具 | ✅ 实机通过 | R2024a 真实 2D/3D `.m` 求解（全保真度） |
+| Knowledge | 离线知识库 + Knowledge Center | ✅ V6.1 设计完成 | SQLite FTS5 检索 + 模板案例 + 种子数据 |
+| Solver | MATLAB MCP 全保真度（F0–F3） | ✅ V6.1 设计完成 | F0/F1=2D, F2/F3=3D；Python 求解器仅回归用 |
+| Experiment | 任务生成+运行器+结果管理 | ✅ 完成 | 受控实验对比 + Artifact 血缘 |
+| Reports | 阶段报告 + 最终报告 | ✅ V6.1 设计完成 | 每轮 Markdown + 终止时 Markdown/PDF |
+| Frontend | Tauri 2 + React 桌面 App | ✅ V6.1 | Codex 式三栏工作台 + Settings + Knowledge Center |
+| Sidecar API | FastAPI + WebSocket + Settings/Knowledge API | ✅ V6.1 | 随机端口、一次性令牌、凭据管理 |
 | Legacy UI | Streamlit Workspace | 开发专用 | `python launch.py --web` |
 | Demo | 10分钟演示编排 | ✅ 完成 | 9阶段时间线+Paper-to-Plugin流水线 |
 

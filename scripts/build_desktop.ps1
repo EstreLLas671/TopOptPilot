@@ -31,6 +31,11 @@ if (-not $SkipSidecar) {
         --paths $ProjectRoot --hidden-import topoptpilot.api.fastapi_app `
         --hidden-import solver.topopt_engine --hidden-import solver.topopt3d `
         (Join-Path $ProjectRoot "topoptpilot\api\desktop_sidecar.py")
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller sidecar build failed with exit code $LASTEXITCODE." }
+}
+
+if (-not (Test-Path (Join-Path $BackendDist "topoptpilot-backend.exe"))) {
+    throw "Desktop sidecar executable is missing after the build step."
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $ResourceRoot "bin") | Out-Null
@@ -57,6 +62,17 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot "vendor\matlab-mcp-server") `
 Copy-Item -LiteralPath (Join-Path $ProjectRoot ".pi") -Destination (Join-Path $ResourceRoot ".pi") -Recurse
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "node_modules") -Destination (Join-Path $ResourceRoot "node_modules") -Recurse
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "mcp") -Destination (Join-Path $ResourceRoot "mcp") -Recurse
+$GeneratedMatlabState = Join-Path $ResourceRoot "mcp\matlab_mcp\MathWorks"
+if (Test-Path $GeneratedMatlabState) {
+    $ResolvedGeneratedState = (Resolve-Path -LiteralPath $GeneratedMatlabState).Path
+    if (-not $ResolvedGeneratedState.StartsWith([System.IO.Path]::GetFullPath($ResourceRoot), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove generated MATLAB state outside staged resources."
+    }
+    Remove-Item -LiteralPath $ResolvedGeneratedState -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $ResourceRoot "topoptpilot\knowledge") | Out-Null
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "topoptpilot\knowledge\documents") `
+    -Destination (Join-Path $ResourceRoot "topoptpilot\knowledge\documents") -Recurse
 $SolverRoot = Get-ChildItem -LiteralPath $ProjectRoot -Directory | Where-Object {
     Test-Path (Join-Path $_.FullName "TopOpt-3D")
 } | Select-Object -First 1
@@ -67,6 +83,9 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot "package-lock.json") -Destination
 if (Test-Path (Join-Path $ProjectRoot "AGENTS.md")) {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot "AGENTS.md") -Destination $ResourceRoot
 }
+Get-ChildItem -LiteralPath (Join-Path $ProjectRoot "vendor\matlab-mcp-server") -Recurse -File | `
+    Get-FileHash -Algorithm SHA256 | ForEach-Object { "{0}  {1}" -f $_.Hash,$_.Path.Substring($ProjectRoot.Length+1) } | `
+    Set-Content -LiteralPath (Join-Path $ResourceRoot "MATLAB_MCP_SHA256.txt") -Encoding utf8
 Get-ChildItem -LiteralPath $ResourceRoot -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
 
 if (-not $SkipBundle) {

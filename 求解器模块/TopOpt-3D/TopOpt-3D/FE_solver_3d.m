@@ -27,15 +27,24 @@ validateattributes(Emin, {'numeric'}, ...
     {'real','finite','scalar','>=',0,'<',1});
 
 ndof = 3 * (nelx+1) * (nely+1) * (nelz+1);
-KE = lk_3d();
-edofMat = build_edof_matrix(nelx, nely, nelz);
+E = 1.0; nu = 0.3;
+if isfield(bc_config, 'E'), E = bc_config.E; end
+if isfield(bc_config, 'nu'), nu = bc_config.nu; end
+KE = lk_3d(E, nu);
+persistent cachedNelx cachedNely cachedNelz cachedEdof cachedIK cachedJK
+if isempty(cachedNelx) || cachedNelx ~= nelx || cachedNely ~= nely || cachedNelz ~= nelz
+    cachedEdof = build_edof_matrix(nelx, nely, nelz);
+    cachedIK = reshape(repmat(cachedEdof, 1, 24).', [], 1);
+    cachedJK = reshape(repelem(cachedEdof, 1, 24).', [], 1);
+    cachedNelx = nelx;
+    cachedNely = nely;
+    cachedNelz = nelz;
+end
 
 % 元素排序与 x(:) 一致：ely 最快，其次 elx，最后 elz。
 densityScale = Emin + (1-Emin) * x(:) .^ penal;
-iK = reshape(repmat(edofMat, 1, 24).', [], 1);
-jK = reshape(repelem(edofMat, 1, 24).', [], 1);
 sK = reshape(KE(:) * densityScale.', [], 1);
-K = sparse(iK, jK, sK, ndof, ndof);
+K = sparse(cachedIK, cachedJK, sK, ndof, ndof);
 K = (K + K.') / 2;
 
 F = sparse(ndof, 1);
@@ -85,6 +94,10 @@ switch bcType
         error('FE_solver_3d:UnknownBoundaryType', ...
             ['Unsupported bc_type "%s". Use MBB, cantilever, ', ...
              'simply_supported, L-bracket or custom.'], bc_config.bc_type);
+end
+
+if isfield(bc_config, 'load_scale') && ~strcmpi(bcType, 'custom')
+    F = F * double(bc_config.load_scale);
 end
 
 fixeddofs = unique(fixeddofs(:).');

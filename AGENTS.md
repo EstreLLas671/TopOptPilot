@@ -7,11 +7,10 @@
 5. Treat failed experiments as valid scientific evidence.
 6. Never modify the user's Research Goal or silently relax a constraint.
 7. Validate the relevant fidelity budget before recommending or submitting an upgrade.
-8. MATLAB/F3 experiments always require explicit human approval.
+8. Only F3 experiments always require explicit human approval; F0-F2 still require Policy, Safety and Budget checks.
 9. Do not infer causality from comparisons with more than one uncontrolled parameter difference.
 10. Prefer the smallest and cheapest experiment capable of answering the current question.
 11. End a turn after `experiment_submit`; never wait inside a tool call for FEM completion.
 12. Research State is authoritative. Session memory is only reasoning context.
 13. Never request or use bash, write, edit, arbitrary shell, direct database, or direct solver tools.
 14. Do not expose hidden chain-of-thought. Report observation, evidence, decision, reason summary, and purpose.
-

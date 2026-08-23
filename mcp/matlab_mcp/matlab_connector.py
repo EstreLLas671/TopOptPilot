@@ -97,7 +97,7 @@ class MatlabConnector:
             threading.Thread(target=self._stderr_loop, daemon=True).start()
             self.request("initialize", {
                 "protocolVersion": self.PROTOCOL_VERSION, "capabilities": {},
-                "clientInfo": {"name": "TopOptPilot", "version": "5.1.0"},
+                "clientInfo": {"name": "TopOptPilot", "version": "6.0.0"},
             }, timeout=30)
             self.notify("notifications/initialized", {})
             listing = self.request("tools/list", {}, timeout=30)

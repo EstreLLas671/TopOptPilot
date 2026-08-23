@@ -93,8 +93,11 @@ class BenchmarkRunner:
             service.execute_command(research["id"], "/stop")
             raise TimeoutError("Pi baseline campaign timed out")
         events = service.store.list_events(research["id"])
-        safe_mode = any(item["title"] == "PI SAFE MODE" for item in events)
         state = service.get_research(research["id"])
+        safe_mode = (any(item["title"] == "PI SAFE MODE" or item.get("source") == "RULE_FALLBACK"
+                         for item in events)
+                     or any(item.get("decision_source") == "RULE_FALLBACK"
+                            for item in state["experiments"]))
         return {"method": "Rule-fallback" if safe_mode else "Pi", "research_id": research["id"],
                 "budget": budget, "metrics": campaign_metrics(state["experiments"], events,
                                                                  state["decisions"])}
