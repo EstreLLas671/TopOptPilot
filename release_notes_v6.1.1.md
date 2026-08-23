@@ -1,7 +1,28 @@
 ## 🎯 V6.1.1 — 方案对齐与发布门禁补齐
 
-> V6.1.1 在 V6.1.0 基础上补齐产品方案与代码的最后偏差：求解变体等价性验证、MATLAB 启动预热、
-> MCP 启动/求解耗时统计、API 命名对齐、PDF 中文字体显式回退，以及可配置可迁移的缓存目录。
+> V6.1.1 在 V6.1.0 基础上补齐产品方案与代码的最后偏差：Heaviside 投影真正实现、
+> 科研循环端到端可行、求解变体等价性验证、MATLAB 启动预热、MCP 启动/求解耗时统计、
+> API 命名对齐、PDF 中文字体显式回退，以及可配置可迁移的缓存目录。
+
+### 🔬 关键修复
+
+#### Heaviside 投影真正实现
+- 2D/3D MATLAB 求解器此前仅声明了 `projection: heaviside_projection`，实际无投影代码
+- 新增 `project_heaviside(x, beta)` 平滑 tanh 投影 + 灵敏度链 `dc = dc .* dProj`
+- β 从 1 增大到 32 时灰度比从 0.35 降至 0.0，连通分量保持为 1
+
+#### 体积约束评估修正
+- 此前 `volume_fraction` 取自投影后密度（高 β 时接近 1.0），导致约束检查失败
+- 改为报告原始密度体积分数（优化器实际约束的空间），同时新增 `projected_volume_fraction`
+
+#### REDUCE_GRAYNESS 去重冲突修复
+- `EXPLORE_PARAMETER` 生成 β=2,4,8 后，REDUCE 从 β=4 出发产生 β=8 被去重拦截
+- 改为 β×3 步进 + 跳过已有实验的 β 值，保证每轮产生新 proposal
+
+#### Cases 门禁端到端通过
+- Case A: β=24 达到可行解（gray=0.002, conn=1, compliance=47.65）
+- Case B: 6 个实验覆盖 REDUCE + TEST_COMPETING_EXPLANATIONS
+- Case C: F0→F1→F2→F3 四级保真度，2 个可行解
 
 ### ✨ 新增功能
 
