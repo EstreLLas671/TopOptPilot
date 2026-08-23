@@ -40,6 +40,9 @@ config = set_default(config, 'move_end', config.move_start);
 config = set_default(config, 'move_schedule_power', 1.0);
 config = set_default(config, 'passive_solid', []);
 config = set_default(config, 'passive_void', []);
+% Heaviside projection sharpness; beta=1 reduces to the SIMP filter-only limit.
+config = set_default(config, 'beta', 1.0);
+validateattributes(config.beta, {'numeric'}, {'scalar','real','finite','>=',1,'<=',64});
 
 nelx = config.nelx;
 nely = config.nely;
@@ -107,9 +110,13 @@ radiusHistory = zeros(config.max_iterations, 1);
 moveHistory = zeros(config.max_iterations, 1);
 
 for loop = 1:config.max_iterations
-    [U, K] = FE_solver(nelx, nely, x, config.penal, bcConfig);
+    % Heaviside projection sharpened by config.beta; the FE solve and the
+    % objective/sensitivity chain use the projected physical density.
+    [xProj, dProj] = project_heaviside(x, config.beta);
+    [U, K] = FE_solver(nelx, nely, xProj, config.penal, bcConfig);
     [objective, dc] = compliance_and_sensitivity( ...
-        nelx, nely, x, config.penal, U, KE);
+        nelx, nely, xProj, config.penal, U, KE);
+    dc = dc .* dProj;
     dc(~domainMask) = 0;
 
     filterConfig.iteration = loop;
@@ -146,11 +153,13 @@ radiusHistory = radiusHistory(1:loop);
 moveHistory = moveHistory(1:loop);
 
 result = struct();
-result.x = x;
+result.x = xProj;
+result.raw_x = x;
 result.domain_mask = domainMask;
 result.iterations = loop;
 result.objective = objectiveHistory(end);
 result.volume_fraction = mean(x(domainMask));
+result.projected_volume_fraction = mean(xProj(domainMask));
 result.objective_history = objectiveHistory;
 result.change_history = changeHistory;
 result.radius_history = radiusHistory;
@@ -226,6 +235,20 @@ function config = set_default(config, name, value)
 if ~isfield(config, name) || isempty(config.(name))
     config.(name) = value;
 end
+end
+
+function [xProj, dProj] = project_heaviside(x, beta)
+%Smooth Heaviside projection (beta-continuation): beta=1 approaches the SIMP
+%limit, larger beta sharpens the 0/1 transition and lowers gray ratio.
+if beta <= 1.0
+    xProj = x;
+    dProj = ones(size(x));
+    return;
+end
+tanhHalf = tanh(0.5*beta);
+xProj = (tanhHalf + tanh(beta*(x - 0.5))) / (2*tanhHalf);
+sech2 = 1 - tanh(beta*(x - 0.5)).^2;
+dProj = (beta * sech2) / (2*tanhHalf);
 end
 
 function mask = read_mask(value, expectedSize, defaultValue)

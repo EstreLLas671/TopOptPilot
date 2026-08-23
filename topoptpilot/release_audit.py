@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from topoptpilot.benchmarks import BenchmarkRunner
+from topoptpilot.benchmarks.equivalence import run_equivalence_gate
 from topoptpilot.cases import EvidenceCaseRunner
 from topoptpilot.service import ResearchService
 from topoptpilot.tools import ALLOWED_TOOLS
@@ -20,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_audit(include_online: bool = True) -> dict:
-    report = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "gates": {}}
+    report = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+              "version": "6.1.1", "gates": {}}
     report["gates"]["artifacts"] = _artifact_gate()
     report["gates"]["desktop_app"] = _desktop_gate()
     report["gates"]["strict_f3"] = _strict_f3_gate()
@@ -45,7 +47,8 @@ def run_audit(include_online: bool = True) -> dict:
                 "pass": (report["cases"]["A"]["metrics"]["best_feasible_objective"] is not None
                          and report["cases"]["B"]["experiments"] >= 6
                          and report["cases"]["C"]["fidelities"][-4:] == ["F0", "F1", "F2", "F3"]
-                         and any("python3d" in value for value in report["cases"]["C"]["real_backends"])),
+                         and any("matlab_mcp_3d" in value
+                                 for value in report["cases"]["C"]["real_backends"])),
             }
             runner = BenchmarkRunner()
             report["baselines"] = {method: runner.run(method, budget=5, max_iter=40)["metrics"]
@@ -84,7 +87,7 @@ def _artifact_gate() -> dict:
 
 def _desktop_gate() -> dict:
     executable = ROOT / "desktop/src-tauri/target/release/topoptpilot-desktop.exe"
-    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_6.0.0_x64-setup.exe"
+    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_6.1.1_x64-setup.exe"
     return {"pass": executable.exists() and installer.exists(),
             "executable": str(executable), "installer": str(installer)}
 
@@ -139,7 +142,7 @@ def _v6_source_gates() -> dict:
         "all_matlab_fidelities": {"pass": 'return "matlab"' in fidelity
             and "MATLAB 2D Coarse" in fidelity and "MATLAB 3D Fine" in fidelity},
         "fact_grounded_reports": {"pass": "未计算" in report and "evaluation" in report
-            and "Artifact" in report},
+            and "artifact" in report.lower()},
         "credential_not_in_sqlite": {"pass": "api_key" not in store.lower()
             and "/api/settings/agent-key" in api},
     }
@@ -169,6 +172,16 @@ def _matlab_mcp_gates() -> dict:
                                    "solver_entry_sha256": solver.get("solver_entry_sha256")}
                 except Exception as exc:
                     output[key] = {"pass": False, "error": str(exc)[:500]}
+            try:
+                output["matlab_equivalence"] = run_equivalence_gate(worker, dimension=2)
+            except Exception as exc:
+                output["matlab_equivalence"] = {"pass": False, "error": str(exc)[:500]}
+            try:
+                worker.warmup()
+                warmup = worker.health().get("warmup") or {}
+                output["matlab_warmup"] = {"pass": True, **warmup}
+            except Exception as exc:
+                output["matlab_warmup"] = {"pass": False, "error": str(exc)[:500]}
         finally:
             worker.close()
     return output

@@ -210,6 +210,14 @@ def preview_guide(request: GuideRequest):
     return service.preview_guidance(request.text, request.locale)
 
 
+@app.post("/api/research/guide/parse")
+def parse_guided_setup(request: GuideRequest):
+    """V6.1 documented alias for the guided-setup parse step."""
+    if request.locale not in {"zh-CN", "en-US"}:
+        raise HTTPException(status_code=422, detail="locale must be zh-CN or en-US")
+    return service.preview_guidance(request.text, request.locale)
+
+
 @app.get("/api/research/{research_id}/agent-tasks")
 def list_agent_tasks(research_id: str):
     service._require_research(research_id)
@@ -365,6 +373,24 @@ def set_agent_key(request: AgentKeyRequest):
 
 @app.delete("/api/settings/agent-key")
 def delete_agent_key():
+    try:
+        return service.delete_agent_key()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/settings/agent-credential")
+def set_agent_credential(request: AgentKeyRequest):
+    """V6.1 documented endpoint name; identical behaviour to agent-key."""
+    try:
+        return service.set_agent_key(request.api_key)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/settings/agent-credential")
+def delete_agent_credential():
+    """V6.1 documented endpoint name; identical behaviour to agent-key."""
     try:
         return service.delete_agent_key()
     except OSError as exc:

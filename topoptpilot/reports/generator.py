@@ -122,7 +122,7 @@ class ResearchReportGenerator:
         body = ResearchReportGenerator._markdown_to_html(markdown)
         css = """
         * { box-sizing: border-box; }
-        body { font-family: sans-serif; color: #242a32; font-size: 9.5pt; line-height: 1.55; }
+        body { font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif; color: #242a32; font-size: 9.5pt; line-height: 1.55; }
         h1 { color: #173f78; font-size: 24pt; margin: 18pt 0 16pt; }
         h2 { color: #173f78; font-size: 15pt; border-bottom: 1.4pt solid #24599a; padding-bottom: 4pt; margin-top: 18pt; }
         h3 { color: #173f78; font-size: 11.5pt; margin: 12pt 0 5pt; }

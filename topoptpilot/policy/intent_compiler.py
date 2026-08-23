@@ -44,7 +44,19 @@ class IntentCompiler:
                 params = {**base, factor: value}
                 candidates.append((f"Explore {factor}={value}", Fidelity.F0, params, [factor]))
         elif intent.intent == IntentType.REDUCE_GRAYNESS:
-            params = {**base, "beta": min(32.0, max(2.0, float(base.get("beta", 1)) * 2))}
+            current_beta = float(base.get("beta", 1.0))
+            # Pick the smallest novel beta above the current value so the
+            # REDUCE proposal is not collapsed by dedup against EXPLORE siblings.
+            existing_betas = {
+                float((item.get("parameters") or {}).get("beta", 0))
+                for item in experiments
+                if str(item.get("fidelity", "")).split()[0] == current_fidelity.value
+            }
+            new_beta = min(32.0, max(current_beta + 1.0, current_beta * 3))
+            while new_beta in existing_betas and new_beta < 32.0:
+                new_beta = min(32.0, new_beta * 1.5)
+            new_beta = min(32.0, max(2.0, new_beta))
+            params = {**base, "beta": new_beta}
             candidates.append(("Reduce grayness with one bounded projection step",
                                current_fidelity, params, ["beta"]))
         elif intent.intent == IntentType.RESTORE_CONNECTIVITY:

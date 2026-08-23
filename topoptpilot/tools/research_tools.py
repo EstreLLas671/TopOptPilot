@@ -199,6 +199,11 @@ class ResearchTools:
         self.service.store.append_event(
             research_id, "SOLVER", "SOLVER CAPABILITY", "Solver capabilities were inspected.",
             payload=capabilities, source="MATLAB_MCP", event_type="SOLVER_CAPABILITY")
+        warmup = getattr(self.service.matlab_worker, "_warmup", None)
+        if warmup:
+            self.service.store.append_event(
+                research_id, "SOLVER", "SOLVER WARMUP", "MATLAB MCP warmup statistics.",
+                payload=warmup, source="MATLAB_MCP", event_type="SOLVER_WARMUP")
         return capabilities
 
     def subagent_dispatch(self, research_id: str, role: str, objective: str,

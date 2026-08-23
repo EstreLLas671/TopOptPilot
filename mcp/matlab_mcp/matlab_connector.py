@@ -8,6 +8,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ class MatlabConnector:
         self.pending: dict[str, queue.Queue] = {}
         self.stderr: list[str] = []
         self.tools: set[str] = set()
+        self.startup_ms: float | None = None
         self._write_lock = threading.Lock()
         self._start_lock = threading.RLock()
 
@@ -77,6 +79,7 @@ class MatlabConnector:
                 raise MatlabMcpError(f"MATLAB MCP binary not found: {self.binary}")
             if not self.matlab_root:
                 raise MatlabMcpError("MATLAB installation was not found on PATH")
+            started_at = time.monotonic()
             args = [str(self.binary), f"--matlab-root={self.matlab_root}",
                     f"--initial-working-folder={self.adapter_dir}",
                     "--matlab-display-mode=nodesktop", "--matlab-session-mode=auto",
@@ -104,6 +107,7 @@ class MatlabConnector:
             self.tools = {item["name"] for item in listing.get("tools", [])}
             if "topopt_run_task" not in self.tools:
                 raise MatlabMcpError("Restricted topopt_run_task tool was not registered")
+            self.startup_ms = round((time.monotonic() - started_at) * 1000)
             return self
 
     def request(self, method: str, params: dict[str, Any], timeout: float | None = None) -> dict:

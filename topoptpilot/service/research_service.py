@@ -57,6 +57,16 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _validate_writable_dir(raw: str | None) -> Path | None:
+    """Return the resolved absolute path of an existing writable directory, or None."""
+    if raw is None or not str(raw).strip():
+        return None
+    candidate = Path(str(raw).strip()).expanduser().resolve()
+    if not candidate.is_dir() or not os.access(candidate, os.W_OK):
+        raise ValueError("Directory must exist and be writable")
+    return candidate
+
+
 class ResearchService:
     def __init__(self, data_dir: str | Path | None = None, max_workers: int = 2,
                  agent_client: PiAgentClient | None = None):
@@ -69,7 +79,10 @@ class ResearchService:
         self.knowledge = KnowledgeBase(self.store, self.project_root / "topoptpilot/knowledge/documents")
         self.queue = ExperimentQueue(self.data_dir / "progress", max_workers=max_workers)
         self.matlab_worker = MatlabMcpWorker(self.data_dir, self.project_root)
-        self.cache = ResultCache(self.data_dir / "cache")
+        self._cache_dir_lock = threading.RLock()
+        self.cache_dir = self._resolve_cache_dir(
+            (self.store.get_app_settings() or {}).get("data", {}).get("cache_dir"))
+        self.cache = ResultCache(self.cache_dir)
         self.report_generator = ResearchReportGenerator(self.data_dir)
         self.orchestrator = ResearchOrchestrator()
         self.agent_client = agent_client or PiAgentClient(api_key=get_qwen_api_key())
@@ -98,6 +111,49 @@ class ResearchService:
         """Return the runtime credential without serializing or logging it."""
         return get_qwen_api_key()
 
+    def _resolve_cache_dir(self, configured: str | None) -> Path:
+        """Resolve the active cache directory, falling back to <data_dir>/cache."""
+        default = (self.data_dir / "cache").resolve()
+        try:
+            target = _validate_writable_dir(configured)
+        except (ValueError, OSError):
+            target = None
+        if target is None or target == self.data_dir:
+            return default
+        return target
+
+    def _migrate_cache_dir(self, old_dir: Path, new_dir: Path) -> dict[str, Any]:
+        """Move every cache entry from old_dir into new_dir, rolling back on failure."""
+        moved, skipped = 0, 0
+        relocated: list[tuple[Path, Path]] = []
+        with self._cache_dir_lock:
+            new_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                for item in sorted(old_dir.iterdir()) if old_dir.exists() else []:
+                    destination = new_dir / item.name
+                    if destination.exists():
+                        skipped += 1
+                        continue
+                    shutil.move(str(item), str(destination))
+                    relocated.append((destination, item))
+                    moved += 1
+            except OSError as exc:
+                for destination, origin in reversed(relocated):
+                    try:
+                        shutil.move(str(destination), str(origin))
+                    except OSError:
+                        pass
+                raise ValueError(f"Cache migration failed and was rolled back: {exc}") from exc
+            self.cache_dir = new_dir
+            self.cache = ResultCache(new_dir)
+            try:
+                if old_dir.exists() and not any(old_dir.iterdir()) and old_dir != new_dir:
+                    old_dir.rmdir()
+            except OSError:
+                pass
+        return {"moved_files": moved, "skipped_existing": skipped,
+                "cache_dir": str(new_dir)}
+
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):
             raise ValueError("Settings patch must be an object")
@@ -122,10 +178,23 @@ class ResearchService:
             merged["compute"]["matlab_root"] = str(candidate)
         requested_root = merged["data"].get("next_data_dir")
         if requested_root:
-            target = Path(requested_root).expanduser().resolve()
-            if not target.is_dir() or not os.access(target, os.W_OK):
-                raise ValueError("Next data directory must be an existing writable directory")
+            target = _validate_writable_dir(requested_root)
             merged["data"]["next_data_dir"] = str(target)
+        requested_cache = merged["data"].get("cache_dir")
+        if requested_cache is not None and not str(requested_cache).strip():
+            requested_cache = None
+        if requested_cache is not None:
+            # Reuse the writable-directory rule so a typo cannot orphan the cache.
+            cache_target = _validate_writable_dir(str(requested_cache))
+            if cache_target == self.data_dir:
+                raise ValueError("Cache directory must be a dedicated directory, not the data root")
+            merged["data"]["cache_dir"] = str(cache_target)
+        else:
+            merged["data"]["cache_dir"] = None
+        cache_migration = None
+        desired_cache = self._resolve_cache_dir(merged["data"]["cache_dir"])
+        if desired_cache != self.cache_dir:
+            cache_migration = self._migrate_cache_dir(self.cache_dir, desired_cache)
         root_changed = merged["compute"]["matlab_root"] != current["compute"]["matlab_root"]
         self.store.save_app_settings(merged)
         # The bootstrap mirror contains only the delayed data-root selector; all normal
@@ -138,7 +207,10 @@ class ResearchService:
             # Restart/probe off the FastAPI thread so a cold MATLAB launch never
             # freezes the Tauri Workspace.
             self.restart_matlab()
-        return self.get_settings()
+        result = self.get_settings()
+        if cache_migration:
+            result["data"]["cache_migration"] = cache_migration
+        return result
 
     def restart_pi(self) -> dict[str, Any]:
         if not self.pi_runtime:
@@ -190,9 +262,10 @@ class ResearchService:
             return sum(item.stat().st_size for item in path.rglob("*") if item.is_file()) if path.exists() else 0
         disk = shutil.disk_usage(self.data_dir)
         return {"health": self.health(), "data_dir": str(self.data_dir),
-                "database": str(self.store.db_path), "cache_bytes": directory_size(self.data_dir / "cache"),
+                "database": str(self.store.db_path), "cache_dir": str(self.cache_dir),
+                "cache_bytes": directory_size(self.cache_dir),
                 "log_dir": str(self.data_dir / "logs"), "free_disk_bytes": disk.free,
-                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "6.0.0"}
+                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "6.1.1"}
 
     def export_diagnostics(self) -> Path:
         output = self.data_dir / "diagnostics" / f"topoptpilot-diagnostics-{uuid.uuid4().hex[:8]}.zip"
@@ -204,14 +277,20 @@ class ResearchService:
 
     def clear_regenerable_cache(self) -> dict[str, Any]:
         removed = 0
-        for directory in (self.data_dir / "cache", self.data_dir / "progress"):
-            if directory.exists() and self.data_dir in directory.resolve().parents:
-                for item in directory.iterdir():
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
-                    removed += 1
+        for directory in (self.cache_dir, self.data_dir / "progress"):
+            if not directory.exists():
+                continue
+            resolved = directory.resolve()
+            # Progress always lives under data_dir; the cache may be a custom
+            # directory chosen in Settings, which is only clearable as a whole.
+            if resolved != self.cache_dir.resolve() and self.data_dir not in resolved.parents:
+                continue
+            for item in directory.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                removed += 1
         return {"removed_entries": removed, "message": "Only regenerable cache and progress files were removed."}
 
     def health(self) -> dict[str, Any]:
@@ -239,9 +318,9 @@ class ResearchService:
             "matlab": {"status": matlab_state, "version": matlab_mcp.get("matlab_version"),
                        "root": matlab_mcp.get("matlab_root")},
             "sidecar": {"status": "VERIFIED", "port": os.getenv("TOPPILOT_SIDECAR_PORT"),
-                        "version": "6.0.0"},
+                        "version": "6.1.1"},
         }
-        return {"status": "ok", "version": "6.0.0", "components": components,
+        return {"status": "ok", "version": "6.1.1", "components": components,
                 "solver_2d": matlab_state in {"READY", "VERIFIED"}, "solver_3d": matlab_state in {"READY", "VERIFIED"},
                 "matlab": matlab_mcp["state"] != "UNAVAILABLE", "matlab_mcp": matlab_mcp,
                 "database": str(self.store.db_path),
@@ -1139,12 +1218,17 @@ class ResearchService:
     def _restart_matlab_job(self) -> None:
         settings = self.get_settings()["compute"]
         error = None
+        warmup = None
         try:
             self.matlab_worker.configure(matlab_root=settings.get("matlab_root"),
                                          timeout=settings["matlab_timeout_seconds"])
+            # Cold-start the MCP process and MATLAB session and probe capabilities so
+            # the first real experiment does not pay MATLAB startup latency.
+            warmup = self.matlab_worker.warmup()
         except Exception as exc:
             error = str(exc)[:1000]
-        self._matlab_restart = {"running": False, "last_error": error, "updated_at": utc_now()}
+        self._matlab_restart = {"running": False, "last_error": error,
+                                "warmup": warmup, "updated_at": utc_now()}
 
     def _answer_question(self, research_id: str, text: str, selected: str | None) -> str:
         research = self._require_research(research_id)

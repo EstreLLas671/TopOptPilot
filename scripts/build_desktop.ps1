@@ -30,6 +30,7 @@ if (-not $SkipSidecar) {
         --specpath (Join-Path $ProjectRoot "build") `
         --paths $ProjectRoot --hidden-import topoptpilot.api.fastapi_app `
         --hidden-import solver.topopt_engine --hidden-import solver.topopt3d `
+        --collect-submodules openai `
         (Join-Path $ProjectRoot "topoptpilot\api\desktop_sidecar.py")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller sidecar build failed with exit code $LASTEXITCODE." }
 }

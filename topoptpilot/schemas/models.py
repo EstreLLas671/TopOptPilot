@@ -199,6 +199,9 @@ class NewResearchSettings(BaseModel):
 class DataSettings(BaseModel):
     # This only selects the root for the *next* desktop start.  It never moves data.
     next_data_dir: str | None = Field(default=None, max_length=500)
+    # Result-cache location. Changing it migrates existing cache files at save time;
+    # None keeps the default <data_dir>/cache directory.
+    cache_dir: str | None = Field(default=None, max_length=500)
 
 
 class AppSettings(BaseModel):

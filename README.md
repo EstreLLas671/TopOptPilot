@@ -1,6 +1,6 @@
-# TopOptPilot V6.1.0 — 知识驱动的拓扑优化科研智能体
+# TopOptPilot V6.1.1 — 知识驱动的拓扑优化科研智能体
 
-> **V6.1.0 核心升级**：Windows 正式入口仍为 Tauri 2 + React 原生桌面应用（v6.1.0），
+> **V6.1.1 核心升级**：Windows 正式入口仍为 Tauri 2 + React 原生桌面应用（v6.1.1），
 > 在 V6.0.0 基础上升级为**知识驱动的科研智能体系统**。官方 `@earendil-works/pi-coding-agent`
 > 以 JSON-RPC 常驻运行，每个 Research ID 对应一个可恢复 Pi session，由 **Pi Research Lead**
 > 统一编排 **Guide / Hypothesis / Planner / Executor / Reviewer / Report Writer** 六个 Subagent。
@@ -44,7 +44,7 @@ TopOptPilot 不是"自然语言调一次拓扑优化"的工具。它是：
 **核心原则**：大模型不代替有限元求解器。Pi 负责科研意图、证据解释与工具编排；
 Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责确定性计算，Evaluator 客观裁决。
 
-## V6.1.0 快速开始
+## V6.1.1 快速开始
 
 > 已配置好 Python/Node 的老协作者可用下面的最短路径；从零开始的完整步骤见下文
 > **"本地环境配置（克隆到运行）"** 一节。
@@ -64,7 +64,7 @@ python launch.py
 powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
 ```
 
-安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`（TopOptPilot_6.1.0_x64-setup.exe，~220 MB），最终用户无需预装
+安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`（TopOptPilot_6.1.1_x64-setup.exe，~220 MB），最终用户无需预装
 Python、Node 或 Rust；MATLAB 本体不随包分发，首次验收版本为 R2024a。
 
 ### V6.1 新功能

@@ -42,6 +42,9 @@ config = set_default(config, 'min_iterations', accuracyDefaults.min_iterations);
 config = set_default(config, 'change_tolerance', accuracyDefaults.change_tolerance);
 config = set_default(config, 'objective_tolerance', accuracyDefaults.objective_tolerance);
 config = set_default(config, 'oc_tol_lambda', accuracyDefaults.oc_tol_lambda);
+% Heaviside projection sharpness; beta=1 reduces to the SIMP filter-only limit.
+config = set_default(config, 'beta', 1.0);
+validateattributes(config.beta, {'numeric'}, {'scalar','real','finite','>=',1,'<=',64});
 config = set_default(config, 'oc_max_bisect', accuracyDefaults.oc_max_bisect);
 config = set_default(config, 'filter_strategy', 'fixed');
 config = set_default(config, 'rmin_start', 3.0);
@@ -158,10 +161,14 @@ penalHistory = zeros(config.max_iterations, 1);
 relativeObjectiveHistory = inf(config.max_iterations, 1);
 
 for iteration = 1:config.max_iterations
+    % Heaviside projection sharpened by config.beta; the FE solve and the
+    % objective/sensitivity chain use the projected physical density.
+    [xProj, dProj] = project_heaviside_3d(x, config.beta);
     penalNow = scheduled_penal(iteration, config.max_iterations, config);
-    U = FE_solver_3d(nelx, nely, nelz, x, penalNow, bcConfig);
+    U = FE_solver_3d(nelx, nely, nelz, xProj, penalNow, bcConfig);
     [objective, dc] = compliance_and_sensitivity_3d( ...
-        nelx, nely, nelz, x, penalNow, config.Emin, U, KE);
+        nelx, nely, nelz, xProj, penalNow, config.Emin, U, KE);
+    dc = dc .* dProj;
     dc(~domainMask) = 0;
 
     filterConfig.iteration = iteration;
@@ -201,21 +208,24 @@ for iteration = 1:config.max_iterations
 end
 
 % 用最终密度重新分析，使应力图和 result.objective 与最终构型一致。
+finalProj = project_heaviside_3d(x, config.beta);
 finalPenal = penalHistory(iteration);
-[Ufinal, Kfinal] = FE_solver_3d(nelx, nely, nelz, x, finalPenal, bcConfig);
+[Ufinal, Kfinal] = FE_solver_3d(nelx, nely, nelz, finalProj, finalPenal, bcConfig);
 [finalObjective, ~] = compliance_and_sensitivity_3d( ...
-    nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, KE);
+    nelx, nely, nelz, finalProj, finalPenal, config.Emin, Ufinal, KE);
 [vonMises, stress] = compute_von_mises_3d( ...
-    nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, ...
+    nelx, nely, nelz, finalProj, finalPenal, config.Emin, Ufinal, ...
     config.stress_measure, config.E, config.nu);
 objectiveHistory(iteration) = finalObjective;
 
 result = struct();
-result.x = x;
+result.x = finalProj;
+result.raw_x = x;
 result.domain_mask = domainMask;
 result.iterations = iteration;
 result.objective = finalObjective;
 result.volume_fraction = mean(x(domainMask));
+result.projected_volume_fraction = mean(finalProj(domainMask));
 result.objective_history = objectiveHistory(1:iteration);
 result.change_history = changeHistory(1:iteration);
 result.radius_history = radiusHistory(1:iteration);
@@ -308,6 +318,19 @@ function config = set_default(config, name, value)
 if ~isfield(config, name) || isempty(config.(name))
     config.(name) = value;
 end
+end
+
+function [xProj, dProj] = project_heaviside_3d(x, beta)
+%Smooth Heaviside projection (beta-continuation); see project_heaviside (2D).
+if beta <= 1.0
+    xProj = x;
+    dProj = ones(size(x));
+    return;
+end
+tanhHalf = tanh(0.5*beta);
+xProj = (tanhHalf + tanh(beta*(x - 0.5))) / (2*tanhHalf);
+sech2 = 1 - tanh(beta*(x - 0.5)).^2;
+dProj = (beta * sech2) / (2*tanhHalf);
 end
 
 function defaults = accuracy_defaults(accuracy, isLBracket)

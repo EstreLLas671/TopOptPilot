@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -32,6 +33,8 @@ class MatlabMcpWorker:
             "gpu_available": None, "mex_2d_available": False, "mex_3d_available": False,
             "probed": False,
         }
+        self._warmup: dict[str, Any] | None = None
+        self._run_stats: list[dict[str, Any]] = []
 
     def submit(self, task: dict[str, Any], research_id: str, experiment_id: str,
                done: Callable[[str, Future], None] | None = None) -> tuple[str, Future]:
@@ -52,11 +55,21 @@ class MatlabMcpWorker:
                    "task_id": task.get("task_id"), "operation": "solve"}
         task_path, result_path = job_dir / "task.json", job_dir / "raw_result.json"
         task_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        scheduled_at = time.monotonic()
         raw = self.gateway.run_topopt_task(task_path, result_path)
         if isinstance(raw.get("capabilities"), dict):
             self._capability_cache.update(raw["capabilities"])
             self._capability_cache["probed"] = True
-        return self._normalize(raw, task, dimension, task_path, result_path)
+        result = self._normalize(raw, task, dimension, task_path, result_path)
+        self._run_stats.append({
+            "research_id": research_id, "experiment_id": experiment_id,
+            "dimension": dimension,
+            "variant": raw.get("solver_variant") or result.get("solver", {}).get("solver_variant"),
+            "elapsed_seconds": round(time.monotonic() - scheduled_at, 3),
+            "iterations": result.get("solver", {}).get("iterations"),
+        })
+        self._run_stats[:] = self._run_stats[-20:]
+        return result
 
     @staticmethod
     def _config(task: dict[str, Any], dimension: int) -> dict[str, Any]:
@@ -73,6 +86,7 @@ class MatlabMcpWorker:
             "geometry": task.get("geometry") or {},
             "E": float(params.get("E", 1.0)),
             "nu": float(params.get("nu", 0.3)),
+            "beta": float(params.get("beta", 1.0)),
             "solver_variant": str(task.get("solver_variant", "auto")),
             "acceleration_mode": str(task.get("acceleration_mode", "auto")),
         }
@@ -101,7 +115,7 @@ class MatlabMcpWorker:
                 raise MatlabMcpError(f"Custom mask must have {dimension} dimensions")
         if not (.1 <= config["volfrac"] <= .7 and .75 <= config["rmin"] <= 4
                 and 1 <= config["penal"] <= 5 and config["E"] > 0
-                and 0 <= config["nu"] < .5):
+                and 0 <= config["nu"] < .5 and 1 <= config["beta"] <= 64):
             raise MatlabMcpError("Task escaped the approved MATLAB parameter envelope")
         return config
 
@@ -145,7 +159,33 @@ class MatlabMcpWorker:
         }
 
     def health(self) -> dict[str, Any]:
-        return self.gateway.health()
+        health = self.gateway.health()
+        health["startup_ms"] = getattr(self.connector, "startup_ms", None)
+        health["warmup"] = self._warmup
+        health["last_runs"] = list(self._run_stats[-5:])
+        return health
+
+    def warmup(self) -> dict[str, Any]:
+        """Cold-start the MCP process and MATLAB session, then probe capabilities.
+
+        Warmup deliberately runs only the capabilities probe — it never executes a
+        solver iteration — so first experiment latency excludes MATLAB startup cost.
+        """
+        with self._lock:
+            started_at = time.monotonic()
+            self.connector.start()
+            cold_start_ms = round((time.monotonic() - started_at) * 1000)
+            probe_started = time.monotonic()
+            capabilities = self.capabilities(probe=True)
+            probe_ms = round((time.monotonic() - probe_started) * 1000)
+            self._warmup = {
+                "cold_start_ms": cold_start_ms,
+                "probe_ms": probe_ms,
+                "mcp_startup_ms": getattr(self.connector, "startup_ms", None),
+                "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "capabilities": capabilities,
+            }
+            return dict(self._warmup)
 
     def capabilities(self, *, probe: bool = False) -> dict[str, Any]:
         if probe:
