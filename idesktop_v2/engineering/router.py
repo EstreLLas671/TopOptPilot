@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
+import sys
 from typing import Literal
 from pathlib import Path, PurePosixPath
 
@@ -34,7 +36,12 @@ _solver_preference: Literal["local-matlab", "compiled-runtime"] = "local-matlab"
 def engineering_health() -> dict[str, object]:
     runtime_inventory.snapshot()
     matlab_inventory.snapshot()
-    return {"status": "ok", "service": "engineering", "version": __version__, "capabilities": {"localMatlab": "unprobed", "compiledRuntime": "unprobed"}}
+    mode = "packaged" if getattr(sys, "frozen", False) else "source"
+    return {
+        "status": "ok", "service": "engineering", "version": __version__,
+        "capabilities": {"localMatlab": "unprobed", "compiledRuntime": "optional"},
+        "python": {"mode": mode, "version": platform.python_version(), "bundled": mode == "packaged"},
+    }
 
 
 @router.get("/matlab/installations")

@@ -82,6 +82,93 @@ def test_internal_headless_entry_injects_only_a_trusted_environment_profile(monk
     assert captured[0].runtime_profile_id == "runtime-headless"
 
 
+def test_local_matlab_run_uses_full_probe_timeout(monkeypatch, tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    installation = SimpleNamespace(executable=r"C:\MATLAB\R2024b\bin\matlab.exe")
+    record = _Run(
+        "run-local-matlab",
+        "engineering",
+        SolverLane.LOCAL_MATLAB,
+        {},
+        "a" * 64,
+        run_dir,
+    )
+    captured: dict[str, float] = {}
+
+    async def fake_probe(_installation, *, timeout_seconds: float = 45.0):
+        captured["timeout_seconds"] = timeout_seconds
+        return SimpleNamespace(usable=True)
+
+    monkeypatch.setenv("IDESKTOP_MATLAB_PATH", installation.executable)
+    monkeypatch.setattr(engineering_runs, "engineering_matlab_source_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        engineering_runs,
+        "discover_matlab_installations",
+        lambda **_kwargs: [installation],
+    )
+    monkeypatch.setattr(engineering_runs, "probe_matlab_installation", fake_probe)
+    monkeypatch.setattr(
+        engineering_runs,
+        "run_matlab_batch",
+        lambda *_args, **_kwargs: {
+            "status": "completed",
+            "objective": 1.0,
+            "volume_fraction": 0.4,
+            "iterations": 1,
+            "provenance": {"resultKind": "solver", "backend": "local-matlab"},
+        },
+    )
+
+    RunManager()._run_external(record, None)
+
+    assert captured["timeout_seconds"] == 45.0
+
+
+def test_external_matlab_progress_callback_updates_events_without_rewriting_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    installation = SimpleNamespace(executable=r"C:\MATLAB\R2024b\bin\matlab.exe")
+    record = _Run("run-local-progress", "engineering", SolverLane.LOCAL_MATLAB, {}, "a" * 64, run_dir)
+
+    async def fake_probe(_installation, **_kwargs):
+        return SimpleNamespace(usable=True)
+
+    def fake_runner(*_args, **kwargs):
+        kwargs["progress"](3, {"compliance": 12.5, "volume_fraction": 0.4, "gray_ratio": 0.2})
+        return {
+            "status": "completed",
+            "objective": 12.5,
+            "volume_fraction": 0.4,
+            "gray_ratio": 0.2,
+            "iterations": 3,
+            "provenance": {"resultKind": "solver", "backend": "local-matlab"},
+        }
+
+    monkeypatch.setenv("IDESKTOP_MATLAB_PATH", installation.executable)
+    monkeypatch.setattr(engineering_runs, "engineering_matlab_source_root", lambda: tmp_path)
+    monkeypatch.setattr(engineering_runs, "discover_matlab_installations", lambda **_kwargs: [installation])
+    monkeypatch.setattr(engineering_runs, "probe_matlab_installation", fake_probe)
+    monkeypatch.setattr(engineering_runs, "run_matlab_batch", fake_runner)
+
+    RunManager()._worker(record, None)
+
+    progress_events = [event for event in record.events if event["type"] == "progress"]
+    assert len(progress_events) == 1
+    assert progress_events[0]["iteration"] == 3
+    assert progress_events[0]["metrics"] == {
+        "iteration": 3.0,
+        "iterations": 3.0,
+        "compliance": 12.5,
+        "volumeFraction": 0.4,
+        "grayRatio": 0.2,
+    }
+    assert not (run_dir / "snapshots" / "iteration-0003.json").exists()
+
+
 def test_invalid_profile_never_falls_back_and_has_unverified_provenance(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path / "data"))
     runtime_root = tmp_path / "runtime"

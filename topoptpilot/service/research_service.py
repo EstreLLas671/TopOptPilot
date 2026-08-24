@@ -33,7 +33,8 @@ from topoptpilot.schemas.models import AppSettings
 from topoptpilot.tools import ResearchTools
 from topoptpilot.agent_runtime import PiBridge
 from topoptpilot.reports import ResearchReportGenerator
-from topoptpilot.security import get_qwen_api_key
+from topoptpilot.security import (delete_qwen_api_key, get_qwen_api_key,
+                                  qwen_api_key_source, set_qwen_api_key)
 from agent.llm.client import PiAgentClient
 from mcp.matlab_mcp import MatlabMcpError, MatlabMcpWorker
 
@@ -126,7 +127,7 @@ class ResearchService:
         persisted = self.store.get_app_settings() or {}
         updated_at = persisted.pop("updated_at", None)
         settings = AppSettings.model_validate(_deep_merge(DEFAULT_APP_SETTINGS, persisted)).model_dump()
-        settings["api_key_status"] = ("environment" if bool(os.getenv("DASHSCOPE_API_KEY")) else "not_configured")
+        settings["api_key_status"] = qwen_api_key_source()
         settings["updated_at"] = updated_at
         return settings
 
@@ -183,7 +184,7 @@ class ResearchService:
             raise ValueError("Settings patch must be an object")
         forbidden = {"api_key", "apiKey", "DASHSCOPE_API_KEY", "key", "secret", "token"}
         if any(key in forbidden for key in patch):
-            raise ValueError("API keys must be supplied through the DASHSCOPE_API_KEY environment variable")
+            raise ValueError("API keys must use the dedicated Windows Credential Manager endpoint")
         current = self.get_settings()
         current.pop("api_key_status", None)
         current.pop("updated_at", None)
@@ -243,6 +244,18 @@ class ResearchService:
         self.pi_runtime = PiBridge(self)
         return self.pi_runtime.health()
 
+    def set_agent_key(self, api_key: str) -> dict[str, Any]:
+        set_qwen_api_key(api_key)
+        self.agent_client.update_config(api_key=get_qwen_api_key())
+        self._qwen_validation = {"status": "CONFIGURED", "checked_at": None, "error": None}
+        return {"configured": True, "source": qwen_api_key_source()}
+
+    def delete_agent_key(self) -> dict[str, Any]:
+        deleted = delete_qwen_api_key()
+        self.agent_client.api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        self._qwen_validation = {"status": "CONFIGURED" if self.agent_client.api_key else "NOT_CONFIGURED",
+                                 "checked_at": None, "error": None}
+        return {"deleted": deleted, "source": qwen_api_key_source()}
     def test_agent_settings(self) -> dict[str, Any]:
         settings = self.get_settings()["agent"]
         key = get_qwen_api_key()

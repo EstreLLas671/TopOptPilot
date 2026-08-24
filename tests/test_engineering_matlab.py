@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import threading
 from pathlib import Path
 
+from idesktop_v2.engineering import matlab as matlab_module
 from idesktop_v2.engineering.matlab import (
     MatlabInstallation,
     classify_runtime_root,
@@ -104,3 +107,80 @@ def test_probe_accepts_only_a_complete_batch_marker_transcript() -> None:
     assert result.usable is True
     assert result.version == "25.2.0"
     assert result.error is None
+
+def test_default_probe_timeout_terminates_matlab_process_tree(monkeypatch) -> None:
+    terminated: list[int] = []
+
+    class BlockingStdout:
+        def __init__(self) -> None:
+            self.closed = threading.Event()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.closed.wait()
+            raise StopIteration
+
+        def close(self) -> None:
+            self.closed.set()
+
+    class TimeoutProcess:
+        pid = 4242
+        returncode = None
+        stdout = BlockingStdout()
+
+        def poll(self):
+            return None
+
+    process = TimeoutProcess()
+    monkeypatch.setattr(matlab_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(matlab_module, "_terminate_process_tree", lambda value: terminated.append(value.pid))
+    installation = MatlabInstallation("R2024b", "", r"C:\MATLAB\bin\matlab.exe", "settings")
+
+    result = asyncio.run(probe_matlab_installation(installation, timeout_seconds=0.01))
+
+    assert result.usable is False
+    assert "timed out" in result.diagnostic
+    assert terminated == [4242]
+
+def test_default_probe_accepts_complete_stream_before_process_exit(monkeypatch) -> None:
+    terminated: list[int] = []
+
+    class MarkerStream:
+        def __init__(self) -> None:
+            self.lines = iter([
+                "IDESKTOP_MATLAB_BEGIN\n",
+                "5\n",
+                "VERSION=24.2.0.2712019 (R2024b)\n",
+                "IDESKTOP_MATLAB_END\n",
+            ])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.lines)
+
+        def close(self) -> None:
+            pass
+
+    class RunningProcess:
+        pid = 4343
+        returncode = None
+        stdout = MarkerStream()
+
+        def poll(self):
+            return None
+
+    process = RunningProcess()
+    monkeypatch.setattr(matlab_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(matlab_module, "_terminate_process_tree", lambda value: terminated.append(value.pid))
+    installation = MatlabInstallation("R2024b", "", r"C:\MATLAB\bin\matlab.exe", "settings")
+
+    result = asyncio.run(probe_matlab_installation(installation))
+
+    assert result.usable is True
+    assert result.version == "24.2.0.2712019 (R2024b)"
+    assert "complete handshake" in result.diagnostic
+    assert terminated == [4343]

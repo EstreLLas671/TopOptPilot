@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import secrets
 import socket
@@ -41,5 +42,10 @@ def main() -> int:
     return 0
 
 
+def run_entrypoint() -> int:
+    multiprocessing.freeze_support()
+    return main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_entrypoint())

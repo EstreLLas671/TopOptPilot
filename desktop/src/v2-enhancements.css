@@ -10,7 +10,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .resizable-workspace {
   position: relative;
   display: grid;
-  grid-template-columns: var(--left-track) var(--left-handle) minmax(320px, 1fr) var(--right-handle) var(--right-track);
+  grid-template-columns: var(--left-track) var(--left-handle) minmax(0, 1fr) var(--right-handle) var(--right-track);
   grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
@@ -23,7 +23,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   min-width: 0; min-height: 0; overflow: hidden;
 }
 .resizable-workspace .workspace-center { min-width: 0; min-height: 0; overflow: hidden; }
-.resizable-workspace .workspace-right { grid-column: 5; grid-row: 1; overflow: auto; }
+.resizable-workspace .workspace-right { grid-column: 5; grid-row: 1; flex-direction: column; overflow: auto; }
 .resizable-workspace .workspace-bottom { position: relative; min-width: 0; min-height: 0; overflow: auto; border-top: 1px solid #dce5f0; background: #fff; }
 .resizable-workspace .panel-resize { z-index: 3; border: 0; padding: 0; display: grid; place-items: center; color: #9aacbf; background: #f4f7fb; cursor: ew-resize; }
 .resizable-workspace .panel-resize:hover, .resizable-workspace .panel-resize:focus-visible { color: #2e73ca; background: #eaf2fc; outline: 0; }

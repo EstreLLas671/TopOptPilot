@@ -93,9 +93,27 @@ def _desktop_gate() -> dict:
     )
     executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
     installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
-    return {"pass": executable.exists() and installer.exists(),
-            "executable": str(executable), "installer": str(installer)}
-
+    resources = release_dir / "resources"
+    required_resources = (
+        "bin/topoptpilot-backend.exe",
+        "node/node.exe",
+        "vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe",
+        "mcp/matlab_mcp/topopt-tools.json",
+        "求解器模块/2D/TopOpt_integrated/TopOpt_integrated/topopt_main.m",
+        "求解器模块/TopOpt-3D/TopOpt-3D/topopt3d_main.m",
+    )
+    missing_resources = [relative for relative in required_resources if not (resources / relative).is_file()]
+    runtime_in_standard_package = (resources / "runtime").exists()
+    passed = executable.is_file() and installer.is_file() and not missing_resources and not runtime_in_standard_package
+    return {
+        "pass": passed,
+        "package_kind": "standard-local-matlab",
+        "runtime_optional": True,
+        "runtime_in_standard_package": runtime_in_standard_package,
+        "missing_resources": missing_resources,
+        "executable": str(executable),
+        "installer": str(installer),
+    }
 
 def _cases_gate_passes(cases: dict) -> bool:
     """Require the staged evidence case to reach F3 through MATLAB MCP."""
@@ -129,6 +147,7 @@ def _v6_source_gates() -> dict:
     canvas = (ROOT / "desktop/src/ExperimentCanvas.tsx").read_text(encoding="utf-8")
     styles = (ROOT / "desktop/src/styles.css").read_text(encoding="utf-8")
     api = (ROOT / "topoptpilot/api/fastapi_app.py").read_text(encoding="utf-8")
+    credentials = (ROOT / "topoptpilot/security/credentials.py").read_text(encoding="utf-8")
     subagents = (ROOT / "topoptpilot/agent_runtime/subagents.py").read_text(encoding="utf-8")
     knowledge = (ROOT / "topoptpilot/knowledge/base.py").read_text(encoding="utf-8")
     fidelity = (ROOT / "topoptpilot/fidelity/manager.py").read_text(encoding="utf-8")
@@ -159,8 +178,12 @@ def _v6_source_gates() -> dict:
         "fact_grounded_reports": {"pass": all(value in report for value in (
             "未计算", "evaluation", "artifact_lineage", "SHA256", "不得输出成功结论"))},
         "credential_not_in_sqlite": {"pass": "api_key" not in store.lower()
-            and "/api/settings/agent-key" not in api
-            and "DASHSCOPE_API_KEY" in service},
+            and "/api/settings/agent-key" in api
+            and "/api/settings/agent-credential" in api
+            and "DASHSCOPE_API_KEY" in service
+            and 'TARGET = "TopOptPilot/QwenOpenAICompatible"' in credentials
+            and "CredWriteW" in credentials and "CredReadW" in credentials
+            and "CredDeleteW" in credentials},
     }
 
 

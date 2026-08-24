@@ -8,13 +8,14 @@ error instead.
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 class MatlabInfrastructureError(RuntimeError):
@@ -111,14 +112,83 @@ def _result_files(output_dir: Path) -> list[Path]:
     return [path for path in candidates if path.is_file()]
 
 
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def publish_manifest_progress(
+    output_dir: Path,
+    seen_iterations: set[int],
+    progress: Callable[[int, dict[str, Any]], None] | None = None,
+) -> None:
+    """Publish strictly increasing valid frames; callback failures remain retryable."""
+    if progress is None:
+        return
+    try:
+        manifest = json.loads(
+            (output_dir / "snapshots" / "manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if not isinstance(manifest, dict):
+        return
+    frames = manifest.get("frames", [])
+    if isinstance(frames, dict):
+        frames = [frames]
+    if not isinstance(frames, list):
+        return
+
+    high_water = max(seen_iterations, default=0)
+    pending: list[tuple[int, dict[str, Any]]] = []
+    for frame in frames:
+        if not isinstance(frame, dict):
+            continue
+        raw_iteration = frame.get("iteration")
+        if isinstance(raw_iteration, bool):
+            continue
+        try:
+            iteration = int(raw_iteration)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if iteration < 1 or iteration != raw_iteration or iteration <= high_water:
+            continue
+        compliance = _finite_number(frame.get("objective"))
+        volume_fraction = _finite_number(frame.get("volume_fraction"))
+        if compliance is None or volume_fraction is None:
+            continue
+        state = {
+            "compliance": compliance,
+            "volume_fraction": volume_fraction,
+        }
+        if "gray_ratio" in frame:
+            state["gray_ratio"] = _finite_number(frame.get("gray_ratio"))
+        pending.append((iteration, state))
+
+    for iteration, state in sorted(pending, key=lambda item: item[0]):
+        if iteration in seen_iterations:
+            continue
+        try:
+            progress(iteration, state)
+        except Exception:
+            return
+        seen_iterations.add(iteration)
+
+
 def run_matlab_batch(
-    executable: Path,
+    executable: Path | str,
     task: dict[str, Any],
     output_dir: Path,
     *,
     source_root: Path,
     cancel=None,
     timeout_seconds: float | None = None,
+    progress: Callable[[int, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run ``run_topopt_job.m`` and return its verified summary.
 
@@ -126,7 +196,7 @@ def run_matlab_batch(
     is terminated on cancellation/timeout and a completed result requires both
     a terminal ``status.json`` and ``result_summary.json``.
     """
-    executable = executable.resolve()
+    executable = Path(executable).resolve()
     if not executable.is_file():
         raise MatlabInfrastructureError(f"MATLAB 可执行文件不存在：{executable}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +206,10 @@ def run_matlab_batch(
     command = [str(executable), "-wait", "-batch", f"addpath('{_matlab_quote(source_root)}'); {expression}"]
     started = time.monotonic()
     process = subprocess.Popen(command, cwd=output_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    output_queue: queue.Queue[str | None] = queue.Queue()
+    reader = threading.Thread(target=_read_process_output, args=(process, output_queue), daemon=True)
+    reader.start()
+    seen_iterations: set[int] = set()
     log_path = output_dir / "solver.log"
     try:
         with log_path.open("a", encoding="utf-8", errors="replace") as log:
@@ -146,16 +220,12 @@ def run_matlab_batch(
                 if timeout_seconds is not None and time.monotonic() - started > timeout_seconds:
                     process.terminate()
                     raise MatlabInfrastructureError("MATLAB 工程运行超时")
-                if process.stdout is not None:
-                    line = process.stdout.readline()
-                    if line:
-                        log.write(line)
-                        log.flush()
+                _drain_process_output(output_queue, log)
+                publish_manifest_progress(output_dir, seen_iterations, progress)
                 time.sleep(0.05)
-            if process.stdout is not None:
-                remainder = process.stdout.read()
-                if remainder:
-                    log.write(remainder)
+            reader.join(timeout=1)
+            _drain_process_output(output_queue, log)
+            publish_manifest_progress(output_dir, seen_iterations, progress)
         status_path = output_dir / "status.json"
         if not status_path.is_file():
             raise MatlabInfrastructureError(f"MATLAB 未生成 status.json（退出码 {process.returncode}）")
@@ -230,6 +300,7 @@ def run_runtime_solver(
     runtime_root: Path,
     cancel=None,
     timeout_seconds: float | None = None,
+    progress: Callable[[int, dict[str, Any]], None] | None = None,
     parent_env: Mapping[str, str] = os.environ,
 ) -> dict[str, Any]:
     """Run a verified compiled solver using the same status/result contract."""
@@ -240,12 +311,14 @@ def run_runtime_solver(
     output_queue: queue.Queue[str | None] = queue.Queue()
     reader = threading.Thread(target=_read_process_output, args=(process, output_queue), daemon=True)
     reader.start()
+    seen_iterations: set[int] = set()
     started = time.monotonic()
     log_path = output_dir / "solver.log"
     try:
         with log_path.open("a", encoding="utf-8", errors="replace") as log:
             while process.poll() is None:
                 _drain_process_output(output_queue, log)
+                publish_manifest_progress(output_dir, seen_iterations, progress)
                 if cancel is not None and cancel():
                     _terminate_process_tree(process)
                     raise MatlabInfrastructureError("编译 Runtime 工程运行已取消")
@@ -255,6 +328,7 @@ def run_runtime_solver(
                 time.sleep(0.05)
             reader.join(timeout=1)
             _drain_process_output(output_queue, log)
+            publish_manifest_progress(output_dir, seen_iterations, progress)
         status = read_matlab_status(output_dir / "status.json")
         if process.returncode != 0 or status.get("state") != "completed":
             raise MatlabInfrastructureError(f"编译 Runtime 求解失败：{status.get('message', '未知错误')}")
@@ -272,4 +346,4 @@ def run_runtime_solver(
         raise MatlabInfrastructureError(f"编译 Runtime 输出无效：{exc}") from exc
     finally:
         if process.poll() is None:
-            process.terminate()
+            _terminate_process_tree(process)

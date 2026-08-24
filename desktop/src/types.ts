@@ -41,7 +41,7 @@ export interface AppSettings {
   locale: Locale; ui_density: "compact" | "standard" | "comfortable"; startup_behavior: "resume_last" | "research_list";
   theme: "light" | "dark" | "system" | "custom";
   custom_theme: { accent: string; background: string; surface: string; text: string };
-  api_key_status: "environment" | "not_configured"; updated_at?: string;
+  api_key_status: "environment" | "credential_manager" | "not_configured"; updated_at?: string;
   agent: { model:string; base_url:string; timeout_seconds:number; max_retries:number; safe_mode:boolean };
   compute: { matlab_root?:string|null; python_workers:number; matlab_timeout_seconds:number; matlab_retry_count:number };
   new_research: { mode:string; budget_total:number; budgets:Record<string,number>; constraints:Record<string,unknown>; material:Record<string,number>; experiment:Record<string,unknown> };

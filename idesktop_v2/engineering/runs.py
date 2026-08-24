@@ -173,6 +173,23 @@ class RunManager:
             record.files = [self._ref(record.run_dir, path) for path in files]
             record.snapshots = [self._ref(record.run_dir, path) for path in snapshots]
 
+    def _publish_progress(
+        self,
+        record: _Run,
+        iteration: int,
+        state: dict[str, Any],
+    ) -> None:
+        with record.lock:
+            record.metrics.update({
+                "iteration": float(iteration),
+                "iterations": float(iteration),
+                "compliance": float(state["compliance"]) if state.get("compliance") is not None else None,
+                "volumeFraction": float(state["volume_fraction"]) if state.get("volume_fraction") is not None else None,
+                "grayRatio": float(state["gray_ratio"]) if state.get("gray_ratio") is not None else None,
+            })
+            metrics = dict(record.metrics)
+        self._emit(record, {"type": "progress", "iteration": iteration, "metrics": metrics})
+
     def _worker(self, record: _Run, time_limit: float | None) -> None:
         with record.lock:
             if record.cancel_event.is_set():
@@ -189,21 +206,20 @@ class RunManager:
                 snapshot = record.run_dir / "snapshots" / f"iteration-{iteration:04d}.json"
                 snapshot.parent.mkdir(parents=True, exist_ok=True)
                 snapshot.write_text(json.dumps(state, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
-                with record.lock:
-                    record.metrics.update({
-                        "iteration": float(iteration),
-                        "iterations": float(iteration),
-                        "compliance": float(state["compliance"]) if state.get("compliance") is not None else None,
-                        "volumeFraction": float(state["volume_fraction"]) if state.get("volume_fraction") is not None else None,
-                        "grayRatio": float(state["gray_ratio"]) if state.get("gray_ratio") is not None else None,
-                    })
-                self._emit(record, {"type": "progress", "iteration": iteration, "metrics": dict(record.metrics)})
+                self._publish_progress(record, iteration, state)
+
 
             if record.lane is SolverLane.PYTHON_FEM:
                 from solver.topopt_engine import run_topopt
                 result = run_topopt(record.task, backend="python", time_limit=time_limit, progress=progress, cancel=record.cancel_event.is_set)
             else:
-                result = self._run_external(record, time_limit)
+                result = self._run_external(
+                    record,
+                    time_limit,
+                    progress=lambda iteration, state: self._publish_progress(
+                        record, iteration, state
+                    ),
+                )
             provenance = result.get("provenance")
             if isinstance(provenance, dict):
                 record.provenance = {str(key): str(value) for key, value in provenance.items()}
@@ -255,17 +271,17 @@ class RunManager:
             self._index_artifacts(record)
             self._emit(record, {"type": "error", "status": record.status.value, "message": str(exc)})
 
-    def _run_external(self, record: _Run, time_limit: float | None) -> dict[str, Any]:
+    def _run_external(self, record: _Run, time_limit: float | None, progress=None) -> dict[str, Any]:
         source_root = engineering_matlab_source_root()
         if record.lane is SolverLane.LOCAL_MATLAB:
             configured = os.environ.get("IDESKTOP_MATLAB_PATH")
             installations = discover_matlab_installations(configured_path=configured, registry_roots=[], standard_roots=[], where_executables=[], path_value="") if configured else discover_matlab_installations()
             if not installations:
                 raise MatlabInfrastructureError("未发现可验证的本机 MATLAB 安装")
-            probe = asyncio.run(probe_matlab_installation(installations[0], timeout_seconds=12.0))
+            probe = asyncio.run(probe_matlab_installation(installations[0]))
             if not probe.usable:
                 raise MatlabInfrastructureError(f"MATLAB 探针失败：{probe.diagnostic}")
-            summary = run_matlab_batch(installations[0].executable, record.task, record.run_dir, source_root=source_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit)
+            summary = run_matlab_batch(installations[0].executable, record.task, record.run_dir, source_root=source_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit, progress=progress)
         elif record.lane is SolverLane.COMPILED_RUNTIME:
             try:
                 profile = runtime_profiles.resolve(record.runtime_profile_id or "")
@@ -273,7 +289,7 @@ class RunManager:
                 raise MatlabInfrastructureError(str(exc), code=getattr(exc, "code", "RUNTIME_PROFILE_STALE")) from exc
             staged_solver = stage_runtime_solver(profile, record.run_dir)
             command = build_runtime_command(staged_solver, record.run_dir / "config.json", record.run_dir)
-            summary = run_runtime_solver(command, record.task, record.run_dir, runtime_root=profile.runtime_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit)
+            summary = run_runtime_solver(command, record.task, record.run_dir, runtime_root=profile.runtime_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit, progress=progress)
             provenance = summary.setdefault("provenance", {})
             if isinstance(provenance, dict):
                 provenance["runtimeRelease"] = profile.runtime_release

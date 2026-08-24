@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import queue
 import os
 import re
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
 from typing import Any, Callable
 
 from idesktop_v2.artifacts.models import ErrorEnvelope, ErrorSource
+from idesktop_v2.engineering.matlab_runner import _terminate_process_tree
 
 
 _DISCOVERY_SOURCES = {"settings", "registry", "standard", "path", "where"}
@@ -245,6 +249,68 @@ def _parse_probe(transcript: str, begin: str, end: str) -> str | None:
     return version or None
 
 
+def _read_probe_output(process: subprocess.Popen[str], output: queue.Queue[str | None]) -> None:
+    try:
+        if process.stdout is not None:
+            for line in process.stdout:
+                output.put(line)
+    except (OSError, ValueError):
+        pass
+    finally:
+        output.put(None)
+
+
+def _run_matlab_probe_process(
+    executable: str, command: list[str], timeout: float, end_marker: str
+) -> tuple[int | None, str]:
+    try:
+        process = subprocess.Popen(
+            [executable, *command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        return None, str(exc)
+    output: queue.Queue[str | None] = queue.Queue()
+    reader = threading.Thread(target=_read_probe_output, args=(process, output), daemon=True)
+    reader.start()
+    transcript: list[str] = []
+    deadline = time.monotonic() + timeout
+    stream_finished = False
+    while time.monotonic() < deadline:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            line = output.get(timeout=min(0.1, remaining))
+        except queue.Empty:
+            continue
+        if line is None:
+            stream_finished = True
+            break
+        transcript.append(line)
+        if line.strip() == end_marker:
+            _terminate_process_tree(process)
+            if process.stdout is not None:
+                process.stdout.close()
+            reader.join(timeout=1)
+            transcript.append("[probe cleanup: process tree terminated after complete handshake]\n")
+            return 0, "".join(transcript)
+    if stream_finished:
+        try:
+            return process.wait(timeout=1), "".join(transcript)
+        except subprocess.TimeoutExpired:
+            pass
+    _terminate_process_tree(process)
+    if process.stdout is not None:
+        process.stdout.close()
+    reader.join(timeout=1)
+    while True:
+        try:
+            line = output.get_nowait()
+        except queue.Empty:
+            break
+        if line is not None:
+            transcript.append(line)
+    return None, f"MATLAB probe timed out after {timeout:.1f} seconds\n{''.join(transcript)}".strip()
+
 async def probe_matlab_installation(
     installation: MatlabInstallation,
     *,
@@ -260,14 +326,7 @@ async def probe_matlab_installation(
     args = ["-wait", "-batch", expression]
     if runner is None:
         async def default_runner(executable: str, command: list[str], timeout: float) -> tuple[int | None, str]:
-            try:
-                completed = await asyncio.to_thread(
-                    subprocess.run, [executable, *command], capture_output=True, text=True,
-                    timeout=timeout, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                return completed.returncode, completed.stdout + "\\n" + completed.stderr
-            except (OSError, subprocess.TimeoutExpired) as exc:
-                return None, str(exc)
+            return await asyncio.to_thread(_run_matlab_probe_process, executable, command, timeout, end)
         runner = default_runner
     try:
         result = runner(installation.executable, args, timeout_seconds)

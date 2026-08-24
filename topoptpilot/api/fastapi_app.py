@@ -53,6 +53,10 @@ class LocaleRequest(BaseModel):
     locale: str
 
 
+class AgentKeyRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=2048)
+
+
 class SettingsPatchRequest(BaseModel):
     settings: dict
 
@@ -358,6 +362,39 @@ def patch_settings(request: SettingsPatchRequest):
 def test_agent_settings():
     return service.test_agent_settings()
 
+
+@app.post("/api/settings/agent-key")
+def set_agent_key(request: AgentKeyRequest):
+    try:
+        return service.set_agent_key(request.api_key)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/settings/agent-key")
+def delete_agent_key():
+    try:
+        return service.delete_agent_key()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/settings/agent-credential")
+def set_agent_credential(request: AgentKeyRequest):
+    """V6.1 documented endpoint name; identical behaviour to agent-key."""
+    try:
+        return service.set_agent_key(request.api_key)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/settings/agent-credential")
+def delete_agent_credential():
+    """V6.1 documented endpoint name; identical behaviour to agent-key."""
+    try:
+        return service.delete_agent_key()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 @app.post("/api/settings/restart-pi")
 def restart_pi_settings():

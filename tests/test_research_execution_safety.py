@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from concurrent.futures import Future
+import json
+import os
 import sqlite3
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from topoptpilot.api import fastapi_app
-from topoptpilot.executor.queue import ExperimentQueue, _run_solver
+from topoptpilot.executor.queue import ExperimentQueue, _atomic_json, _run_solver
 from topoptpilot.memory import ResearchStateStore
 from topoptpilot.schemas import ExperimentCreate, ResearchCreate
 from topoptpilot.service import research_service as research_service_module
@@ -185,6 +188,27 @@ def test_queue_worker_defensively_rejects_simulate(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr(experiments.solver_runner, "SolverRunner", _ForbiddenSolverRunner)
     with pytest.raises(ValueError, match="simulate"):
         _run_solver({}, "simulate", str(tmp_path / "progress.json"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows target handles block os.replace")
+def test_atomic_progress_write_waits_for_transient_windows_target_lock(tmp_path) -> None:
+    target = tmp_path / "progress.json"
+    target.write_text('{"iteration": 0}', encoding="utf-8")
+    locked_reader = target.open("r", encoding="utf-8")
+
+    def release_reader() -> None:
+        time.sleep(0.05)
+        locked_reader.close()
+
+    release = threading.Thread(target=release_reader)
+    release.start()
+    try:
+        _atomic_json(target, {"iteration": 1})
+    finally:
+        locked_reader.close()
+        release.join(timeout=1)
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"iteration": 1}
 
 
 class _BlockingQueue:

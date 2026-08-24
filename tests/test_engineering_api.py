@@ -9,15 +9,17 @@ def test_engineering_health_reports_unprobed_capabilities() -> None:
     response = TestClient(app).get("/api/engineering/health")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "ok",
-        "service": "engineering",
-        "version": "2.0.0",
-        "capabilities": {
-            "localMatlab": "unprobed",
-            "compiledRuntime": "unprobed",
-        },
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["service"] == "engineering"
+    assert payload["version"] == "2.0.0"
+    assert payload["capabilities"] == {
+        "localMatlab": "unprobed",
+        "compiledRuntime": "optional",
     }
+    assert payload["python"]["mode"] in {"source", "packaged"}
+    assert payload["python"]["version"]
+    assert payload["python"]["bundled"] is (payload["python"]["mode"] == "packaged")
 
 
 def test_engineering_health_uses_the_existing_desktop_token_guard(monkeypatch) -> None:

@@ -6,6 +6,24 @@ from topoptpilot import release_audit
 from topoptpilot.service import research_service
 
 
+STANDARD_RESOURCE_FILES = (
+    "bin/topoptpilot-backend.exe",
+    "node/node.exe",
+    "vendor/matlab-mcp-server/matlab-mcp-server-windows-x64.exe",
+    "mcp/matlab_mcp/topopt-tools.json",
+    "求解器模块/2D/TopOpt_integrated/TopOpt_integrated/topopt_main.m",
+    "求解器模块/TopOpt-3D/TopOpt-3D/topopt3d_main.m",
+)
+
+
+def _write_standard_resources(root) -> None:
+    resources = root / "desktop/src-tauri/target/release/resources"
+    for relative in STANDARD_RESOURCE_FILES:
+        path = resources / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"resource")
+
+
 def test_desktop_gate_reports_v2_executable_and_installer_paths(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
     executable = tmp_path / "desktop/src-tauri/target/release/idesktop-v2.exe"
@@ -14,6 +32,7 @@ def test_desktop_gate_reports_v2_executable_and_installer_paths(monkeypatch, tmp
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")
     installer.write_bytes(b"installer")
+    _write_standard_resources(tmp_path)
 
     result = release_audit._desktop_gate()
 
@@ -28,6 +47,7 @@ def test_desktop_gate_accepts_tauri_product_name_with_space(monkeypatch, tmp_pat
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")
     installer.write_bytes(b"installer")
+    _write_standard_resources(tmp_path)
 
     result = release_audit._desktop_gate()
 
@@ -92,3 +112,27 @@ def test_source_gates_match_v2_lanes_and_grounded_reports() -> None:
     assert "all_matlab_fidelities" not in gates
     assert gates["fidelity_lane_mapping"]["pass"] is True
     assert gates["fact_grounded_reports"]["pass"] is True
+    assert gates["credential_not_in_sqlite"]["pass"] is True
+
+def test_desktop_gate_rejects_missing_standard_resources_and_runtime_payload(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(release_audit, "ROOT", tmp_path)
+    executable = tmp_path / "desktop/src-tauri/target/release/idesktop-v2.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/iDeskTop v2_2.0.0_x64-setup.exe"
+    executable.parent.mkdir(parents=True)
+    installer.parent.mkdir(parents=True)
+    executable.write_bytes(b"exe")
+    installer.write_bytes(b"installer")
+    _write_standard_resources(tmp_path)
+    (tmp_path / "desktop/src-tauri/target/release/resources/node/node.exe").unlink()
+
+    missing = release_audit._desktop_gate()
+    assert missing["pass"] is False
+    assert "node/node.exe" in missing["missing_resources"]
+
+    _write_standard_resources(tmp_path)
+    runtime = tmp_path / "desktop/src-tauri/target/release/resources/runtime/runtime-manifest.json"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("{}", encoding="utf-8")
+    mixed = release_audit._desktop_gate()
+    assert mixed["pass"] is False
+    assert mixed["runtime_in_standard_package"] is True

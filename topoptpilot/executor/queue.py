@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
@@ -18,7 +19,14 @@ from typing import Any, Callable
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     temp = path.with_suffix(f".{os.getpid()}.tmp")
     temp.write_text(json.dumps(value, default=_json_default), encoding="utf-8")
-    os.replace(temp, path)
+    for attempt in range(20):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01)
 
 
 def _validate_queue_backend(backend: str) -> None:

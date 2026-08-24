@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     io::{BufRead, BufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
 };
@@ -20,6 +20,25 @@ struct BackendInfo {
 #[derive(Deserialize)]
 struct DesktopBootstrap {
     next_data_dir: Option<String>,
+}
+
+struct DesktopPaths {
+    bootstrap_path: PathBuf,
+    data_root: PathBuf,
+}
+
+fn resolve_desktop_paths(local_app_data: &Path, bootstrap_text: Option<&str>) -> DesktopPaths {
+    let default_root = local_app_data.join("iDeskTopV2");
+    let bootstrap_path = default_root.join("desktop-bootstrap.json");
+    let configured_root = bootstrap_text
+        .and_then(|text| serde_json::from_str::<DesktopBootstrap>(text).ok())
+        .and_then(|value| value.next_data_dir)
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    DesktopPaths {
+        bootstrap_path,
+        data_root: configured_root.unwrap_or(default_root),
+    }
 }
 
 struct BackendState(Arc<Mutex<Option<BackendInfo>>>);
@@ -56,21 +75,24 @@ fn spawn_backend(
             .resource_dir()
             .map_err(|error| error.to_string())?;
         let backend = resources.join("resources/bin/topoptpilot-backend.exe");
-        let app_data = app
+        let local_app_data = app
             .path()
-            .app_data_dir()
+            .local_data_dir()
             .map_err(|error| error.to_string())?;
-        std::fs::create_dir_all(&app_data).map_err(|error| error.to_string())?;
-        let bootstrap_path = app_data.join("desktop-bootstrap.json");
-        let configured_root = std::fs::read_to_string(&bootstrap_path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<DesktopBootstrap>(&text).ok())
-            .and_then(|value| value.next_data_dir)
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from);
+        let default_paths = resolve_desktop_paths(&local_app_data, None);
+        std::fs::create_dir_all(
+            default_paths
+                .bootstrap_path
+                .parent()
+                .ok_or("Desktop bootstrap parent is unavailable")?,
+        )
+        .map_err(|error| error.to_string())?;
+        let bootstrap_text = std::fs::read_to_string(&default_paths.bootstrap_path).ok();
+        let paths = resolve_desktop_paths(&local_app_data, bootstrap_text.as_deref());
         // A configured directory is selected only on the next launch. No data is migrated.
-        let data = configured_root.unwrap_or_else(|| app_data.join("storage"));
-        std::fs::create_dir_all(&data).map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(&paths.data_root).map_err(|error| error.to_string())?;
+        let bootstrap_path = paths.bootstrap_path;
+        let data = paths.data_root;
         command = Command::new(backend);
         command
             .current_dir(&data)
@@ -139,4 +161,54 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running TopOptPilot desktop");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_paths_use_localappdata_idesktop_v2_without_roaming_storage() {
+        let local_app_data = PathBuf::from(r"C:\Users\test\AppData\Local");
+
+        let paths = resolve_desktop_paths(&local_app_data, None);
+
+        let expected_root = local_app_data.join("iDeskTopV2");
+        assert_eq!(
+            paths.bootstrap_path,
+            expected_root.join("desktop-bootstrap.json")
+        );
+        assert_eq!(paths.data_root, expected_root);
+    }
+
+    #[test]
+    fn bootstrap_override_changes_only_the_next_launch_data_root() {
+        let local_app_data = PathBuf::from(r"C:\Users\test\AppData\Local");
+        let configured = r#"{"next_data_dir":"D:\\Topology Data"}"#;
+
+        let paths = resolve_desktop_paths(&local_app_data, Some(configured));
+
+        assert_eq!(
+            paths.bootstrap_path,
+            local_app_data
+                .join("iDeskTopV2")
+                .join("desktop-bootstrap.json")
+        );
+        assert_eq!(paths.data_root, PathBuf::from(r"D:\Topology Data"));
+    }
+
+    #[test]
+    fn blank_or_invalid_bootstrap_keeps_the_local_default() {
+        let local_app_data = PathBuf::from(r"C:\Users\test\AppData\Local");
+        let expected = local_app_data.join("iDeskTopV2");
+
+        assert_eq!(
+            resolve_desktop_paths(&local_app_data, Some(r#"{"next_data_dir":"   "}"#)).data_root,
+            expected
+        );
+        assert_eq!(
+            resolve_desktop_paths(&local_app_data, Some("not-json")).data_root,
+            expected
+        );
+    }
 }
