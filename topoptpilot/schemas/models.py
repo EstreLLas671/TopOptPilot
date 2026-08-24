@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ExperimentStatus(str, Enum):
@@ -203,17 +203,25 @@ class DataSettings(BaseModel):
     # None keeps the default <data_dir>/cache directory.
     cache_dir: str | None = Field(default=None, max_length=500)
 
+class CustomThemeSettings(BaseModel):
+    accent: str = Field(default="#2e73ca", pattern=r"^#[0-9a-fA-F]{6}$")
+    background: str = Field(default="#f4f7fb", pattern=r"^#[0-9a-fA-F]{6}$")
+    surface: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    text: str = Field(default="#24344d", pattern=r"^#[0-9a-fA-F]{6}$")
+
 
 class AppSettings(BaseModel):
     """Persisted, non-secret application preferences.
 
     API keys deliberately do not appear in this model. They are read only from the
-    process environment or Windows Credential Manager at connection/session start.
+    process environment at the moment a connection is tested or a session starts.
     """
 
     locale: str = Field(default="zh-CN", pattern="^(zh-CN|en-US)$")
     ui_density: str = Field(default="standard", pattern="^(compact|standard|comfortable)$")
     startup_behavior: str = Field(default="resume_last", pattern="^(resume_last|research_list)$")
+    theme: str = Field(default="light", pattern="^(light|dark|system|custom)$")
+    custom_theme: CustomThemeSettings = Field(default_factory=CustomThemeSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     compute: ComputeSettings = Field(default_factory=ComputeSettings)
     new_research: NewResearchSettings = Field(default_factory=NewResearchSettings)
@@ -257,9 +265,9 @@ class ResearchCreate(BaseModel):
 
 class ExperimentCreate(BaseModel):
     purpose: str = "Establish a topology optimization baseline."
-    fidelity: str = "F0 — MATLAB 2D Coarse"
+    fidelity: str = "F0 - 2D Coarse"
     mesh_level: str = "coarse"
-    backend: str = "matlab"
+    backend: Literal["python", "python3d", "matlab"] = "python"
     parameters: dict[str, Any] = Field(default_factory=lambda: {
         "volfrac": 0.40,
         "rmin": 1.5,
@@ -285,12 +293,15 @@ class ExperimentCreate(BaseModel):
     review_verdict: str | None = None
     human_decision: str | None = None
 
-    @field_validator("backend")
-    @classmethod
-    def validate_backend(cls, value: str) -> str:
-        if value not in {"python", "python3d", "matlab", "simulate"}:
-            raise ValueError("backend must be python, python3d, matlab, or simulate")
-        return value
+    @model_validator(mode="after")
+    def validate_fidelity_backend(self) -> "ExperimentCreate":
+        code = str(self.fidelity).strip().split(maxsplit=1)[0]
+        expected = {"F0": "python", "F1": "python", "F2": "python3d", "F3": "matlab"}.get(code)
+        if expected is None:
+            raise ValueError("fidelity must start with F0, F1, F2, or F3")
+        if self.backend != expected:
+            raise ValueError(f"{code} requires backend={expected}; received backend={self.backend}")
+        return self
 
 
 class WorkspaceCommandResult(BaseModel):

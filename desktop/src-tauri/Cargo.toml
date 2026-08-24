@@ -1,18 +1,22 @@
 [package]
-name = "topoptpilot-desktop"
-version = "6.1.1"
+name = "idesktop-v2"
+version = "2.0.0"
 description = "Pi-native topology optimization research workspace"
 authors = ["TopOptPilot"]
 edition = "2021"
 
 [lib]
-name = "topoptpilot_desktop_lib"
+name = "idesktop_v2_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+getrandom = "0.2"
+rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
+url = "2"

@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
+import math
+
 from topoptpilot.fidelity import FidelityManager
+
+
+def _finite_compliance(experiment: dict) -> float | None:
+    value = (experiment.get("result") or {}).get("objective", {}).get("compliance")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
@@ -15,9 +26,12 @@ def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
                    for item in feasible), default=0)
     comparable = [item for item in feasible
                   if rank.get(str(item.get("fidelity", "F0")).split()[0], 0) == highest]
-    best = min((item["result"]["objective"]["compliance"] for item in comparable), default=None)
-    best_raw = min((item["result"]["objective"]["compliance"] for item in completed),
-                   default=None)
+    comparable_values = [value for item in comparable
+                         if (value := _finite_compliance(item)) is not None]
+    raw_values = [value for item in completed
+                  if (value := _finite_compliance(item)) is not None]
+    best = min(comparable_values, default=None)
+    best_raw = min(raw_values, default=None)
     best_gray_raw = min((item["result"]["quality"].get("gray_ratio", 1)
                          for item in completed), default=None)
     first_feasible = next((index for index, item in enumerate(completed, 1)

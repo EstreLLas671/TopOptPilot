@@ -30,7 +30,7 @@ def run_audit(include_online: bool = True) -> dict:
     report["gates"].update(_v6_source_gates())
     report["gates"].update(_matlab_mcp_gates())
     with tempfile.TemporaryDirectory(prefix="topoptpilot_release_") as directory:
-        service = ResearchService(directory, max_workers=2)
+        service = ResearchService(directory, max_workers=2, enable_agent_runtime=include_online)
         try:
             cases = EvidenceCaseRunner(service, timeout=240)
             report["cases"] = {}
@@ -43,13 +43,7 @@ def run_audit(include_online: bool = True) -> dict:
                     "real_backends": [item["result"]["solver"]["backend"]
                                       for item in result["experiments"] if item.get("result")],
                 }
-            report["gates"]["cases"] = {
-                "pass": (report["cases"]["A"]["metrics"]["best_feasible_objective"] is not None
-                         and report["cases"]["B"]["experiments"] >= 6
-                         and report["cases"]["C"]["fidelities"][-4:] == ["F0", "F1", "F2", "F3"]
-                         and any("matlab_mcp_3d" in value
-                                 for value in report["cases"]["C"]["real_backends"])),
-            }
+            report["gates"]["cases"] = {"pass": _cases_gate_passes(report["cases"])}
             runner = BenchmarkRunner()
             report["baselines"] = {method: runner.run(method, budget=5, max_iter=40)["metrics"]
                                    for method in ("Random", "Grid", "TPE", "Rule")}
@@ -86,11 +80,31 @@ def _artifact_gate() -> dict:
 
 
 def _desktop_gate() -> dict:
-    executable = ROOT / "desktop/src-tauri/target/release/topoptpilot-desktop.exe"
-    installer = ROOT / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_6.1.1_x64-setup.exe"
+    release_dir = ROOT / "desktop/src-tauri/target/release"
+    executable_candidates = (
+        release_dir / "idesktop-v2.exe",
+        release_dir / "topoptpilot-desktop.exe",
+    )
+    installer_dir = release_dir / "bundle/nsis"
+    installer_candidates = (
+        installer_dir / "iDeskTop v2_2.0.0_x64-setup.exe",
+        installer_dir / "iDeskTop-v2_2.0.0_x64-setup.exe",
+        installer_dir / "TopOptPilot_6.1.1_x64-setup.exe",
+    )
+    executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
+    installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
     return {"pass": executable.exists() and installer.exists(),
             "executable": str(executable), "installer": str(installer)}
 
+
+def _cases_gate_passes(cases: dict) -> bool:
+    """Require the staged evidence case to reach F3 through MATLAB MCP."""
+    return (
+        cases["A"]["metrics"]["best_feasible_objective"] is not None
+        and cases["B"]["experiments"] >= 6
+        and cases["C"]["fidelities"][-4:] == ["F0", "F1", "F2", "F3"]
+        and any("matlab_mcp_3d" in value for value in cases["C"]["real_backends"])
+    )
 
 def _strict_f3_gate() -> dict:
     try:
@@ -139,12 +153,14 @@ def _v6_source_gates() -> dict:
         "isolated_subagents": {"pass": all(role in subagents for role in
             ("GUIDE", "HYPOTHESIS", "EXPERIMENT_PLANNER", "EXPERIMENT_EXECUTOR",
              "INDEPENDENT_REVIEWER", "REPORT_WRITER")) and "ROLE_TOOLS" in subagents},
-        "all_matlab_fidelities": {"pass": 'return "matlab"' in fidelity
-            and "MATLAB 2D Coarse" in fidelity and "MATLAB 3D Fine" in fidelity},
-        "fact_grounded_reports": {"pass": "未计算" in report and "evaluation" in report
-            and "artifact" in report.lower()},
+        "fidelity_lane_mapping": {"pass": all(value in fidelity for value in (
+            '"F0": "python"', '"F1": "python"', '"F2": "python3d"',
+            '"F3": "matlab"'))},
+        "fact_grounded_reports": {"pass": all(value in report for value in (
+            "未计算", "evaluation", "artifact_lineage", "SHA256", "不得输出成功结论"))},
         "credential_not_in_sqlite": {"pass": "api_key" not in store.lower()
-            and "/api/settings/agent-key" in api},
+            and "/api/settings/agent-key" not in api
+            and "DASHSCOPE_API_KEY" in service},
     }
 
 

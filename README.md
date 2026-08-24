@@ -1,14 +1,11 @@
-# TopOptPilot V6.1.1 — 知识驱动的拓扑优化科研智能体
+# iDeskTop v2 — TopOptPilot 融合桌面客户端
 
-> **V6.1.1 核心升级**：Windows 正式入口仍为 Tauri 2 + React 原生桌面应用（v6.1.1），
-> 在 V6.0.0 基础上升级为**知识驱动的科研智能体系统**。官方 `@earendil-works/pi-coding-agent`
-> 以 JSON-RPC 常驻运行，每个 Research ID 对应一个可恢复 Pi session，由 **Pi Research Lead**
-> 统一编排 **Guide / Hypothesis / Planner / Executor / Reviewer / Report Writer** 六个 Subagent。
-> Qwen API Key 保存到 **Windows Credential Manager**（不进入 SQLite/日志/报告）；
-> 新建研究支持 **AI 引导式向导**（自然语言描述 → AI 提取 → 分步确认 → 冻结 Research Contract）。
-> **F0–F3 全部通过 MATLAB MCP 求解**（F0/F1=2D，F2/F3=3D），Python 求解器退出正式执行路径。
-> 新增 **离线知识库**（SQLite FTS5 + 模板案例）、**阶段报告**（Markdown + PDF）和 **Knowledge Center**。
-> 界面默认中文，支持英文。保留 web 网页接口可以供大家来设计前端。
+> **融合分支说明**：本分支在 TopOptPilot V6.1.1 科研内核上接入 iDeskTop 的 Tauri + React 工程工作区、
+> 受控项目文件 IDE、本机 MATLAB/编译 Runtime 工程链路、统一制品和四区可调布局。
+> Qwen API Key 只从进程环境变量 `DASHSCOPE_API_KEY` 读取，不写入 SQLite、日志、报告或系统凭据存储。
+> 科研 fidelity 映射为 **F0/F1=Python 2D、F2=Python 3D、F3=MATLAB MCP**；只有 F3 强制人工审批，
+> 且 MCP 故障不得回退为 Python 并宣称 F3 成功。工程 MATLAB/Runtime 链路与科研 F3 权限保持隔离。
+> 当前是开发评审分支；正式 NSIS、MATLAB MCP 制品、在线 Qwen 和干净 Windows 矩阵仍需独立发布门禁。
 
 ## 📑 快速导航
 
@@ -44,7 +41,7 @@ TopOptPilot 不是"自然语言调一次拓扑优化"的工具。它是：
 **核心原则**：大模型不代替有限元求解器。Pi 负责科研意图、证据解释与工具编排；
 Safety Policy 负责把意图编译成合法受控实验；Python/MATLAB 负责确定性计算，Evaluator 客观裁决。
 
-## V6.1.1 快速开始
+## V6.1.0 快速开始
 
 > 已配置好 Python/Node 的老协作者可用下面的最短路径；从零开始的完整步骤见下文
 > **"本地环境配置（克隆到运行）"** 一节。
@@ -54,7 +51,8 @@ npm install
 pip install -r requirements.txt
 npm --prefix desktop install
 python launch.py
-# 首次启动后，在设置中心填写 Qwen API Key（保存到 Windows Credential Manager）
+# 启动进程前配置环境变量；应用不提供密钥写入接口
+$env:DASHSCOPE_API_KEY = "<your-key>"
 ```
 
 `python launch.py` 启动 Tauri 原生窗口，不打开浏览器。仅开发旧界面时使用
@@ -64,14 +62,14 @@ python launch.py
 powershell -ExecutionPolicy Bypass -File scripts/build_desktop.ps1
 ```
 
-安装包输出到 `desktop/src-tauri/target/release/bundle/nsis/`（TopOptPilot_6.1.1_x64-setup.exe，~220 MB），最终用户无需预装
-Python、Node 或 Rust；MATLAB 本体不随包分发，首次验收版本为 R2024a。
+正式打包成功后，NSIS 输出位于 `desktop/src-tauri/target/release/bundle/nsis/`，产品版本为 iDeskTop v2 2.0.0。
+当前评审分支未完成干净 Windows 安装、签名和 MATLAB/Runtime 最终矩阵，不将开发机产物描述为正式 Release。
 
-### V6.1 新功能
+### iDeskTop v2 融合能力
 
-- **Qwen API Key 安全管理**：设置中心支持 OpenAI-compatible 配置（API Key + 模型 ID + Base URL），密钥保存到 Windows Credential Manager，不进入 SQLite/日志/报告
+- **Qwen API Key 安全边界**：设置中心只显示环境检测状态；密钥仅从 `DASHSCOPE_API_KEY` 读取，不提供写入或删除接口
 - **AI 引导式 Research Setup**：用自然语言描述需求 → AI 提取参数 → 分步确认 → 冻结 Research Contract
-- **MATLAB 全保真度求解**：F0/F1 为 MATLAB 2D，F2/F3 为 MATLAB 3D；仅 F3 强制人工审批
+- **双求解链路**：科研 F0/F1=Python 2D、F2=Python 3D、F3=MATLAB MCP；工程区独立使用本机 MATLAB 或编译 Runtime
 - **Subagent 多角色审查**：Guide/Hypothesis/Planner/Executor/Reviewer/Report Writer 各司其职
 - **离线知识库**：SQLite FTS5 检索 + 模板案例 + Knowledge Center
 - **阶段报告**：每轮 Markdown 报告 + 研究终止时 Markdown + PDF
@@ -451,7 +449,7 @@ python -m topoptpilot.release_audit   # V5 发布门禁全量审计
 
 - 运行时数据在 `topoptpilot/storage/`（可用 `TOPPILOT_DATA_DIR` 迁移），已被
   `.gitignore` 排除，不要提交；`tests/`、`vendor/`、`*.zip/*.rar`、密钥同样不入库；
-- 密钥只进 `.env`；新增配置先更新 `.env.example` 再改代码；
+- Qwen 密钥只通过启动进程的 `DASHSCOPE_API_KEY` 提供；不得写入设置、SQLite、日志、报告或仓库文件；
 - 提交前阅读根目录 `AGENTS.md`（研究章程）：不得伪造 FEM 结果、不得绕过
   Policy 直改求解参数、失败实验也是有效证据；
 - 修改求解器后运行 `pytest tests/test_solver.py` 核对物理真值再提交。
@@ -467,7 +465,7 @@ python -m topoptpilot.release_audit   # V5 发布门禁全量审计
 | `tauri dev/build` 失败 | 检查 `cargo --version`、MSVC Build Tools 是否装全；国内网络需为 cargo 配置代理 |
 | `npm install` / `git clone` 超时 | github.com 连接不稳定，为 git/npm 配置可用代理后重试 |
 | 无 API Key 或 401 | 自动进入 Safe Mode，确定性策略照常推进；演示与求解测试不受影响 |
-| 找不到 MATLAB | 仅 F3 不可用并记为基础设施故障；安装 R2024a 并确认 `vendor/matlab-mcp-server/` 已就位 |
+| 找不到 MATLAB | 科研 F3 明确不可用并记为 `MATLAB_INFRASTRUCTURE`；工程区仍可使用已验证的编译 Runtime，F0–F2 不受影响 |
 | Streamlit 端口冲突 | `python -m streamlit run app.py --server.port 8502` |
 
 ---
@@ -481,9 +479,8 @@ python -m topoptpilot.release_audit   # V5 发布门禁全量审计
 
 ### 当前外部阻塞
 
-DashScope 在线门禁因当前凭据返回 HTTP 401，不能标记完整 release ready。MATLAB R2024a、
-官方 MCP 2D/3D、严格 F3、桌面 EXE 与默认中文门禁均已实机验证。模型错误会进入 Safe Mode；
-worker 异常、NaN/Inf、缓存损坏、竞争解释 DOE 与审批路径均有回归覆盖。
+当前隔离 PR 工作树尚未构建正式 NSIS，且未包含 `vendor/matlab-mcp-server` 二进制，因此 2D/3D MATLAB MCP、真实 F3 和依赖 F3 的 Evidence Case 门禁未通过。
+在线 Qwen/Pi、代码签名以及干净 Windows 安装/升级/卸载矩阵同样未完成；这些限制不会用演示结果或 Python 回退掩盖。
 
 ### ❌ 缺失（P1 重要）
 
@@ -582,3 +579,7 @@ worker 异常、NaN/Inf、缓存损坏、竞争解释 DOE 与审批路径均有�
 ---
 
 > **项目以赛题评审视角组织，核心创新不在一键求解，而在 Paper-to-Plugin + 可信工具闭环 + 可证伪假设竞争 + 全链路可复现。**
+
+## iDeskTop v2 实施入口
+
+当前实现状态与验证证据见 [docs/implementation-status.md](docs/implementation-status.md)，冻结计划见 [docs/plans/2026-08-23-idesktop-v2-fusion-plan.md](docs/plans/2026-08-23-idesktop-v2-fusion-plan.md)。本项目不修改原 iDeskTop、TopOptPilot-main 或 topopt_pilot 目录。

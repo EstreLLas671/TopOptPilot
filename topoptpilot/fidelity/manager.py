@@ -28,7 +28,7 @@ class FidelityManager:
     def backend_for(fidelity: str) -> str:
         if fidelity not in {"F0", "F1", "F2", "F3"}:
             raise ValueError(f"Unknown fidelity: {fidelity}")
-        return "matlab"
+        return {"F0": "python", "F1": "python", "F2": "python3d", "F3": "matlab"}[fidelity]
 
     @staticmethod
     def mesh_level(fidelity: str) -> str:

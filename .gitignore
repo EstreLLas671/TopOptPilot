@@ -55,8 +55,6 @@ knowledge/storage/references/*.pdf
 Thumbs.db
 
 # Test & verification artifacts
-tests/
-pytest.ini
 _ground_truth/
 test_phase0*.py
 test_phase0*.json
@@ -74,3 +72,15 @@ XH-202619*.pdf
 *.rar
 *.zip
 *.7z
+
+## Codex/workspace intermediates (never ship)
+.codex/
+.superpowers/
+.codex-*
+.tmp-*
+*.codex-replace
+*.codex-original
+*.bad
+.playwright-cli/
+output/
+.worktrees/

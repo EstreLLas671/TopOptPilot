@@ -43,7 +43,7 @@ __all__ = ["run_topopt", "run_topopt_from_task"]
 
 def run_topopt(task_spec, *, backend: str = "python",
                max_iter_override: int = None, time_limit: float = None,
-               progress=None) -> dict:
+               progress=None, cancel=None) -> dict:
     """运行一次拓扑优化，返回 ExperimentResult 兼容的 dict。
 
     task_spec: ExperimentTask 或已规范化的 dict（由 params.normalize_task 处理）。
@@ -96,7 +96,12 @@ def run_topopt(task_spec, *, backend: str = "python",
     gray_prev = None
     connected_prev = None
 
+    cancelled = False
     for it in range(1, max_iter + 1):
+        if cancel is not None and cancel():
+            status = "cancelled"
+            cancelled = True
+            break
         beta = controller.beta(it, gray_prev, connected_prev)
         penal = penal_at_iteration(it, spec)
 
@@ -176,6 +181,11 @@ def run_topopt(task_spec, *, backend: str = "python",
             except Exception:
                 pass
 
+        if cancel is not None and cancel():
+            status = "cancelled"
+            cancelled = True
+            break
+
         if change < tol_change:
             status = "converged"
             break
@@ -184,6 +194,16 @@ def run_topopt(task_spec, *, backend: str = "python",
             break
 
     # ---- 收尾：由最终设计变量 x 重算物理密度并求解，保证结果一致 ----
+    if cancelled:
+        return build_result(task_spec=spec, status="cancelled",
+                            compliance=float(final[0]["compliance"]) if final else float("nan"),
+                            xPhys=xPhys, U=final[0]["U"] if final else np.zeros(fe.ndof),
+                            history=history, iterations=len(history),
+                            final_change=history[-1]["change"] if history else float("nan"),
+                            relative_residual=float(final[0]["relative_residual"]) if final else float("nan"),
+                            solve_time=time.time() - t0, backend="python",
+                            density_design=x)
+
     if final is None or np.isnan(xPhys).any():
         return build_result(task_spec=spec, status="failed",
                             compliance=float("nan"), xPhys=xPhys,

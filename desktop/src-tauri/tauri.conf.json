@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TopOptPilot",
-  "version": "6.1.1",
-  "identifier": "cn.topoptpilot.research",
+  "productName": "iDeskTop v2",
+  "version": "2.0.0",
+  "identifier": "com.idesktop.v2",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{
-      "title": "TopOptPilot",
+      "title": "iDeskTop v2",
       "width": 1440,
       "height": 900,
       "minWidth": 920,
@@ -28,8 +28,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "shortDescription": "受物理与安全策略约束的拓扑优化科研智能体",
-    "longDescription": "TopOptPilot 原生桌面科研工作台，集成 Pi Research Lead、隔离 Subagent、离线知识库与 MATLAB MCP F0-F3。",
+    "shortDescription": "工程开发与 AI 科研拓扑优化工作台",
+    "longDescription": "iDeskTop v2 Tauri 桌面工作台，保留 MATLAB 工程链路并接入 Policy 控制的 AI 科研。",
     "resources": ["resources/**/*"],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }
