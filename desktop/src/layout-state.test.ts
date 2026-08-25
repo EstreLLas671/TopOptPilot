@@ -15,7 +15,7 @@ describe("workspace layout state", () => {
     expect(DEFAULT_LAYOUT).toEqual({
       leftOpen: true,
       rightOpen: true,
-      bottomOpen: true,
+      bottomOpen: false,
       leftWidth: 280,
       rightWidth: 380,
       bottomHeight: 300,
@@ -35,7 +35,7 @@ describe("workspace layout state", () => {
     expect(hidden.leftOpen).toBe(false);
     expect(hidden.rightOpen).toBe(true);
     expect(togglePanel(hidden, "left")).toMatchObject(DEFAULT_LAYOUT);
-    expect(togglePanel(DEFAULT_LAYOUT, "bottom").bottomOpen).toBe(false);
+    expect(togglePanel(DEFAULT_LAYOUT, "bottom").bottomOpen).toBe(true);
   });
 
   it("persists engineering and research layouts under separate keys", () => {

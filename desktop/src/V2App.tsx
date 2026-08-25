@@ -86,9 +86,27 @@ export default function V2App() {
     try { action === "approve" ? await api.approve(id) : await api.reject(id); if (selectedResearch) await refreshSelected(selectedResearch.id); }
     catch (reason) { reportError(String(reason)); }
   }
+
+  async function archiveResearch(id: string) {
+    try {
+      await api.archiveResearch(id);
+      const remaining = researches.filter(item => item.id !== id);
+      setResearches(remaining);
+      if (selectedResearch?.id === id) {
+        setSelectedExperiment(null);
+        setSelectedResearch(remaining[0] ? await api.getResearch(remaining[0].id) : null);
+      }
+    } catch (reason) { reportError(String(reason)); }
+  }
+  async function restoreResearch(id: string) {
+    try {
+      const restored = await api.restoreResearch(id);
+      setResearches(items => [restored, ...items.filter(item => item.id !== restored.id)]);
+    } catch (reason) { reportError(String(reason)); }
+  }
   const workspace = useMemo(() => mode === "engineering"
     ? <EngineeringWorkspace health={health} onError={reportError} onResearchBaseline={createResearchFromRun} researches={researches} selectedResearch={selectedResearch} onCreateResearch={createResearch} onSelectResearch={refreshSelected}/>
-    : <ResearchWorkspace researches={researches} selected={selectedResearch} active={active} command={command} busy={busy} safeMode={safeMode} onCommand={runResearchCommand} onCreateResearch={createResearch} onDecision={decide} onError={reportError} onSelect={refreshSelected} onSelectExperiment={setSelectedExperiment} setCommand={setCommand}/>,
+    : <ResearchWorkspace researches={researches} selected={selectedResearch} active={active} command={command} busy={busy} safeMode={safeMode} onCommand={runResearchCommand} onCreateResearch={createResearch} onArchive={archiveResearch} onRestore={restoreResearch} onDecision={decide} onError={reportError} onSelect={refreshSelected} onSelectExperiment={setSelectedExperiment} setCommand={setCommand}/>,
     [mode, health, reportError, createResearchFromRun, researches, selectedResearch, active, command, busy, safeMode, refreshSelected]);
 
   if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 iDeskTop v2</b><span>{error || "连接统一 sidecar…"}</span></div>;
@@ -96,7 +114,7 @@ export default function V2App() {
   return <div className="v2-shell">
     <header className="v2-titlebar" data-tauri-drag-region>
       <div className="v2-brand"><span className="v2-brand-mark"><Boxes size={18}/></span><div><b>iDeskTop</b><small>V2 · TOPOLOGY WORKBENCH</small></div></div>
-      <nav className="v2-workspaces" aria-label="工作区">{(["engineering", "research"] as WorkspaceMode[]).map(item => <button key={item} className={mode === item ? "active" : ""} onClick={() => setMode(item)}><span className="workspace-dot" data-mode={item}/>{workspaceLabel(item)}</button>)}</nav>
+      <nav className="v2-workspaces" aria-label="工作区">{(["engineering", "research"] as WorkspaceMode[]).map(item => <button key={item} title={item === "engineering" ? "工程开发" : "AI 科研"} className={mode === item ? "active" : ""} onClick={() => setMode(item)}><span className="workspace-dot" data-mode={item}/>{workspaceLabel(item)}</button>)}</nav>
       <div className="v2-actions"><span className="connection"><i/>SIDECAR {health?.version || ""}</span><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/></button></div>
     </header>
     {error ? <div className="v2-error"><ShieldCheck size={15}/>{error}<button aria-label="关闭错误" onClick={() => setError("")}>×</button></div> : null}

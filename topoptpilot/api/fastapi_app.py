@@ -102,8 +102,28 @@ def create_research(request: dict):
 
 
 @app.get("/api/research")
-def list_research():
-    return service.list_research()
+def list_research(archived: bool = False):
+    return service.list_research(archived=archived)
+
+
+@app.delete("/api/research/{research_id}")
+def archive_research(research_id: str, confirm: bool = False):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="归档前必须显式确认")
+    try:
+        return service.archive_research(research_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/research/{research_id}/restore")
+def restore_research(research_id: str):
+    try:
+        return service.restore_research(research_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/research/{research_id}/autonomous")

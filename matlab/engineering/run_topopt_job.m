@@ -14,19 +14,29 @@ logPath = fullfile(outputDir, 'solver.log');
 statusPath = fullfile(outputDir, 'status.json');
 diary(logPath);
 cleanup = onCleanup(@() diary('off')); %#ok<NASGU>
-write_status(statusPath, 'running', '正在调用 TopOpt-3D');
 try
     inputConfig = jsondecode(fileread(configPath));
     config = make_config(inputConfig);
+    dimension = lower(char(string(config.solver_dimension)));
+    if ~ismember(dimension, {'2d','3d'})
+        error('iDeskTop:Dimension', 'solver_dimension 仅支持 2d 或 3d。');
+    end
+    is2D = strcmp(dimension, '2d');
+    write_status(statusPath, 'running', ...
+        sprintf('正在调用真实 TopOpt %s 源码', upper(dimension)));
     config.display = false;
     config.verbose = true;
     snapshotDir = fullfile(outputDir, 'snapshots');
     if ~isfolder(snapshotDir), mkdir(snapshotDir); end
     manifestPath = fullfile(snapshotDir, 'manifest.json');
+    if is2D
+        snapshotShape = double([config.nely,config.nelx]);
+    else
+        snapshotShape = double([config.nely,config.nelx,config.nelz]);
+    end
     snapshotManifest = struct('version',1,'dtype','float32', ...
-        'byte_order','little','order','F', ...
-        'shape',double([config.nely,config.nelx,config.nelz]), ...
-        'frames',struct([]));
+        'byte_order','little','order','F','dimension',dimension, ...
+        'shape',snapshotShape,'frames',struct([]));
     write_json_atomic(manifestPath, snapshotManifest);
     config.iteration_callback = @(frame) write_iteration_snapshot( ...
         frame, snapshotDir, manifestPath, statusPath);
@@ -35,22 +45,39 @@ try
     if ~isempty(configuredSolverPath) && isfolder(configuredSolverPath)
         addpath(configuredSolverPath);
     end
+    if isfolder(fullfile(bridgePath, 'TopOpt_2D'))
+        addpath(fullfile(bridgePath, 'TopOpt_2D'));
+    end
     if isfolder(fullfile(bridgePath, 'TopOpt-3D'))
         addpath(fullfile(bridgePath, 'TopOpt-3D'));
     end
-    result = topopt3d_main(config);
+    if is2D
+        result = topopt_main(config);
+    else
+        result = topopt3d_main(config);
+    end
     if isfield(result, 'config') && isfield(result.config, 'iteration_callback')
         result.config = rmfield(result.config, 'iteration_callback');
     end
     save(fullfile(outputDir, 'result.mat'), '-struct', 'result', '-v7.3');
     write_single_payload(fullfile(outputDir, 'final_density.bin'), result.x);
-    write_single_payload(fullfile(outputDir, 'final_von_mises.bin'), result.von_mises);
+    stressFile = '';
+    if isfield(result, 'von_mises') && ~isempty(result.von_mises)
+        stressFile = 'final_von_mises.bin';
+        write_single_payload(fullfile(outputDir, stressFile), result.von_mises);
+    end
     resultManifest = struct('version',1,'dtype','float32', ...
-        'byte_order','little','order','F','shape',double(size(result.x)), ...
-        'density_file','final_density.bin', ...
-        'stress_file','final_von_mises.bin');
+        'byte_order','little','order','F','dimension',dimension, ...
+        'shape',double(size(result.x)), ...
+        'density_file','final_density.bin','stress_file',stressFile);
     write_json_atomic(fullfile(outputDir, 'result_manifest.json'), resultManifest);
     summary = make_summary(result);
+    summary.solver_dimension = dimension;
+    if is2D
+        summary.solver_entry = 'TopOpt_2D/topopt_main.m';
+    else
+        summary.solver_entry = 'TopOpt-3D/topopt3d_main.m';
+    end
     summary.result_manifest = 'result_manifest.json';
     summary.snapshot_manifest = 'snapshots/manifest.json';
     write_json_atomic(fullfile(outputDir, 'result_summary.json'), summary);
@@ -127,6 +154,9 @@ for names = {'domain_mask', 'passive_void', 'passive_solid'}
         if isempty(fields), error('iDeskTop:Mask', '掩码 MAT 文件为空。'); end
         config.(field) = logical(values.(fields{1}));
     end
+end
+if ~isfield(config, 'solver_dimension') || isempty(config.solver_dimension)
+    config.solver_dimension = '3d';
 end
 if isfield(config, 'bc_config') && isstruct(config.bc_config)
     config.bc_config.fixeddofs = double(config.bc_config.fixeddofs(:).');

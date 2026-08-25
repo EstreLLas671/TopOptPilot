@@ -11,6 +11,16 @@ def test_matlab_iteration_snapshot_records_density_and_stress_payloads() -> None
     assert "write_single_payload" in source
 
 
+def test_matlab_bridge_routes_to_user_2d_and_3d_solver_entries() -> None:
+    root = Path(__file__).parents[1] / "matlab" / "engineering"
+    source = (root / "run_topopt_job.m").read_text(encoding="utf-8")
+
+    assert (root / "TopOpt_2D" / "topopt_main.m").is_file()
+    assert (root / "TopOpt-3D" / "topopt3d_main.m").is_file()
+    assert "result = topopt_main(config);" in source
+    assert "result = topopt3d_main(config);" in source
+    assert "solver_dimension" in source
+
 def test_matlab_final_result_exports_viewer_payloads() -> None:
     source = (Path(__file__).parents[1] / "matlab" / "engineering" / "run_topopt_job.m").read_text(encoding="utf-8")
     assert "final_density.bin" in source

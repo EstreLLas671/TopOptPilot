@@ -23,15 +23,73 @@ def test_build_matlab_config_maps_engineering_task_without_demo_flags() -> None:
     config = build_engineering_matlab_config({
         "load_case": "cantilever",
         "geometry": {"nelx": 12, "nely": 8, "nelz": 3},
-        "params": {"volfrac": 0.35, "max_iter": 7, "rmin": 2.0},
+        "params": {"volfrac": 0.35, "penal": 3.2, "max_iter": 7, "min_iter": 4, "rmin": 2.0, "filter_strategy": "adaptive", "accuracy": "high"},
     })
     assert config["bc_type"] == "cantilever"
     assert config["nelx"] == 12 and config["nely"] == 8 and config["nelz"] == 3
     assert config["max_iterations"] == 7
+    assert config["min_iterations"] == 4
+    assert config["penal"] == 3.2
+    assert config["filter_strategy"] == "adaptive"
+    assert config["accuracy"] == "high"
     assert config["display"] is False
     assert config["live_stress_snapshots"] is True
     assert config["provenance_mode"] == "engineering-local-matlab"
 
+
+def test_build_matlab_config_routes_explicit_2d_and_3d_sources() -> None:
+    two_d = build_engineering_matlab_config({
+        "dimension": "2d",
+        "geometry": {"nelx": 16, "nely": 8, "nelz": 9},
+    })
+    three_d = build_engineering_matlab_config({
+        "dimension": "3d",
+        "geometry": {"nelx": 16, "nely": 8, "nelz": 5},
+    })
+
+    assert two_d["solver_dimension"] == "2d"
+    assert two_d["nelz"] == 1
+    assert three_d["solver_dimension"] == "3d"
+    assert three_d["nelz"] == 5
+
+
+def test_manifest_progress_includes_only_committed_real_snapshot_files(tmp_path: Path) -> None:
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    density = snapshots / "iter_0001_density.bin"
+    density.write_bytes(b"\x00\x00\x80?")
+    (snapshots / "manifest.json").write_text(
+        json.dumps({
+            "dtype": "float32",
+            "order": "F",
+            "dimension": "2d",
+            "shape": [1, 1],
+            "frames": [{
+                "iteration": 1,
+                "objective": 8.5,
+                "volume_fraction": 0.4,
+                "density_file": density.name,
+                "stress_file": "",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    published: list[tuple[int, dict]] = []
+
+    matlab_runner.publish_manifest_progress(
+        tmp_path,
+        set(),
+        lambda iteration, state: published.append((iteration, state)),
+    )
+
+    assert published[0][1]["snapshot"] == {
+        "densityPath": "snapshots/iter_0001_density.bin",
+        "stressPath": None,
+        "shape": [1, 1],
+        "dtype": "float32",
+        "order": "F",
+        "dimension": "2d",
+    }
 
 def test_matlab_batch_expression_escapes_windows_paths() -> None:
     expression = build_matlab_batch_expression(Path(r"C:\work\O'Brien\config.json"), Path(r"C:\work\output"))

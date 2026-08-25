@@ -21,7 +21,7 @@ def discover_artifact_files(run_dir: Path) -> tuple[list[Path], list[Path]]:
     files: list[Path] = []
     snapshots: list[Path] = []
     for path in sorted(run_dir.rglob("*"), key=lambda item: item.relative_to(run_dir).as_posix()):
-        if not path.is_file() or path.name.endswith(".tmp"):
+        if not path.is_file() or path.name.endswith(".tmp") or path.name == "run-manifest.json":
             continue
         relative = path.relative_to(run_dir)
         (snapshots if relative.parts and relative.parts[0] == "snapshots" else files).append(path)

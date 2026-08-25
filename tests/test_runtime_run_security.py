@@ -138,7 +138,26 @@ def test_external_matlab_progress_callback_updates_events_without_rewriting_snap
         return SimpleNamespace(usable=True)
 
     def fake_runner(*_args, **kwargs):
-        kwargs["progress"](3, {"compliance": 12.5, "volume_fraction": 0.4, "gray_ratio": 0.2})
+        snapshots = run_dir / "snapshots"
+        snapshots.mkdir()
+        density = snapshots / "iter_0003_density.bin"
+        density.write_bytes(b"\x00\x00\x80?")
+        kwargs["progress"](
+            3,
+            {
+                "compliance": 12.5,
+                "volume_fraction": 0.4,
+                "gray_ratio": 0.2,
+                "snapshot": {
+                    "densityPath": "snapshots/iter_0003_density.bin",
+                    "stressPath": None,
+                    "shape": [1, 1],
+                    "dtype": "float32",
+                    "order": "F",
+                    "dimension": "2d",
+                },
+            },
+        )
         return {
             "status": "completed",
             "objective": 12.5,
@@ -167,6 +186,11 @@ def test_external_matlab_progress_callback_updates_events_without_rewriting_snap
         "grayRatio": 0.2,
     }
     assert not (run_dir / "snapshots" / "iteration-0003.json").exists()
+    assert progress_events[0]["snapshot"]["densityPath"] == "snapshots/iter_0003_density.bin"
+    assert len(progress_events[0]["snapshot"]["densitySha256"]) == 64
+    assert [item.relative_path for item in record.snapshots] == [
+        "snapshots/iter_0003_density.bin"
+    ]
 
 
 def test_invalid_profile_never_falls_back_and_has_unverified_provenance(monkeypatch, tmp_path: Path) -> None:

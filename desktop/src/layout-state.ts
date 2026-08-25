@@ -14,7 +14,7 @@ export interface WorkspaceLayout {
 export const DEFAULT_LAYOUT: WorkspaceLayout = Object.freeze({
   leftOpen: true,
   rightOpen: true,
-  bottomOpen: true,
+  bottomOpen: false,
   leftWidth: 280,
   rightWidth: 380,
   bottomHeight: 300,
@@ -27,8 +27,8 @@ export const LAYOUT_LIMITS = Object.freeze({
 });
 
 export const LAYOUT_STORAGE_KEYS: Record<WorkspaceMode, string> = Object.freeze({
-  engineering: "idesktop-v2.layout.engineering",
-  research: "idesktop-v2.layout.research",
+  engineering: "idesktop-v2.layout.engineering.v3",
+  research: "idesktop-v2.layout.research.v3",
 });
 
 function numberOr(value: unknown, fallback: number) {

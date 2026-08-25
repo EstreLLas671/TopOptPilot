@@ -119,6 +119,25 @@ describe("EngineeringWorkspace mount", () => {
     });
   });
 
+  it("offers explicit 2D and 3D parameter modes", async () => {
+    render(
+      <EngineeringWorkspace
+        health={null}
+        onError={() => undefined}
+        onResearchBaseline={async () => undefined}
+      />,
+    );
+
+    const dimension = screen.getByLabelText("求解维度") as HTMLSelectElement;
+    expect(dimension.value).toBe("3d");
+    expect(screen.getByText("Z 单元")).toBeTruthy();
+
+    await userEvent.selectOptions(dimension, "2d");
+
+    expect(dimension.value).toBe("2d");
+    expect(screen.getByText("二维悬臂梁")).toBeTruthy();
+    expect(screen.queryByText("Z 单元")).toBeNull();
+  });
   it("renders the confirmed four-pane tabs, center assistant, and independent bottom tabs", async () => {
     render(
       <EngineeringWorkspace
@@ -138,17 +157,21 @@ describe("EngineeringWorkspace mount", () => {
       expect(apiMocks.projectOpen).toHaveBeenCalledWith("D:/Projects/cantilever");
       expect(apiMocks.projectList).toHaveBeenCalledWith("D:/Projects/cantilever");
     });
+    const chatTab = screen.getByRole("tab", { name: "聊天" });
+    expect(chatTab.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "代码" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "结果" })).toBeTruthy();
     const iterationTab = screen.getByRole("tab", { name: "迭代可视化" });
     const compareTab = screen.getByRole("tab", { name: "参数调整与对比" });
-    expect(screen.getByPlaceholderText("询问 iDeskTop、生成代码补丁或输入命令…")).toBeTruthy();
+    expect(screen.getByPlaceholderText("询问当前工程、参数或结果…")).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "MATLAB 终端" })).toBeNull();
 
     await userEvent.click(iterationTab);
     expect(screen.getByText("迭代时间轴")).toBeTruthy();
     await userEvent.click(compareTab);
-    expect(screen.getByText("手动参数方案对比")).toBeTruthy();
+    expect(screen.getByText("参数方案与真实结果")).toBeTruthy();
 
+    await userEvent.click(screen.getByRole("button", { name: "显示底部面板" }));
     for (const name of ["MATLAB 终端", "运行日志", "输出", "工具调用", "制品", "诊断", "受限浏览器"]) {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }

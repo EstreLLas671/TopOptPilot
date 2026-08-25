@@ -185,6 +185,10 @@ def normalize_task(task) -> dict:
     spec["beta_interval"] = int(params.get("beta_interval", spec["beta_interval"]) or 10)
     spec["gray_threshold"] = float(params.get("gray_threshold", spec["gray_threshold"]) or 0.20)
     spec["max_iter"] = int(params.get("max_iter", MESH_MAX_ITER.get(mesh_level, 200)))
+    spec["min_iter"] = max(1, int(params.get("min_iter", 1)))
+    spec["filter_strategy"] = str(params.get("filter_strategy", "fixed"))
+    spec["accuracy"] = str(params.get("accuracy", "standard"))
+    spec["p_start"] = float(params.get("penal", params.get("p_start", spec["p_start"])))
 
     material = wp.get("material") or raw.get("material") or {}
     spec["E"] = float(params.get("E", material.get("E", material.get("E_MPa", 1.0))))

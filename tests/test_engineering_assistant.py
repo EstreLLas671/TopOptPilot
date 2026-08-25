@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 from idesktop_v2.api.app import app
 from idesktop_v2.assistant import router as assistant_router
 
-from idesktop_v2.assistant.patches import EngineeringPatchRequest, generate_patch_proposal
+from idesktop_v2.assistant.patches import (
+    EngineeringChatRequest,
+    EngineeringPatchRequest,
+    generate_engineering_chat,
+    generate_patch_proposal,
+)
 
 
 def _request(**overrides):
@@ -105,3 +110,46 @@ def test_engineering_assistant_endpoint_returns_a_patch_without_write_access(mon
 
     assert response.status_code == 200
     assert response.json()["files"][0]["unifiedDiff"].startswith("@@ -1,3")
+
+
+def test_engineering_chat_returns_not_configured_without_calling_model() -> None:
+    calls = []
+    response = generate_engineering_chat(
+        EngineeringChatRequest(message="解释当前参数", context={"parameters": {"volfrac": 0.4}}),
+        lambda messages: calls.append(messages),
+        configured=False,
+    )
+    assert response.source == "not_configured"
+    assert response.actions == []
+    assert len(response.contextDigest) == 64
+    assert calls == []
+
+
+def test_engineering_chat_never_sends_source_without_explicit_consent() -> None:
+    calls = []
+    with pytest.raises(PermissionError, match="explicit consent"):
+        generate_engineering_chat(
+            EngineeringChatRequest(
+                message="解释代码",
+                relativePath="solver/example.m",
+                context={"source": "secret_source", "fileDigest": "0" * 64},
+                allowExternalSource=False,
+            ),
+            lambda messages: calls.append(messages),
+            configured=True,
+        )
+    assert calls == []
+
+
+def test_engineering_chat_is_read_only_and_returns_no_secret_or_actions() -> None:
+    captured = []
+    response = generate_engineering_chat(
+        EngineeringChatRequest(message="解释当前结果", context={"runId": "eng-1", "parameters": {"penal": 3}}),
+        lambda messages: captured.extend(messages) or {"success": True, "content": "结果解释"},
+        configured=True,
+    )
+    assert response.source == "qwen"
+    assert response.reply == "结果解释"
+    assert response.actions == []
+    assert "api_key" not in response.model_dump_json().lower()
+    assert all("secret_source" not in str(message) for message in captured)

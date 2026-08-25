@@ -22,7 +22,7 @@ export interface Experiment {
 export interface Decision { id: string; status: string; reason: string; risk: string; source?:string; evidence_ids?:string[]; experiment_id?: string; proposal: { parameters?: Record<string, unknown>; fidelity?: string } }
 export interface Research {
   id: string; name: string; goal: string; locale: Locale; status: string; mode: string;
-  constraints: Record<string, any>; geometry?:Record<string,any>; material?:Record<string,any>; loads?:Record<string,any>[]; boundary_conditions?:Record<string,any>;
+  constraints: Record<string, any>; archived_at?: string | null; geometry?:Record<string,any>; material?:Record<string,any>; loads?:Record<string,any>[]; boundary_conditions?:Record<string,any>;
   contract?:Record<string,any>; budgets?:Record<string,number>; current_round?:number; budget_total: number; budget_used: number;
   experiments: Experiment[]; events: EventRecord[]; decisions: Decision[];
   subagent_tasks?:SubagentTask[]; hypotheses?:Hypothesis[]; artifact_lineage?:ArtifactLineage[];
@@ -57,4 +57,9 @@ export interface EngineeringRun {
   metrics: Record<string, number | null>; snapshots: EngineeringArtifactRef[];
   files: EngineeringArtifactRef[]; provenance: Record<string, string>;
   error?: { code: string; source: string; message: string; retryable: boolean };
+}
+export interface EngineeringComparisonScheme {
+  id: string; name: string; runId: string; configDigest: string; createdAt: string;
+  config: Record<string, unknown>; run: EngineeringRun | null;
+  integrity: "verified" | "failed" | "missing"; integrityFailures: string[];
 }

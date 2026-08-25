@@ -32,6 +32,7 @@ describe("ResearchWorkspace stream lifecycle", () => {
     const view = render(<ResearchWorkspace
       researches={[research]} selected={research} command="" busy={false} safeMode={true}
       onCommand={() => undefined} onCreateResearch={() => undefined}
+      onArchive={async () => undefined} onRestore={async () => undefined}
       onDecision={() => undefined} onError={() => undefined}
       onSelect={async () => undefined} onSelectExperiment={() => undefined}
       setCommand={() => undefined}

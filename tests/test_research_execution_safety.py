@@ -33,6 +33,39 @@ def _research(service: ResearchService) -> dict:
         budget_total=4,
     ))
 
+def test_research_archive_is_reversible_and_filtered_from_active_list(
+    service: ResearchService,
+) -> None:
+    research = _research(service)
+
+    archived = service.archive_research(research["id"])
+
+    assert archived["archived_at"] is not None
+    assert research["id"] not in {item["id"] for item in service.list_research()}
+    assert research["id"] in {
+        item["id"] for item in service.list_research(archived=True)
+    }
+
+    restored = service.restore_research(research["id"])
+    assert restored["archived_at"] is None
+    assert research["id"] in {item["id"] for item in service.list_research()}
+
+
+def test_research_archive_rejects_running_state_and_pending_work(
+    service: ResearchService,
+) -> None:
+    research = _research(service)
+    service.store.update_research(research["id"], status="RUNNING")
+    with pytest.raises(ValueError, match="运行任务或待审批"):
+        service.archive_research(research["id"])
+
+    service.store.update_research(research["id"], status=research["status"])
+    service.create_experiment(research["id"], ExperimentCreate())
+    with pytest.raises(ValueError, match="运行任务或待审批"):
+        service.archive_research(research["id"])
+
+
+
 
 @pytest.mark.parametrize(
     ("fidelity", "backend"),

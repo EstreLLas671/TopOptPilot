@@ -126,3 +126,20 @@ def test_engineering_artifact_download_is_allowlisted(monkeypatch, tmp_path) -> 
     relative = payload["files"][0]["relativePath"]
     assert client.get(f"/api/engineering/runs/{created['runId']}/files/{relative}").status_code == 200
     assert client.get(f"/api/engineering/runs/{created['runId']}/files/../result.json").status_code in {400, 404}
+
+def test_engineering_run_rejects_invalid_complete_parameter_configuration() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/api/engineering/runs",
+        json={
+            "lane": "python-fem",
+            "ownerId": "engineering-test",
+            "task": {
+                "task_id": "invalid-config",
+                "load_case": "unsupported",
+                "geometry": {"nelx": 0, "nely": 8, "nelz": 6},
+                "params": {"volfrac": 1.2, "penal": 0, "rmin": 0, "max_iter": 5, "min_iter": 10, "filter_strategy": "unknown", "accuracy": "ultra"},
+            },
+        },
+    )
+    assert response.status_code == 422

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ChevronRight, FileCode2, FlaskConical, FolderOpen, Gauge, Pencil, Plus, Save, Search, Send, Settings2, SquareTerminal, Wrench } from "lucide-react";
+import { Activity, ChevronRight, FileCode2, FlaskConical, FolderOpen, Gauge, MessageCircle, Pencil, Plus, Save, Search, Send, Settings2, SquareTerminal, Wrench } from "lucide-react";
 import { api } from "../../api";
 import type { EngineeringRun, PatchApproval, PatchProposal, ProjectEntry, ProjectFile, Research } from "../../types";
 import { solverLaneLabel } from "../../workspace";
@@ -9,8 +9,11 @@ import ResultViewer from "./ResultViewer";
 import ResizableWorkspaceLayout from "../../components/ResizableWorkspaceLayout";
 import ProjectTree from "../../components/ProjectTree";
 import EngineeringIterationView from "./EngineeringIterationView";
-import EngineeringComparisonView from "./EngineeringComparisonView";
+import EngineeringComparisonWorkspace from "./EngineeringComparisonWorkspace";
 import EngineeringBottomPanel, { EngineeringRunButton } from "./EngineeringBottomPanel";
+import EngineeringChatPanel from "./EngineeringChatPanel";
+import ParameterConfigurationDialog from "./ParameterConfigurationDialog";
+import { DEFAULT_OPTIMIZATION_CONFIG, engineeringTaskFromConfig, validateOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 
 const MonacoEditor = lazy(() => import("../../components/MonacoCodeEditor"));
 type EngineeringHealth = { status: string; service: string; version: string; capabilities: { localMatlab: string; compiledRuntime: string } };
@@ -23,7 +26,7 @@ type Props = {
   onCreateResearch?: () => void;
   onSelectResearch?: (id: string) => void | Promise<void>;
 };
-type ViewTab = "code" | "results" | "iteration" | "compare";
+type ViewTab = "chat" | "code" | "results" | "iteration" | "compare";
 
 const languageFor = (path = "") => path.endsWith(".m") ? "matlab" : path.endsWith(".json") ? "json" : path.endsWith(".md") ? "markdown" : "plaintext";
 
@@ -44,7 +47,7 @@ export default function EngineeringWorkspace({
   const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [dirty, setDirty] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
-  const [viewTab, setViewTab] = useState<ViewTab>("code");
+  const [viewTab, setViewTab] = useState<ViewTab>("chat");
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [patchDiff, setPatchDiff] = useState("");
   const [patchApproval, setPatchApproval] = useState<PatchApproval | null>(null);
@@ -53,7 +56,7 @@ export default function EngineeringWorkspace({
   const [assistantConsent, setAssistantConsent] = useState(false);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [patchApplyBusy, setPatchApplyBusy] = useState(false);
-  const [lane, setLane] = useState<EngineeringSolverLane>("python-fem");
+  const [lane, setLane] = useState<EngineeringSolverLane>("local-matlab");
   const [laneHealth, setLaneHealth] = useState(health);
   const [matlabExecutable, setMatlabExecutable] = useState("");
   const [matlabInstallation, setMatlabInstallation] = useState<MatlabInstallation | null>(null);
@@ -65,11 +68,13 @@ export default function EngineeringWorkspace({
   const [runtimeDiagnostic, setRuntimeDiagnostic] = useState("正在扫描本机 MATLAB Runtime…");
   const [environmentScanBusy, setEnvironmentScanBusy] = useState(false);
   const environmentScanGenerationRef = useRef(0);
-  const [nelx, setNelx] = useState(30), [nely, setNely] = useState(15), [nelz, setNelz] = useState(4);
-  const [volfrac, setVolfrac] = useState(0.4), [maxIter, setMaxIter] = useState(30);
+  const [optimizationConfig, setOptimizationConfig] = useState<OptimizationConfig>(DEFAULT_OPTIMIZATION_CONFIG);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [run, setRun] = useState<EngineeringRun | null>(null);
+  const nelx = optimizationConfig.nelx, nely = optimizationConfig.nely, nelz = optimizationConfig.nelz, volfrac = optimizationConfig.volfrac, maxIter = optimizationConfig.maxIterations;
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
   const [runBusy, setRunBusy] = useState(false);
+  const [bottomActivitySignal, setBottomActivitySignal] = useState("");
   const [terminalSession, setTerminalSession] = useState("");
   const [terminalCommand, setTerminalCommand] = useState("");
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
@@ -92,6 +97,17 @@ export default function EngineeringWorkspace({
   });
 
   const reportError = useCallback((reason: unknown) => onError(String(reason)), [onError]);
+  const updateConfig = useCallback((patch: Partial<OptimizationConfig>) => setOptimizationConfig(current => ({ ...current, ...patch })), []);
+  const configErrors = validateOptimizationConfig(optimizationConfig);
+  const configVersionRef = useRef(JSON.stringify({ lane, optimizationConfig }));
+  useEffect(() => {
+    const version = JSON.stringify({ lane, optimizationConfig });
+    if (configVersionRef.current !== version) {
+      configVersionRef.current = version;
+      setRun(null);
+      setEvents([]);
+    }
+  }, [lane, optimizationConfig]);
 
   useEffect(() => setLaneHealth(health), [health]);
   useEffect(() => {
@@ -350,12 +366,15 @@ export default function EngineeringWorkspace({
   }
 
   async function startRun() {
-    setRunBusy(true); setEvents([]); setViewTab("results");
+    const errors = validateOptimizationConfig(optimizationConfig);
+    if (errors.length) { reportError(errors.join("；")); return; }
+    if (lane === "local-matlab" && matlabProbeState !== "ready") { reportError("本机 MATLAB 尚未通过探测，不能开始优化。"); return; }
+    setBottomActivitySignal(`engineering-run-${Date.now()}`);
+    setRunBusy(true); setEvents([]); setViewTab(lane === "local-matlab" ? "iteration" : "results");
     try {
       if (lane !== "python-fem") await api.engineeringPreference(lane);
       const payload = buildEngineeringRunRequest(lane, projectId || "engineering-ui", runtimeProfileId);
-      payload.task.geometry = { nelx, nely, nelz };
-      payload.task.params = { max_iter: maxIter, volfrac };
+      payload.task = engineeringTaskFromConfig(optimizationConfig);
       const created = await api.engineeringRun(payload);
       setRun(created);
       const socket = api.engineeringStream(created.runId, event => setEvents(items => [...items, event].slice(-80)));
@@ -373,7 +392,8 @@ export default function EngineeringWorkspace({
     finally { setRunBusy(false); }
   }
   async function cancelRun() { if (run && !["completed", "failed", "cancelled"].includes(run.status)) setRun(await api.engineeringCancel(run.runId)); }
-  async function exportReport() { if (!run) return; try { const ref = await api.engineeringReport(run.runId); window.alert(`报告已生成：${ref.relativePath}\nSHA-256: ${ref.sha256}`); setRun(await api.engineeringRunGet(run.runId)); } catch (reason) { reportError(reason); } }
+  async function exportReport() { if (!run) return; try { const ref = await api.engineeringReport(run.runId); window.alert(`报告已生成：${ref.relativePath}
+SHA-256: ${ref.sha256}`); setRun(await api.engineeringRunGet(run.runId)); } catch (reason) { reportError(reason); } }
   async function createResearchBaseline() {
     if (!run) return;
     setBaselineBusy(true);
@@ -390,7 +410,7 @@ export default function EngineeringWorkspace({
       }
       if (!executable) throw new Error("未发现可启动的 MATLAB 可执行文件。");
       const session = await api.terminalStart({ projectRoot, executable });
-      terminalSeen.current = new Set(); setTerminalOutput([]); setTerminalSession(session.sessionId); setTerminalStatus(session.status);
+      terminalSeen.current = new Set(); setTerminalOutput([]); setTerminalSession(session.sessionId); setTerminalStatus(session.status); setBottomActivitySignal(`matlab-terminal-${session.sessionId}`);
     } catch (reason) { reportError(reason); }
   }
   async function sendTerminalCommand() {
@@ -413,6 +433,8 @@ export default function EngineeringWorkspace({
   async function navigateBrowser() { try { if (!browserOpen) return toggleBrowser(); await api.webviewNavigate(browserUrl); } catch (reason) { reportError(reason); } }
 
   return <ResizableWorkspaceLayout mode="engineering"
+    activitySignal={bottomActivitySignal}
+    leftRail={<div className="left-rail-icons"><button aria-label="研究项目" title="研究项目"><FlaskConical size={15}/></button><button aria-label="项目文件" title="项目文件"><FileCode2 size={15}/></button><button aria-label="补丁审批" title="补丁审批" onClick={() => setAssistantOpen(true)}><Wrench size={15}/></button></div>}
     left={<>
       <div className="v2-pane-title research-project-heading"><span>研究</span><div className="pane-actions research-create-wrap"><button aria-label="新建或打开研究项目" title="新建或打开研究项目" onClick={() => setResearchMenuOpen(value => !value)}><Plus size={16}/></button>{researchMenuOpen ? <div className="research-project-menu"><button onClick={() => { setResearchMenuOpen(false); onCreateResearch?.(); }}><FlaskConical size={13}/>创建 Research</button><button onClick={() => { setResearchMenuOpen(false); void openProject(); }}><FolderOpen size={13}/>打开项目文件夹</button></div> : null}</div></div>
       <section className="selected-research-card"><FlaskConical size={16}/><div><b>{selectedResearch?.name || "尚未选择 Research"}</b><small>{selectedResearch ? `${selectedResearch.id} · ${selectedResearch.status}` : "点击 + 创建或选择研究项目"}</small></div></section>
@@ -427,24 +449,26 @@ export default function EngineeringWorkspace({
     </>}
     center={<section className="engineering-center-shell">
       <nav className="v2-tabs engineering-view-tabs" role="tablist" aria-label="工程中央视图">
+        <button role="tab" aria-selected={viewTab === "chat"} className={`tab ${viewTab === "chat" ? "active" : ""}`} onClick={() => setViewTab("chat")}><MessageCircle size={14}/>聊天</button>
         <button role="tab" aria-selected={viewTab === "code"} className={`tab ${viewTab === "code" ? "active" : ""}`} onClick={() => setViewTab("code")}><FileCode2 size={14}/>代码{dirty ? <i>●</i> : null}</button>
         <button role="tab" aria-selected={viewTab === "results"} className={`tab ${viewTab === "results" ? "active" : ""}`} onClick={() => setViewTab("results")}><Gauge size={14}/>结果</button>
         <button role="tab" aria-selected={viewTab === "iteration"} className={`tab ${viewTab === "iteration" ? "active" : ""}`} onClick={() => setViewTab("iteration")}><Activity size={14}/>迭代可视化</button>
         <button role="tab" aria-selected={viewTab === "compare"} className={`tab ${viewTab === "compare" ? "active" : ""}`} onClick={() => setViewTab("compare")}><Settings2 size={14}/>参数调整与对比</button>
         <div className="engineering-tab-actions"><span title={selectedFile?.relative_path}>{selectedFile?.relative_path || "未选择文件"}</span><button className="tab-action" onClick={() => void renameFile()} disabled={!selectedFile || dirty || patchApplyBusy}><Pencil size={13}/>重命名</button><button className="tab-action" onClick={() => void saveFile()} disabled={!dirty || projectBusy || patchApplyBusy}><Save size={13}/>保存</button></div>
-        <EngineeringRunButton busy={runBusy} label={`运行 ${solverLaneLabel(lane)}`} onRun={() => void startRun()}/>
+        <EngineeringRunButton busy={runBusy} disabled={configErrors.length > 0 || (lane === "local-matlab" && matlabProbeState !== "ready")} label={`运行 ${solverLaneLabel(lane)}`} onRun={() => void startRun()}/>
       </nav>
       <div className="engineering-view-content" role="tabpanel">
+        {viewTab === "chat" ? <EngineeringChatPanel projectId={projectId} selectedFile={selectedFile} run={run} config={optimizationConfig} onError={reportError}/> : null}
         {viewTab === "code" ? <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}><MonacoEditor language={languageFor(selectedFile?.relative_path)} value={selectedFile?.content || "% 打开项目后选择 UTF-8 源文件"} onChange={value => { if (selectedFile && !patchApplyBusy) { setSelectedFile({ ...selectedFile, content: value || "" }); setDirty(true); } }} options={{ readOnly: !selectedFile || projectBusy || patchApplyBusy, minimap: { enabled: false }, fontSize: 12, lineHeight: 20, automaticLayout: true, scrollBeyondLastLine: false, wordWrap: "off" }} theme="vs"/></Suspense></div> : null}
         {viewTab === "results" ? <ResultViewer run={run} onError={reportError}/> : null}
         {viewTab === "iteration" ? <EngineeringIterationView run={run} events={events}/> : null}
-        {viewTab === "compare" ? <EngineeringComparisonView current={{ lane, nelx, nely, nelz, volfrac, maxIter }} run={run}/> : null}
+        {viewTab === "compare" ? <EngineeringComparisonWorkspace current={{ lane, nelx, nely, nelz, volfrac, maxIter }} run={run} onError={onError}/> : null}
       </div>
-      <div className="engineering-composer">
+      {viewTab !== "chat" ? <div className="engineering-composer">
         <div className="assistant-identity"><Wrench size={13}/><span>工程助手 · 只生成 PatchProposal，应用前必须预览并确认</span></div>
         <div className="assistant-command-line"><input value={assistantInstruction} onChange={event => setAssistantInstruction(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { setAssistantOpen(true); void generatePatch(); } }} placeholder="询问 iDeskTop、生成代码补丁或输入命令…"/><button aria-label="发送给工程助手" disabled={assistantBusy || patchApplyBusy || !assistantInstruction.trim()} onClick={() => { setAssistantOpen(true); void generatePatch(); }}>{assistantBusy ? <Activity className="spin" size={14}/> : <Send size={14}/>}</button></div>
         {assistantStatus ? <small>{assistantStatus}</small> : null}
-      </div>
+      </div> : null}
     </section>}
     bottom={<EngineeringBottomPanel
       terminalSession={terminalSession}
@@ -466,9 +490,10 @@ export default function EngineeringWorkspace({
       onNavigateBrowser={() => void navigateBrowser()}
     />}
     right={<>
+      <ParameterConfigurationDialog open={detailsOpen} config={optimizationConfig} lane={lane} busy={runBusy} matlabDiagnostic={matlabDiagnostic} runtimeDiagnostic={runtimeDiagnostic} onClose={() => setDetailsOpen(false)} onApply={(nextConfig, nextLane) => { setOptimizationConfig(nextConfig); setLane(nextLane); setDetailsOpen(false); }}/>
       <div className="v2-pane-title"><span>检查器</span><Settings2 size={14}/></div>
-      <section className="inspector-card environment-card"><h4>工程求解链路</h4><label className="inspector-field">执行后端<select value={lane} disabled={environmentScanBusy} onChange={event => setLane(event.target.value as EngineeringSolverLane)}><option value="python-fem">Python FEM</option><option value="local-matlab">本机 MATLAB</option><option value="compiled-runtime">编译 Runtime（可选）</option></select></label><div className="lane-row environment-row"><span><i className="lane-dot blue"/>本机 MATLAB</span><b className={`status ${matlabProbeState === "ready" ? "status-success" : "neutral"}`}>{matlabProbeState === "ready" ? `${matlabInstallation?.release || "MATLAB"} · 已就绪` : matlabProbeState === "scanning" ? "扫描中" : matlabProbeState === "not-detected" ? "未检测到" : "不可用"}</b></div><small className="environment-path" title={matlabExecutable || matlabInstallation?.executable}>{matlabExecutable || matlabInstallation?.executable || matlabDiagnostic}</small><div className="lane-row environment-row"><span><i className="lane-dot purple"/>编译 Runtime（可选）</span><b className={`status ${runtimeState === "ready" ? "status-success" : "neutral"}`}>{runtimeState === "ready" ? `${runtimeInstallation?.release || "Runtime"} · 已就绪` : runtimeState === "scanning" ? "扫描中" : runtimeState === "detected-incompatible" ? `${runtimeInstallation?.release || "Runtime"} · 版本不兼容` : runtimeState === "not-detected" ? "未检测到" : "不可用"}</b></div><small className="environment-path" title={runtimeInstallation?.path}>{runtimeInstallation?.path || "未选择本机 Runtime"}</small><p className="environment-diagnostic">{runtimeDiagnostic}</p><div className="inspector-actions"><button className="outline-button environment-rescan" disabled={environmentScanBusy} onClick={() => void scanEngineeringEnvironment()}><SquareTerminal size={14}/>{environmentScanBusy ? "正在扫描…" : "重新扫描电脑"}</button></div></section>
-      <section className="inspector-card"><h4>求解参数</h4><div className="parameter-grid"><label>nelx<input type="number" min="4" value={nelx} onChange={event => setNelx(Number(event.target.value))}/></label><label>nely<input type="number" min="2" value={nely} onChange={event => setNely(Number(event.target.value))}/></label><label>nelz<input type="number" min="1" value={nelz} onChange={event => setNelz(Number(event.target.value))}/></label><label>体积分数<input type="number" min="0.05" max="0.95" step="0.05" value={volfrac} onChange={event => setVolfrac(Number(event.target.value))}/></label><label>最大迭代<input type="number" min="1" max="2000" value={maxIter} onChange={event => setMaxIter(Number(event.target.value))}/></label></div><div className="run-actions">
+      <section className="inspector-card environment-card"><h4>工程求解链路</h4><label className="inspector-field">执行后端<select value={lane} disabled={environmentScanBusy || runBusy} onChange={event => setLane(event.target.value as EngineeringSolverLane)}><option value="python-fem">Python FEM</option><option value="local-matlab">本机 MATLAB</option><option value="compiled-runtime">编译 Runtime（可选）</option></select></label><div className="lane-row environment-row"><span><i className="lane-dot blue"/>本机 MATLAB</span><b className={`status ${matlabProbeState === "ready" ? "status-success" : "neutral"}`}>{matlabProbeState === "ready" ? `${matlabInstallation?.release || "MATLAB"} · 已就绪` : matlabProbeState === "scanning" ? "扫描中" : matlabProbeState === "not-detected" ? "未检测到" : "不可用"}</b></div><small className="environment-path" title={matlabExecutable || matlabInstallation?.executable}>{matlabExecutable || matlabInstallation?.executable || matlabDiagnostic}</small><div className="lane-row environment-row"><span><i className="lane-dot purple"/>编译 Runtime（可选）</span><b className={`status ${runtimeState === "ready" ? "status-success" : "neutral"}`}>{runtimeState === "ready" ? `${runtimeInstallation?.release || "Runtime"} · 已就绪` : runtimeState === "scanning" ? "扫描中" : runtimeState === "detected-incompatible" ? `${runtimeInstallation?.release || "Runtime"} · 版本不兼容` : runtimeState === "not-detected" ? "未检测到" : "不可用"}</b></div><small className="environment-path" title={runtimeInstallation?.path}>{runtimeInstallation?.path || "未选择本机 Runtime"}</small><p className="environment-diagnostic">{runtimeDiagnostic}</p><div className="inspector-actions"><button className="outline-button environment-rescan" disabled={environmentScanBusy} onClick={() => void scanEngineeringEnvironment()}><SquareTerminal size={14}/>{environmentScanBusy ? "正在扫描…" : "重新扫描电脑"}</button></div></section>
+      <section className="inspector-card parameter-card"><header className="inspector-card-heading"><h4>参数配置</h4><button aria-label="打开详细参数" title="打开详细参数" onClick={() => setDetailsOpen(true)}><Plus size={13}/></button></header><fieldset className="parameter-grid" disabled={runBusy}><label>求解维度<select aria-label="求解维度" value={optimizationConfig.dimension} onChange={event => updateConfig({ dimension: event.target.value as OptimizationConfig["dimension"] })}><option value="2d">二维 2D</option><option value="3d">三维 3D</option></select></label><label>工况<select value={optimizationConfig.bcType} onChange={event => updateConfig({ bcType: event.target.value as OptimizationConfig["bcType"] })}><option value="cantilever">{optimizationConfig.dimension === "2d" ? "二维悬臂梁" : "三维悬臂梁"}</option><option value="MBB">MBB 梁</option><option value="simply_supported">简支梁</option><option value="L-bracket">L 型支架</option></select></label><label>精度<select value={optimizationConfig.accuracy} onChange={event => updateConfig({ accuracy: event.target.value as OptimizationConfig["accuracy"] })}><option value="standard">标准</option><option value="high">高精度</option></select></label><label>X 单元<input type="number" min="1" value={optimizationConfig.nelx} onChange={event => updateConfig({ nelx: Number(event.target.value) })}/></label><label>Y 单元<input type="number" min="1" value={optimizationConfig.nely} onChange={event => updateConfig({ nely: Number(event.target.value) })}/></label>{optimizationConfig.dimension === "3d" ? <label>Z 单元<input type="number" min="1" value={optimizationConfig.nelz} onChange={event => updateConfig({ nelz: Number(event.target.value) })}/></label> : null}<label>体积分数<input type="number" min="0.01" max="1" step="0.01" value={optimizationConfig.volfrac} onChange={event => updateConfig({ volfrac: Number(event.target.value) })}/></label><label>最大迭代<input type="number" min="1" max="2000" value={optimizationConfig.maxIterations} onChange={event => updateConfig({ maxIterations: Number(event.target.value) })}/></label></fieldset>{configErrors.length ? <p className="field-error">{configErrors.join("；")}</p> : null}<div className="run-actions">
         <button onClick={() => void cancelRun()} disabled={!runBusy}><SquareTerminal size={13}/>取消</button>
         <button onClick={() => void exportReport()} disabled={!run || runBusy}><FileCode2 size={13}/>导出报告</button>
         <button className="baseline-button" onClick={() => void createResearchBaseline()}
@@ -485,7 +510,7 @@ export default function EngineeringWorkspace({
           <input type="checkbox" checked={assistantConsent} disabled={patchApplyBusy} onChange={event => setAssistantConsent(event.target.checked)}/>
           允许本次把当前文件内容发送给 DashScope/Qwen
         </label>
-        <small className="privacy-note">仅发送当前受控文件、摘要和上述要求；API Key 只从环境变量读取。</small>
+        <small className="privacy-note">仅发送当前受控文件、摘要和上述要求；API Key 仅从环境变量或 Windows Credential Manager 安全读取。</small>
         <div className="assistant-actions">
           <button className="outline-button" disabled={assistantBusy || patchApplyBusy || dirty || !selectedFile || !assistantInstruction.trim() || !assistantConsent} onClick={() => void generatePatch()}>{assistantBusy ? "生成中…" : "由 Qwen 生成"}</button>
           <button className="outline-button" disabled={patchApplyBusy || !patchDiff.trim()} onClick={() => void previewPatch()}>校验差异</button>

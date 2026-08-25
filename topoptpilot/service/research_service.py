@@ -541,14 +541,39 @@ class ResearchService:
         return None
 
     def _next_research_id(self) -> str:
-        used = {item["id"] for item in self.store.list_research()}
+        used = {item["id"] for item in [*self.store.list_research(), *self.store.list_research(archived=True)]}
         number = 1
         while f"MBB-{number:03d}" in used:
             number += 1
         return f"MBB-{number:03d}"
 
-    def list_research(self) -> list[dict[str, Any]]:
-        return self.store.list_research()
+    def list_research(self, archived: bool = False) -> list[dict[str, Any]]:
+        return self.store.list_research(archived=archived)
+
+    def archive_research(self, research_id: str) -> dict[str, Any]:
+        research = self._require_research(research_id)
+        active_experiments = [
+            item["id"] for item in self.store.list_experiments(research_id)
+            if str(item.get("status", "")).upper() in {"WAITING", "QUEUED", "RUNNING"}
+        ]
+        pending_decisions = [
+            item["id"] for item in self.store.list_decisions(research_id)
+            if str(item.get("status", "")).upper() == "PENDING"
+        ]
+        active_tasks = [
+            item["id"] for item in self.store.list_subagent_tasks(research_id)
+            if str(item.get("status", "")).upper() in {"WAITING", "QUEUED", "RUNNING", "PENDING"}
+        ]
+        blockers = active_experiments + pending_decisions + active_tasks
+        if str(research.get("status", "")).upper() == "RUNNING" or blockers:
+            raise ValueError("Research 仍有运行任务或待审批事项，请先停止并处理后再移入回收站")
+        if self.pi_runtime is not None:
+            self.pi_runtime.release(research_id)
+        return self.store.update_research(research_id, archived_at=utc_now())
+
+    def restore_research(self, research_id: str) -> dict[str, Any]:
+        self._require_research(research_id)
+        return self.store.update_research(research_id, archived_at=None)
 
     def get_research(self, research_id: str) -> dict[str, Any]:
         research = self.store.get_research(research_id)

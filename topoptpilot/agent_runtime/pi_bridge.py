@@ -301,6 +301,15 @@ class PiBridge:
     def cancel(self, research_id: str):
         return self.start(research_id).abort()
 
+    def release(self, research_id: str) -> None:
+        process = self.processes.pop(research_id, None)
+        if process is not None:
+            process.stop()
+        for task_id, child in list(self.subagent_processes.items()):
+            if child.research_id == research_id:
+                child.stop()
+                self.subagent_processes.pop(task_id, None)
+
     def resume(self, research_id: str) -> PiProcess:
         return self.start(research_id)
 

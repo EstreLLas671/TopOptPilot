@@ -77,8 +77,8 @@ export interface EngineeringRunRequest {
   task: {
     task_id: string;
     load_case: string;
-    geometry: { nelx: number; nely: number; nelz?: number };
-    params: { max_iter: number; volfrac: number };
+    geometry: { nelx: number; nely: number; nelz: number };
+    params: { volfrac: number; penal: number; rmin: number; max_iter: number; min_iter: number; filter_strategy: string; accuracy: string };
   };
 }
 
@@ -100,7 +100,7 @@ export function buildEngineeringRunRequest(lane: EngineeringSolverLane, ownerId:
       task_id: "idesktop-v2-ui",
       load_case: "cantilever",
       geometry: { nelx: 30, nely: 15, nelz: 4 },
-      params: { max_iter: 30, volfrac: 0.4 },
+      params: { volfrac: 0.4, penal: 3, rmin: 1.5, max_iter: 60, min_iter: 10, filter_strategy: "fixed", accuracy: "standard" },
     },
   };
 }

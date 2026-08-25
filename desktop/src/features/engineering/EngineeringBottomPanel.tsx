@@ -69,6 +69,6 @@ export default function EngineeringBottomPanel(props: Props) {
   </section>;
 }
 
-export function EngineeringRunButton({ busy, label, onRun }: { busy: boolean; label: string; onRun: () => void }) {
-  return <button className="run-button center-run-button" onClick={onRun} disabled={busy}><Play size={13}/>{busy ? "运行中" : label}</button>;
+export function EngineeringRunButton({ busy, label: _label, disabled = false, onRun }: { busy: boolean; label: string; disabled?: boolean; onRun: () => void }) {
+  return <button className="run-button center-run-button" onClick={onRun} disabled={busy || disabled}><Play size={14}/>{busy ? "优化中" : "开始优化"}</button>;
 }

@@ -140,6 +140,7 @@ class ResearchStateStore:
                 "locale": "TEXT NOT NULL DEFAULT 'zh-CN'",
                 "defaults_json": "TEXT NOT NULL DEFAULT '{}'",
                 "contract_json": "TEXT NOT NULL DEFAULT '{}'",
+                "archived_at": "TEXT",
             })
             self._ensure_columns(db, "experiments", {
                 "proposal_id": "TEXT",
@@ -224,9 +225,10 @@ class ResearchStateStore:
                  json.dumps(data.get("contract", {}))))
         return self.get_research(data["id"])
 
-    def list_research(self) -> list[dict]:
+    def list_research(self, archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("SELECT * FROM research ORDER BY updated_at DESC").fetchall()
+            operator = "IS NOT NULL" if archived else "IS NULL"
+            rows = db.execute(f"SELECT * FROM research WHERE archived_at {operator} ORDER BY updated_at DESC").fetchall()
         return [self._decode(row, ("constraints", "locks", "budgets", "geometry", "material",
                                    "loads", "boundary_conditions", "defaults", "contract")) for row in rows]
 
@@ -238,7 +240,7 @@ class ResearchStateStore:
 
     def update_research(self, research_id: str, **fields: Any) -> dict:
         allowed = {"name", "goal", "mode", "status", "budget_total", "budget_used",
-                   "hypothesis", "current_question", "current_round", "termination_reason", "locale"}
+                   "hypothesis", "current_question", "current_round", "termination_reason", "locale", "archived_at"}
         assignments, values = [], []
         for name, value in fields.items():
             if name in allowed:

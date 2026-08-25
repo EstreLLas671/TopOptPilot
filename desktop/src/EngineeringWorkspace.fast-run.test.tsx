@@ -65,9 +65,12 @@ describe("EngineeringWorkspace fast run event replay", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: /Python FEM/ }));
+    const lane = screen.getByRole("combobox", { name: "执行后端" }) as HTMLSelectElement;
+    await waitFor(() => expect(lane.disabled).toBe(false));
+    await userEvent.selectOptions(lane, "python-fem");
+    await userEvent.click(screen.getByRole("button", { name: "开始优化" }));
     await waitFor(() => expect(apiMocks.engineeringEvents).toHaveBeenCalledWith("eng-fast"));
-    await userEvent.click(screen.getAllByRole("tab")[2]);
+    await userEvent.click(screen.getByRole("tab", { name: "迭代可视化" }));
 
     expect(await screen.findByText("1 / 1")).toBeTruthy();
     expect(close).toHaveBeenCalledTimes(1);

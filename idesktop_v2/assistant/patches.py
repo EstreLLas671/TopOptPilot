@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Callable
 from pathlib import PurePosixPath
@@ -108,4 +109,94 @@ def generate_patch_proposal(
             beforeDigest=request.beforeDigest,
             unifiedDiff=diff,
         )],
+    )
+
+
+class EngineeringChatContext(BaseModel):
+    runId: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    selectedText: str = Field(default="", max_length=20_000)
+    fileDigest: str | None = None
+    source: str | None = Field(default=None, max_length=120_000)
+
+
+class EngineeringChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4_000)
+    projectId: str | None = Field(default=None, max_length=128)
+    relativePath: str | None = Field(default=None, max_length=500)
+    context: EngineeringChatContext = Field(default_factory=EngineeringChatContext)
+    allowExternalSource: bool = False
+
+    @field_validator("relativePath")
+    @classmethod
+    def validate_optional_relative_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError("relativePath must stay inside the controlled project")
+        if path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            raise ValueError("relativePath extension is not allowed")
+        return path.as_posix()
+
+
+class EngineeringChatResponse(BaseModel):
+    reply: str
+    source: str
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+    contextDigest: str
+
+
+def generate_engineering_chat(
+    request: EngineeringChatRequest,
+    chat: Callable[[list[dict[str, Any]]], dict[str, Any]],
+    *,
+    configured: bool,
+) -> EngineeringChatResponse:
+    context = request.context.model_dump(exclude_none=True)
+    source = context.pop("source", None)
+    selected_text = context.pop("selectedText", "")
+    if selected_text:
+        if not request.allowExternalSource:
+            raise PermissionError("explicit consent is required before sending selected source to an external model")
+        source = selected_text if source is None else f"{selected_text}\n{source}"
+    if source is not None and not request.allowExternalSource:
+        raise PermissionError("explicit consent is required before sending source to an external model")
+    if source is not None and not request.relativePath:
+        raise ValueError("source requires a selected relative path")
+    context_payload = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(context_payload.encode("utf-8")) > 120_000:
+        raise ValueError("engineering chat context exceeds the controlled size limit")
+    digest = hashlib.sha256(context_payload.encode("utf-8")).hexdigest()
+    if not configured:
+        return EngineeringChatResponse(
+            reply="当前未配置 DashScope/Qwen API Key。你仍可以继续使用本机求解、参数配置和 Safe Mode；配置密钥后再进行在线工程问答。",
+            source="not_configured",
+            contextDigest=digest,
+        )
+    user_content = f"工程问题：{request.message}\n工程上下文：{context_payload}"
+    if source is not None:
+        user_content += f'\n<untrusted-source path="{request.relativePath}">\n{source}\n</untrusted-source>'
+    response = chat([
+        {
+            "role": "system",
+            "content": (
+                "你是 iDeskTop v2 工程开发助手。只回答工程开发、拓扑优化参数、"
+                "MATLAB/Python 求解、结果制品和运行诊断问题。不要修改文件，不要编造求解结果，"
+                "不要把工程运行自动解释为科研结论。若用户要求改代码，只说明需要进入 PatchProposal 审批流程。"
+            ),
+        },
+        {"role": "user", "content": user_content},
+    ])
+    if not response.get("success"):
+        return EngineeringChatResponse(
+            reply="在线 Agent 当前不可用，已保留本机工程能力。请检查 Agent 设置或继续使用 Safe Mode。",
+            source="safe_mode",
+            contextDigest=digest,
+        )
+    return EngineeringChatResponse(
+        reply=str(response.get("content") or "Agent 未返回文本"),
+        source="qwen",
+        contextDigest=digest,
     )

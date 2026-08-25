@@ -71,6 +71,7 @@ def run_topopt(task_spec, *, backend: str = "python",
     eta = float(spec["eta"])
 
     max_iter = int(max_iter_override if max_iter_override else spec["max_iter"])
+    min_iter = max(1, min(max_iter, int(spec.get("min_iter", 1))))
     tol_change = float(spec["tol_change"])
     move = float(spec["move"])
     xmin = float(spec["xmin"])
@@ -186,7 +187,7 @@ def run_topopt(task_spec, *, backend: str = "python",
             cancelled = True
             break
 
-        if change < tol_change:
+        if it >= min_iter and change < tol_change:
             status = "converged"
             break
         if time_limit is not None and (time.time() - t0) > time_limit:

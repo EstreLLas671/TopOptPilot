@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from idesktop_v2 import __version__
 from idesktop_v2.engineering.report import write_report
 from idesktop_v2.engineering.runs import RunCreateRequest, manager
+from idesktop_v2.engineering.comparison_schemes import comparison_schemes
 from idesktop_v2.engineering.terminal import MAX_COMMAND_BYTES, manager as terminal_manager
 from idesktop_v2.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles
 from idesktop_v2.engineering.runtime_discovery import runtime_inventory
@@ -215,6 +216,7 @@ def engineering_run_report(run_id: str) -> dict[str, object]:
     ref = manager._ref(record.run_dir, path, "text/markdown")
     if not any(item.relative_path == ref.relative_path for item in record.files):
         record.files.append(ref)
+    manager.persist(record)
     return ref.model_dump(by_alias=True, mode="json")
 
 
@@ -243,6 +245,42 @@ async def engineering_run_stream(websocket: WebSocket, run_id: str) -> None:
             await asyncio.sleep(0.05)
     except WebSocketDisconnect:
         return
+class ComparisonSchemeCreateRequest(BaseModel):
+    run_id: str = Field(alias="runId", pattern=r"^eng-[0-9a-f]{32}$")
+    name: str | None = Field(default=None, max_length=120)
+
+
+@router.get("/comparison-schemes")
+def comparison_scheme_list() -> list[dict[str, object]]:
+    return comparison_schemes.list()
+
+
+@router.post("/comparison-schemes", status_code=201)
+def comparison_scheme_create(request: ComparisonSchemeCreateRequest) -> dict[str, object]:
+    try:
+        return comparison_schemes.create(request.run_id, request.name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="engineering run not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/comparison-schemes/{scheme_id}")
+def comparison_scheme_get(scheme_id: str) -> dict[str, object]:
+    value = comparison_schemes.get(scheme_id)
+    if value is None:
+        raise HTTPException(status_code=404, detail="comparison scheme not found")
+    return value
+
+
+@router.delete("/comparison-schemes/{scheme_id}")
+def comparison_scheme_delete(scheme_id: str) -> dict[str, object]:
+    if not comparison_schemes.delete(scheme_id):
+        raise HTTPException(status_code=404, detail="comparison scheme not found")
+    return {"deleted": True, "id": scheme_id}
+
+
+
 class TerminalStartRequest(BaseModel):
     project_root: str = Field(min_length=1, max_length=1000, alias="projectRoot")
     executable: str | None = Field(default=None, max_length=1000)

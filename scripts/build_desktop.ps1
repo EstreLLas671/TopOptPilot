@@ -73,7 +73,9 @@ $PackageLock = Join-Path $ProjectRoot "package-lock.json"
 $AgentsFile = Join-Path $ProjectRoot "AGENTS.md"
 
 Require-File $SidecarSource "Desktop sidecar source is missing."
-Require-Directory (Join-Path $MatlabSource "engineering\TopOpt-3D") "v2 MATLAB engineering source was not found."
+Require-Directory (Join-Path $MatlabSource "engineering\TopOpt_2D") "v2 2D MATLAB engineering source was not found."
+Require-Directory (Join-Path $MatlabSource "engineering\TopOpt-3D") "v2 3D MATLAB engineering source was not found."
+Require-File (Join-Path $MatlabSource "engineering\solver-sources.json") "MATLAB solver source manifest was not found."
 Require-File $PackageJson "Root package.json is missing."
 Require-File $PackageLock "Root package-lock.json is missing."
 if (-not $SkipBundle) {
@@ -145,7 +147,7 @@ if (Test-Path -LiteralPath $BackupResourceRoot) { Remove-Item -LiteralPath $Back
 
 try {
     New-Item -ItemType Directory -Force -Path (Join-Path $StageRoot "bin") | Out-Null
-    New-Item -ItemType File -Force -Path (Join-Path $StageRoot ".keep") | Out-Null
+    Copy-Item -LiteralPath (Join-Path $ResourceRoot ".keep") -Destination (Join-Path $StageRoot ".keep")
     Copy-Item -LiteralPath $BackendExecutable -Destination (Join-Path $StageRoot "bin\topoptpilot-backend.exe")
     Copy-Item -LiteralPath $MatlabSource -Destination (Join-Path $StageRoot "matlab") -Recurse
     $StagedMatlabRoot = Join-Path $StageRoot "matlab"
@@ -203,6 +205,9 @@ try {
             "bin\topoptpilot-backend.exe", "node\node.exe",
             "vendor\matlab-mcp-server\matlab-mcp-server-windows-x64.exe",
             "mcp\matlab_mcp\topopt-tools.json",
+            "matlab\engineering\TopOpt_2D\topopt_main.m",
+            "matlab\engineering\TopOpt-3D\topopt3d_main.m",
+            "matlab\engineering\solver-sources.json",
             "求解器模块\2D\TopOpt_integrated\TopOpt_integrated\topopt_main.m",
             "求解器模块\TopOpt-3D\TopOpt-3D\topopt3d_main.m"
         )) {
