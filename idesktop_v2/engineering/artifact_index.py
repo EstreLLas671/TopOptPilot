@@ -14,6 +14,7 @@ def media_type_for(path: Path) -> str:
         ".txt": "text/plain",
         ".mat": "application/vnd.mathworks.matlab.mat",
         ".bin": "application/vnd.idesktop.float32",
+        ".png": "image/png",
     }.get(path.suffix.lower(), "application/octet-stream")
 
 

@@ -34,6 +34,7 @@ def test_build_matlab_config_maps_engineering_task_without_demo_flags() -> None:
     assert config["accuracy"] == "high"
     assert config["display"] is False
     assert config["live_stress_snapshots"] is True
+    assert config["render_iteration_frames"] is True
     assert config["provenance_mode"] == "engineering-local-matlab"
 
 
@@ -58,6 +59,8 @@ def test_manifest_progress_includes_only_committed_real_snapshot_files(tmp_path:
     snapshots.mkdir()
     density = snapshots / "iter_0001_density.bin"
     density.write_bytes(b"\x00\x00\x80?")
+    render = snapshots / "iter_0001_matlab.png"
+    render.write_bytes(b"\x89PNG\r\n\x1a\n")
     (snapshots / "manifest.json").write_text(
         json.dumps({
             "dtype": "float32",
@@ -70,6 +73,7 @@ def test_manifest_progress_includes_only_committed_real_snapshot_files(tmp_path:
                 "volume_fraction": 0.4,
                 "density_file": density.name,
                 "stress_file": "",
+                "render_file": render.name,
             }],
         }),
         encoding="utf-8",
@@ -85,6 +89,7 @@ def test_manifest_progress_includes_only_committed_real_snapshot_files(tmp_path:
     assert published[0][1]["snapshot"] == {
         "densityPath": "snapshots/iter_0001_density.bin",
         "stressPath": None,
+        "renderPath": "snapshots/iter_0001_matlab.png",
         "shape": [1, 1],
         "dtype": "float32",
         "order": "F",

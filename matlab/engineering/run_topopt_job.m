@@ -39,7 +39,7 @@ try
         'shape',snapshotShape,'frames',struct([]));
     write_json_atomic(manifestPath, snapshotManifest);
     config.iteration_callback = @(frame) write_iteration_snapshot( ...
-        frame, snapshotDir, manifestPath, statusPath);
+        frame, config, dimension, snapshotDir, manifestPath, statusPath);
     bridgePath = fileparts(mfilename('fullpath'));
     configuredSolverPath = getenv('IDESKTOP_SOLVER_PATH');
     if ~isempty(configuredSolverPath) && isfolder(configuredSolverPath)
@@ -89,7 +89,7 @@ catch err
 end
 end
 
-function write_iteration_snapshot(frame, snapshotDir, manifestPath, statusPath)
+function write_iteration_snapshot(frame, config, dimension, snapshotDir, manifestPath, statusPath)
 densityName = sprintf('iter_%04d_density.bin', frame.iteration);
 write_single_payload(fullfile(snapshotDir, densityName), frame.x);
 stressName = '';
@@ -97,11 +97,18 @@ if isfield(frame, 'von_mises') && ~isempty(frame.von_mises)
     stressName = sprintf('iter_%04d_von_mises.bin', frame.iteration);
     write_single_payload(fullfile(snapshotDir, stressName), frame.von_mises);
 end
+renderName = '';
+if ~isfield(config, 'render_iteration_frames') || config.render_iteration_frames
+    renderName = sprintf('iter_%04d_matlab.png', frame.iteration);
+    render_iteration_frame(frame, config, dimension, ...
+        fullfile(snapshotDir, renderName));
+end
 manifest = jsondecode(fileread(manifestPath));
 entry = struct( ...
     'iteration',double(frame.iteration), ...
     'density_file',densityName, ...
     'stress_file',stressName, ...
+    'render_file',renderName, ...
     'objective',double(frame.objective), ...
     'change',double(frame.change), ...
     'volume_fraction',double(frame.volume_fraction), ...

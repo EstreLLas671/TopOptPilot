@@ -63,4 +63,43 @@ describe("EngineeringIterationView", () => {
     expect(screen.getByText(/第 1 轮 · 2D/)).toBeTruthy();
     expect(screen.queryByText(/占位/)).toBeNull();
   });
+
+  it("shows the real per-iteration MATLAB render as the default 3D view", async () => {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:matlab-iteration-1"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    artifactMocks.engineeringArtifactBuffer.mockImplementation(
+      async (_runId: string, relativePath: string) => relativePath.endsWith(".png")
+        ? new Uint8Array([137, 80, 78, 71]).buffer
+        : float32([0.1, 0.2, 0.8, 0.9, 0.15, 0.25, 0.75, 0.85]),
+    );
+
+    render(<EngineeringIterationView run={run} events={[{
+      type: "progress",
+      iteration: 1,
+      metrics: { compliance: 12.5, volumeFraction: 0.4 },
+      snapshot: {
+        densityPath: "snapshots/iter_0001_density.bin",
+        stressPath: null,
+        renderPath: "snapshots/iter_0001_matlab.png",
+        shape: [2, 2, 2],
+        dimension: "3d",
+        densitySha256: "b".repeat(64),
+        renderSha256: "c".repeat(64),
+      },
+    }]}/>);
+
+    const image = await screen.findByAltText("MATLAB 第 1 轮真实 3D 拓扑迭代图");
+    expect(image.getAttribute("src")).toBe("blob:matlab-iteration-1");
+    expect(artifactMocks.engineeringArtifactBuffer).toHaveBeenCalledWith(
+      "eng-real-matlab",
+      "snapshots/iter_0001_matlab.png",
+    );
+    expect(screen.getByText(/MATLAB 原始逐轮渲染/)).toBeTruthy();
+  });
 });

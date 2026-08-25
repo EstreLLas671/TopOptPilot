@@ -9,6 +9,9 @@ def test_matlab_iteration_snapshot_records_density_and_stress_payloads() -> None
     assert "stress_file" in source
     assert "frame.von_mises" in source
     assert "write_single_payload" in source
+    assert "render_file" in source
+    assert "render_iteration_frame" in source
+    assert (Path(__file__).parents[1] / "matlab" / "engineering" / "render_iteration_frame.m").is_file()
 
 
 def test_matlab_bridge_routes_to_user_2d_and_3d_solver_entries() -> None:

@@ -141,6 +141,7 @@ for loop = 1:config.max_iterations
         frame.iteration = loop;
         frame.max_iterations = config.max_iterations;
         frame.x = x;
+        frame.domain_mask = domainMask;
         frame.objective = objective;
         frame.change = change;
         frame.volume_fraction = ocInfo.volume_fraction;

@@ -296,10 +296,10 @@ class RunManager:
         if isinstance(raw_snapshot, dict):
             snapshot_event = {
                 key: raw_snapshot.get(key)
-                for key in ("densityPath", "stressPath", "shape", "dtype", "order", "dimension")
+                for key in ("densityPath", "stressPath", "renderPath", "shape", "dtype", "order", "dimension")
             }
             indexed: dict[str, ArtifactRef] = {}
-            for key in ("densityPath", "stressPath"):
+            for key in ("densityPath", "stressPath", "renderPath"):
                 raw_path = snapshot_event.get(key)
                 if not isinstance(raw_path, str) or not raw_path:
                     continue
@@ -323,6 +323,8 @@ class RunManager:
                 snapshot_event["densitySha256"] = indexed["densityPath"].sha256
                 if "stressPath" in indexed:
                     snapshot_event["stressSha256"] = indexed["stressPath"].sha256
+                if "renderPath" in indexed:
+                    snapshot_event["renderSha256"] = indexed["renderPath"].sha256
                 event["snapshot"] = snapshot_event
         self._emit(record, event)
 

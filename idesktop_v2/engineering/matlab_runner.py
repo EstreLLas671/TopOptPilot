@@ -61,6 +61,7 @@ def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
         "display": False,
         "verbose": True,
         "live_stress_snapshots": True,
+        "render_iteration_frames": True,
         "provenance_mode": "engineering-local-matlab",
     }
 
@@ -192,6 +193,7 @@ def publish_manifest_progress(
             continue
         density_path = _snapshot_relative_path(snapshot_root, frame.get("density_file"))
         stress_path = _snapshot_relative_path(snapshot_root, frame.get("stress_file"))
+        render_path = _snapshot_relative_path(snapshot_root, frame.get("render_file"))
         state = {
             "compliance": compliance,
             "volume_fraction": volume_fraction,
@@ -200,6 +202,7 @@ def publish_manifest_progress(
             state["snapshot"] = {
                 "densityPath": density_path,
                 "stressPath": stress_path,
+                "renderPath": render_path,
                 "shape": shape,
                 "dtype": manifest.get("dtype", "float32"),
                 "order": manifest.get("order", "F"),
