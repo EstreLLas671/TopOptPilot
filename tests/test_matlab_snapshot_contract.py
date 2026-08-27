@@ -40,3 +40,16 @@ def test_matlab_binary_writer_closes_each_payload_exactly_once() -> None:
     assert "cleanup = onCleanup(@() fclose(fid));" in writer
     assert "clear cleanup" in writer
     assert "\nfclose(fid);" not in writer
+
+
+def test_2d_solver_emits_true_von_mises_for_live_and_final_views() -> None:
+    root = Path(__file__).parents[1] / "matlab" / "engineering" / "TopOpt_2D"
+    source = (root / "topopt_main.m").read_text(encoding="utf-8")
+    stress_source = (root / "compute_von_mises_2d.m").read_text(encoding="utf-8")
+
+    assert "frame.von_mises" in source
+    assert "result.von_mises" in source
+    assert "Ufinal" in source
+    assert "gauss_max" in stress_source
+    assert "Eeff = x(ely,elx)^penal" in stress_source
+    assert "sigma(1)^2 - sigma(1)*sigma(2)" in stress_source

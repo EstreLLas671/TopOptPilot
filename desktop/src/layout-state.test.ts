@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LAYOUT,
   LAYOUT_STORAGE_KEYS,
+  LEGACY_ENGINEERING_LAYOUT_KEY,
   clampLayout,
   loadWorkspaceLayout,
   resetWorkspaceLayout,
@@ -50,6 +51,39 @@ describe("workspace layout state", () => {
     expect(loadWorkspaceLayout("engineering", storage)).not.toMatchObject(research);
   });
 
+  it("migrates the engineering v3 sidebars once while preserving bottom state", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(LEGACY_ENGINEERING_LAYOUT_KEY, JSON.stringify({
+      leftOpen: false,
+      rightOpen: true,
+      bottomOpen: true,
+      leftWidth: 260,
+      rightWidth: 410,
+      bottomHeight: 360,
+    }));
+
+    const migrated = loadWorkspaceLayout("engineering", storage);
+    expect(migrated).toEqual({
+      leftOpen: true,
+      rightOpen: false,
+      bottomOpen: true,
+      leftWidth: 410,
+      rightWidth: 320,
+      bottomHeight: 360,
+    });
+    expect(JSON.parse(storage.getItem(LAYOUT_STORAGE_KEYS.engineering) || "{}")).toEqual(migrated);
+
+    storage.setItem(LEGACY_ENGINEERING_LAYOUT_KEY, JSON.stringify({ leftOpen: true, rightOpen: true, leftWidth: 420, rightWidth: 240 }));
+    expect(loadWorkspaceLayout("engineering", storage)).toEqual(migrated);
+  });
+
+  it("keeps the independent research v3 layout unchanged", () => {
+    const storage = new MemoryStorage();
+    const research = { ...DEFAULT_LAYOUT, leftOpen: false, rightWidth: 505, bottomOpen: true };
+    storage.setItem(LAYOUT_STORAGE_KEYS.research, JSON.stringify(research));
+    expect(loadWorkspaceLayout("research", storage)).toEqual(research);
+    expect(LAYOUT_STORAGE_KEYS.research).toBe("idesktop-v2.layout.research.v3");
+  });
   it("ignores malformed or narrow-screen layouts and can reset to defaults", () => {
     const storage = new MemoryStorage();
     storage.setItem(LAYOUT_STORAGE_KEYS.engineering, "not-json");

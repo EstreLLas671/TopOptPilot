@@ -27,9 +27,11 @@ export const LAYOUT_LIMITS = Object.freeze({
 });
 
 export const LAYOUT_STORAGE_KEYS: Record<WorkspaceMode, string> = Object.freeze({
-  engineering: "idesktop-v2.layout.engineering.v3",
+  engineering: "idesktop-v2.layout.engineering.v4",
   research: "idesktop-v2.layout.research.v3",
 });
+
+export const LEGACY_ENGINEERING_LAYOUT_KEY = "idesktop-v2.layout.engineering.v3";
 
 function numberOr(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -61,6 +63,19 @@ export function togglePanel(layout: WorkspaceLayout, panel: PanelName): Workspac
   return { ...layout, bottomOpen: !layout.bottomOpen };
 }
 
+/** Preserve engineering panel semantics while swapping the v3 sidebars in v4. */
+export function migrateEngineeringLayout(legacy: Partial<WorkspaceLayout>): WorkspaceLayout {
+  const previous = clampLayout(legacy);
+  return clampLayout({
+    leftOpen: previous.rightOpen,
+    rightOpen: previous.leftOpen,
+    bottomOpen: previous.bottomOpen,
+    leftWidth: previous.rightWidth,
+    rightWidth: previous.leftWidth,
+    bottomHeight: previous.bottomHeight,
+  });
+}
+
 function defaultStorage(): Storage | null {
   return typeof window === "undefined" ? null : window.localStorage;
 }
@@ -69,8 +84,16 @@ export function loadWorkspaceLayout(mode: WorkspaceMode, storage: Storage | null
   if (!storage) return { ...DEFAULT_LAYOUT };
   try {
     const raw = storage.getItem(LAYOUT_STORAGE_KEYS[mode]);
-    if (!raw) return { ...DEFAULT_LAYOUT };
-    return clampLayout(JSON.parse(raw) as Partial<WorkspaceLayout>);
+    if (raw) return clampLayout(JSON.parse(raw) as Partial<WorkspaceLayout>);
+    if (mode === "engineering") {
+      const legacyRaw = storage.getItem(LEGACY_ENGINEERING_LAYOUT_KEY);
+      if (legacyRaw) {
+        const migrated = migrateEngineeringLayout(JSON.parse(legacyRaw) as Partial<WorkspaceLayout>);
+        storage.setItem(LAYOUT_STORAGE_KEYS.engineering, JSON.stringify(migrated));
+        return migrated;
+      }
+    }
+    return { ...DEFAULT_LAYOUT };
   } catch {
     return { ...DEFAULT_LAYOUT };
   }

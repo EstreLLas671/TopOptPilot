@@ -1,23 +1,43 @@
+import { useEffect, useState } from "react";
 import type { BuiltInCase, SolverDimension } from "../../optimization-config";
-
-const CASE_LABELS: Record<BuiltInCase, string> = {
-  cantilever: "悬臂梁", MBB: "MBB 梁", simply_supported: "简支梁", "L-bracket": "L 型支架",
-};
+import { asFortranVolume, readFloat32LittleEndian, type MatlabVolume } from "./matlab-artifact";
+import InteractiveVolumeView from "./InteractiveVolumeView";
+type PreviewEntry = { dimension: SolverDimension; bcType: BuiltInCase; shape: number[]; densityPath: string; stressPath?: string; renderPath?: string; source?: string; configDigest?: string };
+type PreviewManifest = { cases: PreviewEntry[] };
+const labels: Record<BuiltInCase, string> = { cantilever: "悬臂梁", MBB: "MBB 梁", simply_supported: "简支梁", "L-bracket": "L 型支架" };
+function baseUrl(path: string) { return `/case-previews/${path.replace(/^\//, "")}`; }
+function TwoDPreview({ density }: { density: MatlabVolume }) {
+  const [rows, cols] = density.shape;
+  return <div className="case-preview-2d" role="img" aria-label="MATLAB 二维密度案例预览">
+    <div className="case-preview-grid" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>{Array.from({ length: rows * cols }, (_, index) => { const row = index % rows; const col = Math.floor(index / rows); const at = row + rows * col; const d = density.values[at]; return <span key={index} style={{ opacity: d < .05 ? .04 : .25 + .75 * Math.min(1, d), background: `hsl(${210 - 22 * d} 68% ${88 - 45 * d}%)` }} />; })}</div>
+  </div>;
+}
 
 export default function CaseSchematic({ dimension, bcType }: { dimension: SolverDimension; bcType: BuiltInCase }) {
-  const is3d = dimension === "3d";
-  const loadX = bcType === "cantilever" ? 264 : bcType === "L-bracket" ? 225 : 160;
-  const loadY = bcType === "cantilever" ? 122 : bcType === "L-bracket" ? 76 : 48;
-  return <figure className="case-schematic" aria-label={dimension.toUpperCase() + " " + CASE_LABELS[bcType] + "工况示意图"}>
-    <svg viewBox="0 0 320 190" role="img">
-      <defs><marker id="load-arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#d65252"/></marker><pattern id="support-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#57728d" strokeWidth="2"/></pattern></defs>
-      {bcType === "L-bracket" ? <path d={is3d ? "M58 32 H238 L265 50 V88 H145 V157 H58 Z" : "M58 32 H238 V88 H145 V157 H58 Z"} className="domain-shape"/> : <path d={is3d ? "M52 48 L259 48 L282 66 L282 135 L75 135 L52 117 Z" : "M52 48 H268 V135 H52 Z"} className="domain-shape"/>}
-      {is3d ? <><path d="M52 48 L75 66 H282" className="depth-line"/><path d="M75 66 V135" className="depth-line"/></> : null}
-      {bcType === "cantilever" || bcType === "L-bracket" ? <><rect x="42" y="38" width="10" height="110" fill="url(#support-hatch)"/><line x1="52" y1="39" x2="52" y2="148" className="support-line"/></> : null}
-      {bcType === "MBB" ? <><path d="M58 136 l-10 16 h20 Z" className="support"/><circle cx="260" cy="148" r="8" className="roller"/><line x1="246" y1="158" x2="276" y2="158" className="support-line"/></> : null}
-      {bcType === "simply_supported" ? <><path d="M68 136 l-10 16 h20 Z" className="support"/><circle cx="252" cy="148" r="8" className="roller"/><line x1="238" y1="158" x2="268" y2="158" className="support-line"/></> : null}
-      <line x1={loadX} y1={loadY - 30} x2={loadX} y2={loadY} className="load-line" markerEnd="url(#load-arrow)"/><text x={loadX + 8} y={loadY - 15} className="load-label">F</text>
-      <text x="160" y="178" textAnchor="middle" className="domain-label">{dimension.toUpperCase()} · {CASE_LABELS[bcType]} · 设计域 / 支撑 / 载荷</text>
-    </svg>
+  const [manifest, setManifest] = useState<PreviewManifest | null>(null);
+  const [data, setData] = useState<{ density: MatlabVolume } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const key = `${dimension}:${bcType}`;
+  useEffect(() => {
+    let active = true;
+    fetch(baseUrl("manifest.json")).then(r => r.ok ? r.json() : Promise.reject()).then(v => { if (active) setManifest(v); }).catch(() => { if (active) setError("案例预览不可用"); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    const entry = manifest?.cases?.find(item => `${item.dimension}:${item.bcType}` === key);
+    if (!entry) { if (manifest) setError("案例预览不可用"); return; }
+    let active = true;
+    setError(null);
+    fetch(baseUrl(entry.densityPath)).then(r => r.ok ? r.arrayBuffer() : Promise.reject()).then(buffer => {
+      if (active) setData({ density: asFortranVolume(readFloat32LittleEndian(buffer), entry.shape) });
+    }).catch(() => { if (active) setError("案例预览不可用"); });
+    return () => { active = false; };
+  }, [key, manifest]);
+  const title = `${dimension.toUpperCase()} · ${labels[bcType]}`;
+  if (error) return <figure className="case-schematic case-preview-unavailable"><figcaption>{title}</figcaption><div>{error}</div></figure>;
+  if (!data) return <figure className="case-schematic case-preview-unavailable"><figcaption>{title}</figcaption><div>正在加载 MATLAB 案例</div></figure>;
+  return <figure className="case-schematic case-preview-real">
+    <figcaption><span>{title}</span></figcaption>
+    <section className="case-preview-section case-preview-result">{dimension === "3d" ? <InteractiveVolumeView density={data.density} field={data.density} mode="density" surfaceOnly/> : <TwoDPreview density={data.density}/>}</section>
   </figure>;
 }

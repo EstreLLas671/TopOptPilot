@@ -192,7 +192,7 @@ function DecisionCard({decision,t,onAction,onEdit}:{decision:Decision;t:(key:str
 }
 function Metric({label,value}:{label:string;value:unknown}) { return <div><span>{label}</span><b>{String(value)}</b></div>; }
 function CreateResearch({t,locale,onClose,onCreate}:{t:(k:string)=>string;locale:Locale;onClose:()=>void;onCreate:(v:object)=>Promise<void>}) {
-  const [name,setName]=useState(locale==="zh-CN"?"新拓扑优化研究":"New topology study"), [goal,setGoal]=useState(locale==="zh-CN"?"在满足体积分数、灰度率和连通性约束下最小化柔度。":"Minimize compliance subject to volume, gray-ratio and connectivity constraints.");
+  const [name,setName]=useState(locale==="zh-CN"?"新拓扑优化研究":"New topology study"), [goal,setGoal]=useState(locale==="zh-CN"?"在满足体积分数和连通性约束下最小化柔度。":"Minimize compliance subject to volume and connectivity constraints.");
   return <div className="modal-backdrop"><form className="modal" onSubmit={e=>{e.preventDefault();onCreate({name,goal,locale})}}><header><h2>{t("newResearch")}</h2><button type="button" onClick={onClose}><X/></button></header><p>{t("createHint")}</p><label>{t("name")}<input value={name} onChange={e=>setName(e.target.value)}/></label><label>{t("goal")}<textarea value={goal} onChange={e=>setGoal(e.target.value)}/></label><p>预算、模式和求解器模板使用设置中心中的“新研究默认值”。</p><footer><button type="button" onClick={onClose}>{t("cancel")}</button><button className="approve" type="submit">{t("create")}</button></footer></form></div>;
 }
 function EditDecision({t,decision,onClose,onSave}:{t:(k:string)=>string;decision:Decision;onClose:()=>void;onSave:(p:Record<string,unknown>)=>Promise<void>}) {

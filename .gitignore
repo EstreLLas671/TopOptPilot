@@ -84,3 +84,10 @@ XH-202619*.pdf
 .playwright-cli/
 output/
 .worktrees/
+# Local runtime, approval, log, and verification data (never publish)
+.tmp/
+.debug-data/
+*.log
+approvals/
+approval-records/
+*.approval.json

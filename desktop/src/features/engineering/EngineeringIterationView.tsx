@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, CheckCircle2, Radio, RefreshCw } from "lucide-react";
 import { engineeringArtifactBuffer } from "../../backend-artifact";
 import type { EngineeringRun } from "../../types";
-import { projectFortranVolume, readFloat32LittleEndian } from "./matlab-artifact";
+import { asFortranVolume, projectFortranVolume, readFloat32LittleEndian, type MatlabVolume } from "./matlab-artifact";
+import InteractiveVolumeView, { type ViewState } from "./InteractiveVolumeView";
 import { ScalarMap } from "./ResultViewer";
 
 type SnapshotDescriptor = {
@@ -27,6 +28,15 @@ type ProgressFrame = {
 type Props = {
   run: EngineeringRun | null;
   events: Array<Record<string, unknown>>;
+  maxIterations: number;
+  compact?: boolean;
+};
+type CachedSnapshot = {
+  density: number[][];
+  stress: number[][];
+  densityVolume: MatlabVolume;
+  stressVolume: MatlabVolume | null;
+  renderUrl: string;
 };
 
 function finiteOrNull(value: unknown): number | null {
@@ -53,7 +63,8 @@ function snapshotFrom(value: unknown): SnapshotDescriptor | null {
   };
 }
 
-export default function EngineeringIterationView({ run, events }: Props) {
+export default function EngineeringIterationView({ run, events, maxIterations, compact = false }: Props) {
+  const [volumeViewState, setVolumeViewState] = useState<ViewState>({ rotationX: -0.52, rotationY: 0.72, zoom: 1 });
   const frames = useMemo<ProgressFrame[]>(() => events.flatMap(event => {
     if (event.type !== "progress") return [];
     const metrics = event.metrics && typeof event.metrics === "object"
@@ -69,14 +80,27 @@ export default function EngineeringIterationView({ run, events }: Props) {
       snapshot: snapshotFrom(event.snapshot),
     }];
   }), [events]);
+  const latestConsole = useMemo(() => {
+    const event = [...events].reverse().find(item => item.type === "console" && typeof item.text === "string");
+    return event ? String(event.text).trim() : "";
+  }, [events]);
   const [followLatest, setFollowLatest] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [fieldMode, setFieldMode] = useState<"matlab" | "density" | "stress">("matlab");
   const [density, setDensity] = useState<number[][]>([]);
   const [stress, setStress] = useState<number[][]>([]);
+  const [densityVolume, setDensityVolume] = useState<MatlabVolume | null>(null);
+  const [stressVolume, setStressVolume] = useState<MatlabVolume | null>(null);
   const [renderUrl, setRenderUrl] = useState("");
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState("");
+  const snapshotCache = useRef(new Map<string, CachedSnapshot>());
+  const snapshotRequests = useRef(new Map<string, Promise<CachedSnapshot>>());
+  useEffect(() => () => {
+    for (const cached of snapshotCache.current.values()) if (cached.renderUrl) URL.revokeObjectURL(cached.renderUrl);
+    snapshotCache.current.clear();
+    snapshotRequests.current.clear();
+  }, []);
 
   useEffect(() => {
     if (followLatest && frames.length) setSelectedIndex(frames.length - 1);
@@ -84,55 +108,80 @@ export default function EngineeringIterationView({ run, events }: Props) {
 
   const selected = frames[Math.min(selectedIndex, Math.max(frames.length - 1, 0))];
   const displayMode = fieldMode === "matlab" && !selected?.snapshot?.renderPath ? "density" : fieldMode;
+  const currentIteration = finiteOrNull(selected?.iteration ?? run?.metrics.iteration);
+  const progressPercent = currentIteration === null || maxIterations < 1
+    ? null
+    : Math.max(0, Math.min(100, currentIteration / maxIterations * 100));
+  const isActive = run?.status === "queued" || run?.status === "running";
+  const solverName = run?.lane === "python-fem" ? "Python FEM" : run?.lane === "compiled-runtime" ? "MATLAB Runtime" : "MATLAB";
 
   useEffect(() => {
     let cancelled = false;
-    let renderObjectUrl: string | null = null;
-    setDensity([]);
-    setStress([]);
-    setRenderUrl("");
     setSnapshotError("");
     if (!run?.runId || !selected?.snapshot) {
       setSnapshotLoading(false);
       return () => { cancelled = true; };
     }
+    const snapshot = selected.snapshot;
+    const readSnapshot = (descriptor: SnapshotDescriptor) => {
+      const descriptorKey = `${run.runId}:${descriptor.densityPath}:${descriptor.stressPath || ""}:${descriptor.renderPath || ""}`;
+      const cached = snapshotCache.current.get(descriptorKey);
+      if (cached) return Promise.resolve(cached);
+      const pending = snapshotRequests.current.get(descriptorKey);
+      if (pending) return pending;
+      const request = (async () => {
+        const densityBuffer = await engineeringArtifactBuffer(run.runId, descriptor.densityPath);
+        const densityRaw = readFloat32LittleEndian(densityBuffer);
+        const densityVolume = asFortranVolume(densityRaw, descriptor.shape);
+        let stress: number[][] = [];
+        let stressVolume: MatlabVolume | null = null;
+        if (descriptor.stressPath) {
+          const stressBuffer = await engineeringArtifactBuffer(run.runId, descriptor.stressPath);
+          const stressRaw = readFloat32LittleEndian(stressBuffer);
+          stress = projectFortranVolume(stressRaw, descriptor.shape);
+          stressVolume = asFortranVolume(stressRaw, descriptor.shape);
+        }
+        let renderUrl = "";
+        if (descriptor.renderPath) {
+          const renderBuffer = await engineeringArtifactBuffer(run.runId, descriptor.renderPath);
+          renderUrl = URL.createObjectURL(new Blob([renderBuffer], { type: "image/png" }));
+        }
+        const value = {
+          density: projectFortranVolume(densityRaw, descriptor.shape),
+          stress,
+          densityVolume,
+          stressVolume,
+          renderUrl,
+        };
+        snapshotCache.current.set(descriptorKey, value);
+        return value;
+      })();
+      snapshotRequests.current.set(descriptorKey, request);
+      void request.finally(() => snapshotRequests.current.delete(descriptorKey));
+      return request;
+    };
     const load = async () => {
       setSnapshotLoading(true);
-      const densityBuffer = await engineeringArtifactBuffer(run.runId, selected.snapshot!.densityPath);
-      const densityValues = projectFortranVolume(
-        readFloat32LittleEndian(densityBuffer),
-        selected.snapshot!.shape,
-      );
-      let stressValues: number[][] = [];
-      if (selected.snapshot!.stressPath) {
-        const stressBuffer = await engineeringArtifactBuffer(run.runId, selected.snapshot!.stressPath);
-        stressValues = projectFortranVolume(
-          readFloat32LittleEndian(stressBuffer),
-          selected.snapshot!.shape,
-        );
-      }
-      if (selected.snapshot!.renderPath) {
-        const renderBuffer = await engineeringArtifactBuffer(run.runId, selected.snapshot!.renderPath);
-        renderObjectUrl = URL.createObjectURL(new Blob([renderBuffer], { type: "image/png" }));
-      }
+      const value = await readSnapshot(snapshot);
       if (!cancelled) {
-        setDensity(densityValues);
-        setStress(stressValues);
-        setRenderUrl(renderObjectUrl || "");
-      } else if (renderObjectUrl) {
-        URL.revokeObjectURL(renderObjectUrl);
+        setDensity(value.density);
+        setStress(value.stress);
+        setDensityVolume(value.densityVolume);
+        setStressVolume(value.stressVolume);
+        setRenderUrl(value.renderUrl);
       }
+      const neighbors = [frames[selectedIndex - 1], frames[selectedIndex + 1]].filter(Boolean);
+      neighbors.forEach(frame => { if (frame.snapshot) void readSnapshot(frame.snapshot).catch(() => undefined); });
     };
     void load()
       .catch(reason => { if (!cancelled) setSnapshotError(String(reason)); })
       .finally(() => { if (!cancelled) setSnapshotLoading(false); });
     return () => {
       cancelled = true;
-      if (renderObjectUrl) URL.revokeObjectURL(renderObjectUrl);
     };
-  }, [run?.runId, selected?.iteration, selected?.snapshot?.densityPath, selected?.snapshot?.stressPath, selected?.snapshot?.renderPath]);
+  }, [run?.runId, selected?.iteration, selected?.snapshot?.densityPath, selected?.snapshot?.stressPath, selected?.snapshot?.renderPath, selectedIndex, frames]);
 
-  return <section className="iteration-workspace" aria-label="迭代可视化">
+  return <section className={"iteration-workspace" + (compact ? " compact" : "")} aria-label="迭代可视化">
     <header className="workspace-view-heading">
       <div><span className="view-kicker">REAL MATLAB ITERATION ARTIFACTS</span><h2>迭代时间轴</h2></div>
       <label className="follow-latest"><input type="checkbox" checked={followLatest} onChange={event => setFollowLatest(event.target.checked)}/><Radio size={13}/>跟随最新</label>
@@ -143,28 +192,47 @@ export default function EngineeringIterationView({ run, events }: Props) {
           <span><Activity size={14}/>{displayMode === "matlab" ? "MATLAB 原始迭代图" : displayMode === "density" ? "真实密度快照" : "真实 Von Mises 应力快照"}</span>
           <span className="field-switch">
             <button className={displayMode === "matlab" ? "active" : ""} disabled={!renderUrl} onClick={() => setFieldMode("matlab")}>MATLAB 原图</button>
-            <button className={displayMode === "density" ? "active" : ""} disabled={!density.length} onClick={() => setFieldMode("density")}>密度</button>
-            <button className={displayMode === "stress" ? "active" : ""} disabled={!stress.length} onClick={() => setFieldMode("stress")}>应力</button>
+            <button className={displayMode === "density" ? "active" : ""} disabled={!density.length} onClick={() => setFieldMode("density")}>{selected?.snapshot?.dimension === "3d" ? "3D 密度" : "密度"}</button>
+            <button className={displayMode === "stress" ? "active" : ""} disabled={!stress.length} onClick={() => setFieldMode("stress")}>{selected?.snapshot?.dimension === "3d" ? "3D 应力" : "应力"}</button>
           </span>
         </div>
-        {snapshotLoading ? <div className="view-empty"><RefreshCw className="spin" size={24}/><b>正在校验并读取 MATLAB 快照</b></div> : null}
+        {snapshotLoading && !density.length && !renderUrl ? <div className="snapshot-loading-indicator" aria-label="正在加载真实快照"><RefreshCw className="spin" size={18}/></div> : null}
         {!snapshotLoading && snapshotError ? <div className="view-empty"><Activity size={24}/><b>快照读取失败</b><span>{snapshotError}</span></div> : null}
         {!snapshotLoading && !snapshotError && displayMode === "matlab" && renderUrl ? <div className="iteration-real-frame matlab-render-frame">
           <img src={renderUrl} alt={`MATLAB 第 ${selected?.iteration} 轮真实 ${selected?.snapshot?.dimension.toUpperCase()} 拓扑迭代图`}/>
           <small>第 {selected?.iteration} 轮 · MATLAB 原始逐轮渲染 · SHA-256 {selected?.snapshot?.renderSha256?.slice(0, 12) || "校验中"}</small>
         </div> : null}
         {!snapshotLoading && !snapshotError && displayMode !== "matlab" && density.length ? <div className="iteration-real-frame">
-          <ScalarMap values={displayMode === "stress" ? stress : density} mode={displayMode}/>
+          {selected?.snapshot?.dimension === "3d" && densityVolume
+            ? <InteractiveVolumeView
+                density={densityVolume}
+                field={displayMode === "stress" && stressVolume ? stressVolume : densityVolume}
+                mode={displayMode}
+                viewState={volumeViewState}
+                onViewStateChange={setVolumeViewState}
+              />
+            : <ScalarMap values={displayMode === "stress" ? stress : density} mode={displayMode}/>}
           <small>第 {selected?.iteration} 轮 · {selected?.snapshot?.dimension.toUpperCase()} · MATLAB float32/F-order 制品 · SHA-256 {(displayMode === "stress" ? selected?.snapshot?.stressSha256 : selected?.snapshot?.densitySha256)?.slice(0, 12) || "校验中"}</small>
         </div> : null}
-        {!snapshotLoading && !snapshotError && !density.length && !renderUrl ? <div className="view-empty"><Activity size={24}/><b>等待真实 MATLAB 迭代快照</b><span>每轮 MATLAB 原图、密度帧完成并登记 SHA-256 后会立即显示，不生成占位结果。</span></div> : null}
+        {!snapshotLoading && !snapshotError && !density.length && !renderUrl ? <div className="iteration-live-status">
+          {!run ? <div className="view-empty"><Activity size={24}/><b>启动优化后将在这里展示实时状态</b><span>运行产生真实进度或快照后会立即更新。</span></div> : null}
+          {isActive ? <>
+            <div className="iteration-live-heading"><Activity className="spin" size={22}/><div><b>{solverName} 优化{run.status === "queued" ? "正在排队" : "正在运行"}</b><span>{currentIteration === null ? "等待求解器报告首轮迭代" : `真实迭代 ${currentIteration} / ${maxIterations}`}</span></div></div>
+            <div className={"iteration-progress-track" + (progressPercent === null ? " indeterminate" : "")} role="progressbar" aria-label="真实优化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent === null ? undefined : Math.round(progressPercent)}>
+              <i style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}/>
+            </div>
+            {latestConsole ? <pre className="iteration-console-line">{latestConsole}</pre> : <small>真实命令行输出会同步显示在下方“运行输出”。</small>}
+          </> : null}
+          {run?.status === "completed" ? <div className="view-empty"><CheckCircle2 size={24}/><b>优化已经完成</b><span>当前运行未产生可显示的真实迭代快照，请在结果或制品中检查求解输出。</span></div> : null}
+          {run?.status === "failed" ? <div className="view-empty"><Activity size={24}/><b>优化运行失败</b><span>{run.error?.message || latestConsole || "请查看下方运行输出。"}</span></div> : null}
+          {run?.status === "cancelled" ? <div className="view-empty"><Activity size={24}/><b>优化已取消</b><span>{latestConsole || "可以调整参数后重新运行。"}</span></div> : null}
+        </div> : null}
       </section>
       <aside className="iteration-metrics">
         <Metric label="状态" value={run?.status ?? "idle"}/>
         <Metric label="迭代" value={selected?.iteration ?? run?.metrics.iteration ?? "—"}/>
         <Metric label="柔度" value={selected?.compliance}/>
         <Metric label="体积分数" value={selected?.volumeFraction}/>
-        <Metric label="灰度率" value={selected?.grayRatio}/>
       </aside>
     </div>
     <div className="iteration-scrubber">
@@ -178,10 +246,6 @@ export default function EngineeringIterationView({ run, events }: Props) {
         onChange={event => { setFollowLatest(false); setSelectedIndex(Number(event.target.value)); }}
       />
       <span>{frames.length ? (selectedIndex + 1) + " / " + frames.length : "0 / 0"}</span>
-    </div>
-    <div className="snapshot-ledger">
-      {run?.snapshots.slice(-8).map(snapshot => <div key={snapshot.sha256}><CheckCircle2 size={12}/><span>{snapshot.relativePath}</span><code>{snapshot.sha256.slice(0, 12)}</code></div>)}
-      {!run?.snapshots.length ? <small>尚无已索引快照制品。</small> : null}
     </div>
   </section>;
 }

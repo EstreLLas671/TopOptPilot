@@ -1,4 +1,6 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -51,6 +53,107 @@ impl Drop for ChildGuard {
             }
         }
     }
+}
+
+const CHAT_IMAGE_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DroppedImageData {
+    file_name: String,
+    media_type: String,
+    size_bytes: usize,
+    data_base64: String,
+    sha256: String,
+}
+
+fn image_media_type(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("image/jpeg");
+    }
+    if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    None
+}
+
+fn extension_media_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()?
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "svg" => Some("image/svg+xml"),
+        "pdf" => Some("application/pdf"),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        "txt" | "md" => Some("text/plain"),
+        "csv" => Some("text/csv"),
+        _ => None,
+    }
+}
+
+fn attachment_media_type(path: &Path, bytes: &[u8]) -> Option<&'static str> {
+    let declared = extension_media_type(path)?;
+    let matches = match declared {
+        "image/png" | "image/jpeg" | "image/webp" => image_media_type(bytes) == Some(declared),
+        "application/pdf" => bytes.starts_with(b"%PDF-"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => {
+            bytes.starts_with(b"PK\x03\x04")
+                || bytes.starts_with(b"PK\x05\x06")
+                || bytes.starts_with(b"PK\x07\x08")
+        }
+        "image/svg+xml" => String::from_utf8_lossy(&bytes[..bytes.len().min(4096)])
+            .to_ascii_lowercase()
+            .contains("<svg"),
+        "text/plain" | "text/csv" => !bytes[..bytes.len().min(4096)].contains(&0),
+        _ => false,
+    };
+    matches.then_some(declared)
+}
+
+fn read_dropped_image(path: &Path) -> Result<DroppedImageData, String> {
+    let metadata = std::fs::metadata(path).map_err(|_| "无法读取拖入的附件文件".to_string())?;
+    if !metadata.is_file() {
+        return Err("拖入对象不是普通文件".to_string());
+    }
+    if metadata.len() > CHAT_IMAGE_MAX_BYTES {
+        return Err("单个附件不能超过 10 MB".to_string());
+    }
+    let bytes = std::fs::read(path).map_err(|_| "无法读取拖入的附件文件".to_string())?;
+    let media_type =
+        attachment_media_type(path, &bytes).ok_or("附件格式不受支持，或文件内容与扩展名不一致")?;
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    Ok(DroppedImageData {
+        file_name: path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("dropped-attachment")
+            .to_string(),
+        media_type: media_type.to_string(),
+        size_bytes: bytes.len(),
+        data_base64: BASE64_STANDARD.encode(bytes),
+        sha256,
+    })
+}
+
+#[tauri::command]
+fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImageData>, String> {
+    if paths.is_empty() || paths.len() > 4 {
+        return Err("每条消息最多上传 4 个附件".to_string());
+    }
+    paths
+        .into_iter()
+        .map(|value| read_dropped_image(Path::new(&value)))
+        .collect()
 }
 
 #[tauri::command]
@@ -145,6 +248,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             backend_info,
+            read_dropped_images,
             project::project_pick_folder,
             project::project_open,
             project::project_list,
@@ -155,9 +259,6 @@ pub fn run() {
             project::project_search,
             project::patch_preview,
             project::patch_apply,
-            project::webview_create,
-            project::webview_navigate,
-            project::webview_close
         ])
         .run(tauri::generate_context!())
         .expect("error while running TopOptPilot desktop");
@@ -210,5 +311,73 @@ mod tests {
             resolve_desktop_paths(&local_app_data, Some("not-json")).data_root,
             expected
         );
+    }
+
+    #[test]
+    fn image_type_detection_accepts_supported_magic_bytes() {
+        assert_eq!(
+            image_media_type(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+            Some("image/png")
+        );
+        assert_eq!(
+            image_media_type(&[0xff, 0xd8, 0xff, 0x00]),
+            Some("image/jpeg")
+        );
+        assert_eq!(image_media_type(b"RIFFxxxxWEBP"), Some("image/webp"));
+        assert_eq!(image_media_type(b"not an image"), None);
+    }
+
+    #[test]
+    fn attachment_reader_recognizes_documents_by_extension_and_content() {
+        assert_eq!(
+            attachment_media_type(std::path::Path::new("report.pdf"), b"%PDF-1.7"),
+            Some("application/pdf")
+        );
+        assert_eq!(
+            attachment_media_type(std::path::Path::new("notes.docx"), b"PK\x03\x04test"),
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        );
+        assert_eq!(
+            attachment_media_type(std::path::Path::new("values.xlsx"), b"PK\x03\x04test"),
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        );
+        assert_eq!(
+            attachment_media_type(std::path::Path::new("shape.svg"), b"<svg></svg>"),
+            Some("image/svg+xml")
+        );
+        assert_eq!(
+            attachment_media_type(std::path::Path::new("notes.txt"), b"plain text"),
+            Some("text/plain")
+        );
+        assert!(attachment_media_type(std::path::Path::new("fake.pdf"), b"not pdf").is_none());
+    }
+
+    #[test]
+    fn dropped_image_reader_rejects_directories_oversize_files_and_disguised_extensions() {
+        let root = std::env::temp_dir().join(format!("idesktop-drop-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create test directory");
+        let directory_error = read_dropped_image(&root).expect_err("directory must be rejected");
+        assert!(!directory_error.contains(&root.to_string_lossy().to_string()));
+
+        let oversized = root.join("oversized.png");
+        let oversized_file = std::fs::File::create(&oversized).expect("create oversized test file");
+        oversized_file
+            .set_len(CHAT_IMAGE_MAX_BYTES + 1)
+            .expect("create sparse oversized file");
+        drop(oversized_file);
+        assert!(read_dropped_image(&oversized)
+            .expect_err("oversized file must be rejected")
+            .contains("10 MB"));
+
+        let disguised = root.join("disguised.jpg");
+        std::fs::write(&disguised, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a])
+            .expect("write disguised image");
+        assert!(read_dropped_image(&disguised)
+            .expect_err("extension mismatch must be rejected")
+            .contains("扩展名"));
+
+        std::fs::remove_file(oversized).expect("remove oversized test file");
+        std::fs::remove_file(disguised).expect("remove disguised test file");
+        std::fs::remove_dir(root).expect("remove test directory");
     }
 }

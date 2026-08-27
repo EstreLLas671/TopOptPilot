@@ -33,10 +33,13 @@ def _matlab_quote(path: Path) -> str:
 def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
     geometry = task.get("geometry") or {}
     params = task.get("params") or {}
+    material = task.get("material") or {}
     if not isinstance(geometry, dict):
         geometry = {}
     if not isinstance(params, dict):
         params = {}
+    if not isinstance(material, dict):
+        material = {}
     load_case = str(task.get("load_case") or task.get("bc_type") or "cantilever")
     if load_case.lower() == "vertical":
         load_case = "MBB"
@@ -59,6 +62,12 @@ def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
         "filter_strategy": str(params.get("filter_strategy", "fixed")),
         "accuracy": str(params.get("accuracy", "standard")),
         "display": False,
+        "material_preset": str(material.get("preset", "normalized")),
+        "material_name": str(material.get("name", "归一化参考材料")),
+        "E": float(params.get("E", material.get("E", material.get("E_GPa", 1.0)))),
+        "nu": float(params.get("nu", material.get("nu", 0.3))),
+        "density_kg_m3": float(material.get("density_kg_m3", 1.0)),
+        "yield_strength_MPa": float(material.get("yield_strength_MPa", 1.0)),
         "verbose": True,
         "live_stress_snapshots": True,
         "render_iteration_frames": True,
@@ -231,6 +240,7 @@ def run_matlab_batch(
     cancel=None,
     timeout_seconds: float | None = None,
     progress: Callable[[int, dict[str, Any]], None] | None = None,
+    console: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Run ``run_topopt_job.m`` and return its verified summary.
 
@@ -263,11 +273,11 @@ def run_matlab_batch(
                 if timeout_seconds is not None and time.monotonic() - started > timeout_seconds:
                     process.terminate()
                     raise MatlabInfrastructureError("MATLAB 工程运行超时")
-                _drain_process_output(output_queue, log)
+                _drain_process_output(output_queue, log, console)
                 publish_manifest_progress(output_dir, seen_iterations, progress)
                 time.sleep(0.05)
             reader.join(timeout=1)
-            _drain_process_output(output_queue, log)
+            _drain_process_output(output_queue, log, console)
             publish_manifest_progress(output_dir, seen_iterations, progress)
         status_path = output_dir / "status.json"
         if not status_path.is_file():
@@ -309,7 +319,11 @@ def _read_process_output(process: subprocess.Popen[str], output: queue.Queue[str
         output.put(None)
 
 
-def _drain_process_output(output: queue.Queue[str | None], log) -> None:
+def _drain_process_output(
+    output: queue.Queue[str | None],
+    log,
+    console: Callable[[str, str], None] | None = None,
+) -> None:
     wrote = False
     while True:
         try:
@@ -319,6 +333,8 @@ def _drain_process_output(output: queue.Queue[str | None], log) -> None:
         if line is not None:
             log.write(line)
             wrote = True
+            if console is not None:
+                console("stdout", line.rstrip("\r\n"))
     if wrote:
         log.flush()
 
@@ -351,6 +367,7 @@ def run_runtime_solver(
     cancel=None,
     timeout_seconds: float | None = None,
     progress: Callable[[int, dict[str, Any]], None] | None = None,
+    console: Callable[[str, str], None] | None = None,
     parent_env: Mapping[str, str] = os.environ,
 ) -> dict[str, Any]:
     """Run a verified compiled solver using the same status/result contract."""
@@ -368,7 +385,7 @@ def run_runtime_solver(
     try:
         with log_path.open("a", encoding="utf-8", errors="replace") as log:
             while process.poll() is None:
-                _drain_process_output(output_queue, log)
+                _drain_process_output(output_queue, log, console)
                 publish_manifest_progress(output_dir, seen_iterations, progress)
                 if cancel is not None and cancel():
                     _terminate_process_tree(process)
@@ -378,7 +395,7 @@ def run_runtime_solver(
                     raise MatlabInfrastructureError("编译 Runtime 工程运行超时")
                 time.sleep(0.05)
             reader.join(timeout=1)
-            _drain_process_output(output_queue, log)
+            _drain_process_output(output_queue, log, console)
             publish_manifest_progress(output_dir, seen_iterations, progress)
         status = read_matlab_status(output_dir / "status.json")
         if process.returncode != 0 or status.get("state") != "completed":

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "iDeskTop v2",
+  "productName": "TopOptPilot",
   "version": "2.0.0",
   "identifier": "com.idesktop.v2",
   "build": {
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{
-      "title": "iDeskTop v2",
+      "title": "TopOptPilot",
       "width": 1440,
       "height": 900,
       "minWidth": 920,
@@ -29,7 +29,7 @@
     "active": true,
     "targets": ["nsis"],
     "shortDescription": "工程开发与 AI 科研拓扑优化工作台",
-    "longDescription": "iDeskTop v2 Tauri 桌面工作台，保留 MATLAB 工程链路并接入 Policy 控制的 AI 科研。",
+    "longDescription": "TopOptPilot Tauri 桌面工作台，保留 MATLAB 工程链路并接入 Policy 控制的 AI 科研。",
     "resources": ["resources/**/*"],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }

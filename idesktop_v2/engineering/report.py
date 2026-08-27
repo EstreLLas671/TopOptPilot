@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def write_report(record) -> Path:
-    path = record.run_dir / "report.md"
+def write_report(record, name: str = "report") -> Path:
+    safe_name = "".join(character for character in name.strip() if character not in '<>:"/\\|?*').strip(" .") or "report"
+    path = record.run_dir / f"{safe_name}.md"
     metrics = record.metrics
     lines = [
-        f"# iDeskTop v2 工程运行报告",
+        f"# TopOptPilot 工程运行报告",
         "",
         f"- Run ID：`{record.run_id}`",
         f"- 求解链路：`{record.lane.value}`",

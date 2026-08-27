@@ -2,7 +2,13 @@
 function [U, K, freedofs, fixeddofs] = FE_solver(nelx, nely, x, penal, bc_config)
 
     % ===== 1. 计算单元刚度矩阵 =====
-    [KE] = lk_matrix();                        % 四节点四边形单元的8×8刚度矩阵
+    E = 1.0;
+    nu = 0.3;
+    if isfield(bc_config, 'E') && ~isempty(bc_config.E), E = bc_config.E; end
+    if isfield(bc_config, 'nu') && ~isempty(bc_config.nu), nu = bc_config.nu; end
+    validateattributes(E, {'numeric'}, {'real','finite','scalar','positive'});
+    validateattributes(nu, {'numeric'}, {'real','finite','scalar','>',-1,'<',0.5});
+    [KE] = lk_matrix(E, nu);                   % 四节点四边形单元的8×8刚度矩阵
 
     % ===== 2. 组装全局刚度矩阵 =====
     ndof = 2 * (nelx + 1) * (nely + 1);        % 总自由度数 = 节点数 × 2
@@ -164,9 +170,7 @@ end
 
 
 
-function [KE] = lk_matrix()
-    E  = 1.0;                                % 杨氏模量
-    nu = 0.3;                                % 泊松比
+function [KE] = lk_matrix(E, nu)
 
     % 刚度矩阵的8个独立分量（利用单元几何和材料对称性）
     k = [1/2-nu/6,   1/8+nu/8,  -1/4-nu/12, -1/8+3*nu/8, ...

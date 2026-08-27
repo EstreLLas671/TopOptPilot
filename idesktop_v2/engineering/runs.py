@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -72,8 +73,17 @@ class RunCreateRequest(BaseModel):
             raise ValueError("task.dimension 仅支持 2d 或 3d")
         geometry = task.get("geometry") or {}
         params = task.get("params") or {}
-        if not isinstance(geometry, dict) or not isinstance(params, dict):
-            raise ValueError("task.geometry 和 task.params 必须是对象")
+        material = task.get("material") or {}
+        if not isinstance(geometry, dict) or not isinstance(params, dict) or not isinstance(material, dict):
+            raise ValueError("task.geometry、task.params 和 task.material 必须是对象")
+        material_preset = material.get("preset")
+        if material_preset is not None and material_preset not in {"normalized", "structural-steel", "aluminum-6061-t6", "titanium-ti6al4v", "custom"}:
+            raise ValueError("材料 preset 不是受支持的预设")
+        material_name = material.get("name")
+        if material_name is not None and (not isinstance(material_name, str) or not material_name.strip() or len(material_name.strip()) > 80):
+            raise ValueError("材料名称必须为 1–80 个字符")
+        if material_preset == "custom" and any(key not in material for key in ("name", "density_kg_m3", "yield_strength_MPa")):
+            raise ValueError("自定义材料必须包含名称、密度和屈服强度")
         load_case = str(task.get("load_case") or "cantilever")
         if load_case not in {"cantilever", "MBB", "mbb", "simply_supported", "L-bracket", "vertical", "lateral"}:
             raise ValueError("load_case 不是受支持的内置工况")
@@ -89,6 +99,18 @@ class RunCreateRequest(BaseModel):
         rmin = params.get("rmin")
         if rmin is not None and float(rmin) <= 0:
             raise ValueError("rmin 必须大于 0")
+        youngs_modulus = params.get("E", material.get("E", material.get("E_GPa")))
+        poisson_ratio = params.get("nu", material.get("nu"))
+        density = material.get("density_kg_m3")
+        yield_strength = material.get("yield_strength_MPa")
+        if youngs_modulus is not None and (isinstance(youngs_modulus, bool) or not math.isfinite(float(youngs_modulus)) or float(youngs_modulus) <= 0):
+            raise ValueError("材料杨氏模量 E 必须大于 0")
+        if poisson_ratio is not None and (isinstance(poisson_ratio, bool) or not math.isfinite(float(poisson_ratio)) or not -1 < float(poisson_ratio) < 0.5):
+            raise ValueError("材料泊松比 nu 必须大于 -1 且小于 0.5")
+        if density is not None and (isinstance(density, bool) or not math.isfinite(float(density)) or float(density) <= 0):
+            raise ValueError("材料密度 density_kg_m3 必须大于 0")
+        if yield_strength is not None and (isinstance(yield_strength, bool) or not math.isfinite(float(yield_strength)) or float(yield_strength) <= 0):
+            raise ValueError("材料屈服强度 yield_strength_MPa 必须大于 0")
         max_iterations = int(params.get("max_iter", self.max_iter or 60))
         min_iterations = int(params.get("min_iter", 1))
         if min_iterations < 1 or max_iterations < 1 or min_iterations > max_iterations:
@@ -233,6 +255,22 @@ class RunManager:
         with self._lock:
             return self._runs.setdefault(run_id, restored)
 
+    def list(self, owner_id: str | None = None) -> list[_Run]:
+        """Restore persisted runs and return newest first without re-running them."""
+        root = _data_root()
+        try:
+            run_ids = [item.name for item in root.iterdir() if item.is_dir()]
+        except OSError:
+            run_ids = []
+        records = [record for run_id in run_ids if (record := self.get(run_id)) is not None]
+        if owner_id:
+            records = [record for record in records if record.owner_id == owner_id]
+        return sorted(
+            records,
+            key=lambda record: self._manifest_path(record.run_dir).stat().st_mtime,
+            reverse=True,
+        )
+
     def cancel(self, run_id: str) -> _Run:
         record = self.get(run_id)
         if record is None:
@@ -253,8 +291,24 @@ class RunManager:
 
     def _emit(self, record: _Run, event: dict[str, Any]) -> None:
         with record.lock:
-            record.events.append({"timestamp": time.time(), **event})
+            record.events.append({"seq": len(record.events) + 1, "timestamp": time.time(), **event})
         self.persist(record)
+
+    def _publish_console(self, record: _Run, stream: str, text: str) -> None:
+        clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text).replace("\x00", "")
+        clean = re.sub(
+            r"(?i)(authorization\s*[:=]\s*bearer\s+|api[_-]?key\s*[:=]\s*|dashscope_api_key\s*[:=]\s*)\S+",
+            r"\1[REDACTED]",
+            clean,
+        )
+        if clean:
+            self._emit(record, {
+                "type": "console",
+                "runId": record.run_id,
+                "stream": stream if stream in {"stdout", "stderr"} else "stdout",
+                "phase": "solver",
+                "text": clean[:16384],
+            })
 
     @staticmethod
     def _ref(run_dir: Path, path: Path, media_type: str | None = None) -> ArtifactRef:
@@ -347,6 +401,9 @@ class RunManager:
                 snapshot.write_text(json.dumps(state, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
                 self._publish_progress(record, iteration, state)
 
+            def console(stream: str, text: str) -> None:
+                self._publish_console(record, stream, text)
+
 
             if record.lane is SolverLane.PYTHON_FEM:
                 from solver.topopt_engine import run_topopt
@@ -358,6 +415,7 @@ class RunManager:
                     progress=lambda iteration, state: self._publish_progress(
                         record, iteration, state
                     ),
+                    console=console,
                 )
             provenance = result.get("provenance")
             if isinstance(provenance, dict):
@@ -371,6 +429,7 @@ class RunManager:
                 "constraints": result.get("constraints"),
                 "quality": result.get("quality"),
                 "solver": result.get("solver"),
+                "material": record.task.get("material"),
                 "provenance": record.provenance,
             }
             (record.run_dir / "result.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
@@ -410,7 +469,7 @@ class RunManager:
             self._index_artifacts(record)
             self._emit(record, {"type": "error", "status": record.status.value, "message": str(exc)})
 
-    def _run_external(self, record: _Run, time_limit: float | None, progress=None) -> dict[str, Any]:
+    def _run_external(self, record: _Run, time_limit: float | None, progress=None, console=None) -> dict[str, Any]:
         source_root = engineering_matlab_source_root()
         if record.lane is SolverLane.LOCAL_MATLAB:
             configured = os.environ.get("IDESKTOP_MATLAB_PATH")
@@ -420,7 +479,7 @@ class RunManager:
             probe = asyncio.run(probe_matlab_installation(installations[0]))
             if not probe.usable:
                 raise MatlabInfrastructureError(f"MATLAB 探针失败：{probe.diagnostic}")
-            summary = run_matlab_batch(installations[0].executable, record.task, record.run_dir, source_root=source_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit, progress=progress)
+            summary = run_matlab_batch(installations[0].executable, record.task, record.run_dir, source_root=source_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit, progress=progress, console=console)
         elif record.lane is SolverLane.COMPILED_RUNTIME:
             try:
                 profile = runtime_profiles.resolve(record.runtime_profile_id or "")
@@ -428,7 +487,7 @@ class RunManager:
                 raise MatlabInfrastructureError(str(exc), code=getattr(exc, "code", "RUNTIME_PROFILE_STALE")) from exc
             staged_solver = stage_runtime_solver(profile, record.run_dir)
             command = build_runtime_command(staged_solver, record.run_dir / "config.json", record.run_dir)
-            summary = run_runtime_solver(command, record.task, record.run_dir, runtime_root=profile.runtime_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit, progress=progress)
+            summary = run_runtime_solver(command, record.task, record.run_dir, runtime_root=profile.runtime_root, cancel=record.cancel_event.is_set, timeout_seconds=time_limit, progress=progress, console=console)
             provenance = summary.setdefault("provenance", {})
             if isinstance(provenance, dict):
                 provenance["runtimeRelease"] = profile.runtime_release

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineeringRun } from "../../types";
 
 const artifactMocks = vi.hoisted(() => ({
@@ -34,13 +34,33 @@ const run: EngineeringRun = {
 
 describe("EngineeringIterationView", () => {
   afterEach(cleanup);
+  beforeEach(() => {
+    artifactMocks.engineeringArtifactBuffer.mockReset();
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+      configurable: true,
+      value: vi.fn(() => null),
+    });
+  });
+
+  it("shows real console state and deterministic progress before the first snapshot", () => {
+    render(<EngineeringIterationView run={{ ...run, metrics: { iteration: 12 } }} maxIterations={60} events={[{
+      type: "console",
+      text: "Iteration 12: compliance=8.42",
+    }]}/>);
+
+    expect(screen.queryByText("等待真实 MATLAB 迭代快照")).toBeNull();
+    expect(screen.getByText("MATLAB 优化正在运行")).toBeTruthy();
+    expect(screen.getByText("真实迭代 12 / 60")).toBeTruthy();
+    expect(screen.getByText("Iteration 12: compliance=8.42")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "真实优化进度" }).getAttribute("aria-valuenow")).toBe("20");
+  });
 
   it("renders the real MATLAB density payload referenced by the progress event", async () => {
     artifactMocks.engineeringArtifactBuffer.mockResolvedValue(
       float32([0.1, 0.2, 0.8, 0.9]),
     );
 
-    render(<EngineeringIterationView run={run} events={[{
+    render(<EngineeringIterationView run={run} maxIterations={60} events={[{
       type: "progress",
       iteration: 1,
       metrics: { compliance: 12.5, volumeFraction: 0.4 },
@@ -64,7 +84,7 @@ describe("EngineeringIterationView", () => {
     expect(screen.queryByText(/占位/)).toBeNull();
   });
 
-  it("shows the real per-iteration MATLAB render as the default 3D view", async () => {
+  it("shows interactive 3D density and stress while preserving the raw MATLAB render", async () => {
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:matlab-iteration-1"),
@@ -74,26 +94,44 @@ describe("EngineeringIterationView", () => {
       value: vi.fn(),
     });
     artifactMocks.engineeringArtifactBuffer.mockImplementation(
-      async (_runId: string, relativePath: string) => relativePath.endsWith(".png")
-        ? new Uint8Array([137, 80, 78, 71]).buffer
-        : float32([0.1, 0.2, 0.8, 0.9, 0.15, 0.25, 0.75, 0.85]),
+      async (_runId: string, relativePath: string) => {
+        if (relativePath.endsWith(".png")) return new Uint8Array([137, 80, 78, 71]).buffer;
+        if (relativePath.includes("stress")) return float32([1, 2, 8, 9, 1.5, 2.5, 7.5, 8.5]);
+        return float32([0.1, 0.2, 0.8, 0.9, 0.15, 0.25, 0.75, 0.85]);
+      },
     );
 
-    render(<EngineeringIterationView run={run} events={[{
+    render(<EngineeringIterationView run={run} maxIterations={60} events={[{
       type: "progress",
       iteration: 1,
       metrics: { compliance: 12.5, volumeFraction: 0.4 },
       snapshot: {
         densityPath: "snapshots/iter_0001_density.bin",
-        stressPath: null,
+        stressPath: "snapshots/iter_0001_stress.bin",
         renderPath: "snapshots/iter_0001_matlab.png",
         shape: [2, 2, 2],
         dimension: "3d",
         densitySha256: "b".repeat(64),
+        stressSha256: "d".repeat(64),
         renderSha256: "c".repeat(64),
       },
     }]}/>);
 
+    expect(await screen.findByAltText("MATLAB 第 1 轮真实 3D 拓扑迭代图")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "MATLAB 原图" }).classList.contains("active")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "3D 密度" }));
+    expect(await screen.findByLabelText("可旋转缩放的三维密度场")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "3D 密度" }).classList.contains("active")).toBe(true);
+    expect(screen.getByRole("button", { name: "重置三维视角" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "真实曲面" }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "单元网格" }));
+    expect(screen.getByRole("button", { name: "单元网格" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "真实曲面" }).getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button", { name: "3D 应力" }));
+    expect(await screen.findByLabelText("可旋转缩放的三维 Von Mises 应力场")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "MATLAB 原图" }));
     const image = await screen.findByAltText("MATLAB 第 1 轮真实 3D 拓扑迭代图");
     expect(image.getAttribute("src")).toBe("blob:matlab-iteration-1");
     expect(artifactMocks.engineeringArtifactBuffer).toHaveBeenCalledWith(

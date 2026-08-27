@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+import json
+import platform
 import threading
+from datetime import datetime, timezone
+from pathlib import Path
 from collections.abc import Callable
 
-from idesktop_v2.engineering.matlab import MatlabInstallation, discover_matlab_installations
+from idesktop_v2.engineering.matlab import MatlabInstallation, discover_matlab_installations, probe_matlab_installation
 from idesktop_v2.engineering.runtime_discovery import RuntimeInstallation, runtime_inventory
 
 
@@ -51,7 +55,94 @@ class MatlabInventory:
             return list(self._installations)
 
 
+
 matlab_inventory = MatlabInventory()
+
+
+def _cache_path() -> Path:
+    configured = os.environ.get("TOPPILOT_ENVIRONMENT_CACHE")
+    if configured:
+        return Path(configured).expanduser()
+    base = Path(os.environ.get("IDESKTOP_V2_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR") or (Path.home() / "AppData/Local/iDeskTopV2"))
+    return base / "environment.json"
+
+
+_environment_lock = threading.RLock()
+_environment_cache: dict[str, object] | None = None
+_environment_cache_file: str | None = None
+
+
+def _read_environment_cache() -> dict[str, object] | None:
+    global _environment_cache, _environment_cache_file
+    cache_file = str(_cache_path().resolve())
+    with _environment_lock:
+        value = dict(_environment_cache) if _environment_cache is not None and _environment_cache_file == cache_file else None
+    if value is None:
+        try:
+            value = json.loads(_cache_path().read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+    if not isinstance(value, dict) or not isinstance(value.get("matlab"), dict):
+        return None
+    executable = value["matlab"].get("path")
+    if not isinstance(executable, str) or not executable or not os.path.isfile(executable):
+        return None
+    with _environment_lock:
+        _environment_cache = dict(value)
+        _environment_cache_file = cache_file
+    return dict(value)
+
+
+def _write_environment_cache(value: dict[str, object]) -> None:
+    global _environment_cache, _environment_cache_file
+    target = _cache_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, target)
+    with _environment_lock:
+        _environment_cache = dict(value)
+
+
+def cached_environment() -> dict[str, object] | None:
+    return _read_environment_cache()
+
+
+def invalidate_environment_cache() -> None:
+    global _environment_cache, _environment_cache_file
+    with _environment_lock:
+        _environment_cache = None
+        _environment_cache_file = None
+
+
+async def discover_environment(*, force: bool = False) -> dict[str, object]:
+    if not force:
+        cached = _read_environment_cache()
+        if cached is not None:
+            cached["cached"] = True
+            return cached
+    installations = matlab_inventory.refresh()
+    selected: MatlabInstallation | None = None
+    diagnostic = "未检测到可启动的 MATLAB。"
+    for candidate in installations:
+        result = await probe_matlab_installation(candidate)
+        candidate.probe_state = "ready" if result.usable else "failed"
+        candidate.diagnostic = result.diagnostic
+        diagnostic = result.diagnostic
+        if result.usable:
+            selected = candidate
+            candidate.version = result.version or candidate.version
+            break
+    runtime = runtime_inventory.snapshot()
+    value: dict[str, object] = {
+        "cached": False,
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "matlab": {"path": selected.executable if selected else "", "release": selected.release if selected else "", "version": selected.version if selected else "", "probeState": "ready" if selected else ("failed" if installations else "unknown"), "diagnostic": diagnostic},
+        "python": {"mode": "packaged" if getattr(__import__("sys"), "frozen", False) else "source", "version": platform.python_version()},
+        "runtime": {"state": "ready" if any(item.usable for item in runtime) else "optional", "count": len(runtime)},
+    }
+    _write_environment_cache(value)
+    return value
 
 
 def initialize_engineering_discovery() -> dict[str, list[MatlabInstallation] | list[RuntimeInstallation]]:

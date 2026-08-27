@@ -48,6 +48,12 @@ export interface AppSettings {
   data: { next_data_dir?:string|null; cache_dir?:string|null; cache_migration?:{moved_files:number;skipped_existing:number;cache_dir:string} };
 }
 export interface SettingsDiagnostics { data_dir:string; database:string; cache_dir?:string; cache_bytes:number; log_dir:string; free_disk_bytes:number; sidecar_port?:string; version:string; health: Record<string, unknown> }
+export interface EngineeringEnvironment {
+  cached: boolean; checkedAt?: string;
+  matlab: { path: string; release: string; version: string; probeState: "ready" | "failed" | "unknown"; diagnostic?: string };
+  python: { mode: "packaged" | "source"; version: string };
+  runtime: { state: "optional" | "ready" | "incompatible" | "not_configured"; count?: number };
+}
 export type EngineeringRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export interface EngineeringArtifactRef { relativePath: string; sha256: string; mediaType: string; sizeBytes: number }
 export interface EngineeringRun {
@@ -62,4 +68,22 @@ export interface EngineeringComparisonScheme {
   id: string; name: string; runId: string; configDigest: string; createdAt: string;
   config: Record<string, unknown>; run: EngineeringRun | null;
   integrity: "verified" | "failed" | "missing"; integrityFailures: string[];
+}
+
+export interface Conversation {
+  id: string; scope: "engineering" | "research"; ownerId: string; title: string;
+  createdAt: number; updatedAt: number;
+}
+export interface ConversationAttachment {
+  id: string; fileName?: string; mediaType: string;
+  sizeBytes: number; sha256?: string;
+}
+export interface DroppedImageData {
+  fileName: string; mediaType: string;
+  sizeBytes: number; dataBase64: string; sha256: string;
+}
+export interface ConversationMessage {
+  id: string; seq: number; role: "user" | "assistant" | "system" | "progress";
+  content: string; attachmentIds: string[]; attachments: ConversationAttachment[];
+  source?: string | null; status?: string | null; createdAt: number;
 }

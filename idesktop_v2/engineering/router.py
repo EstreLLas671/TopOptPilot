@@ -9,7 +9,7 @@ import sys
 from typing import Literal
 from pathlib import Path, PurePosixPath
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -20,7 +20,7 @@ from idesktop_v2.engineering.comparison_schemes import comparison_schemes
 from idesktop_v2.engineering.terminal import MAX_COMMAND_BYTES, manager as terminal_manager
 from idesktop_v2.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles
 from idesktop_v2.engineering.runtime_discovery import runtime_inventory
-from idesktop_v2.engineering.environment_discovery import matlab_inventory
+from idesktop_v2.engineering.environment_discovery import matlab_inventory, discover_environment, invalidate_environment_cache
 from idesktop_v2.artifacts.models import RunStatus
 from idesktop_v2.engineering.matlab import (
     MatlabInstallation,
@@ -45,9 +45,20 @@ def engineering_health() -> dict[str, object]:
     }
 
 
+@router.get("/environment")
+async def engineering_environment() -> dict[str, object]:
+    return await discover_environment()
+
+
+@router.post("/environment/refresh")
+async def engineering_environment_refresh() -> dict[str, object]:
+    invalidate_environment_cache()
+    return await discover_environment(force=True)
+
+
 @router.get("/matlab/installations")
-def matlab_installations() -> dict[str, object]:
-    installations = matlab_inventory.refresh()
+def matlab_installations(refresh: bool = False) -> dict[str, object]:
+    installations = matlab_inventory.refresh() if refresh else matlab_inventory.snapshot()
     return {"preference": _solver_preference, "installations": [item.as_dict() for item in installations]}
 
 
@@ -108,8 +119,8 @@ def bundled_runtime_probe() -> dict[str, object]:
 
 
 @router.get("/runtime/installations")
-def runtime_installations() -> dict[str, object]:
-    installations = runtime_inventory.refresh()
+def runtime_installations(refresh: bool = False) -> dict[str, object]:
+    installations = runtime_inventory.refresh() if refresh else runtime_inventory.snapshot()
     payloads: list[dict[str, object]] = []
     for installation in installations:
         payload = installation.as_dict()
@@ -153,6 +164,13 @@ def engineering_run_create(request: RunCreateRequest) -> dict[str, object]:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+
+@router.get("/runs")
+def engineering_run_list(project_id: str | None = Query(default=None, max_length=160), cursor: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=200)) -> dict[str, object]:
+    records = manager.list(project_id)
+    page = records[cursor:cursor + limit]
+    next_cursor = cursor + len(page) if cursor + len(page) < len(records) else None
+    return {"runs": [record.public() for record in page], "nextCursor": next_cursor}
 
 def _record_or_404(run_id: str):
     record = manager.get(run_id)
@@ -200,24 +218,47 @@ def engineering_run_file(run_id: str, relative_path: str):
     return FileResponse(target)
 
 @router.get("/runs/{run_id}/events")
-def engineering_run_events(run_id: str) -> dict[str, object]:
+def engineering_run_events(run_id: str, after_seq: int = Query(default=0, ge=0)) -> dict[str, object]:
     try:
-        return {"runId": run_id, "events": manager.events(run_id)}
+        events = manager.events(run_id)
+        return {"runId": run_id, "events": [event for index, event in enumerate(events, 1) if int(event.get("seq", index)) > after_seq]}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="engineering run not found") from exc
 
 
+@router.get("/runs/{run_id}/console")
+def engineering_run_console(run_id: str, after_seq: int = Query(default=0, ge=0)) -> dict[str, object]:
+    try:
+        events = manager.events(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="engineering run not found") from exc
+    return {"runId": run_id, "events": [event for index, event in enumerate(events, 1) if event.get("type") == "console" and int(event.get("seq", index)) > after_seq]}
+
+class EngineeringReportRequest(BaseModel):
+    name: str = Field(default="report", min_length=1, max_length=120)
+    outputDirectory: str | None = Field(default=None, max_length=1000)
+
+
 @router.post("/runs/{run_id}/report")
-def engineering_run_report(run_id: str) -> dict[str, object]:
+def engineering_run_report(run_id: str, request: EngineeringReportRequest | None = None) -> dict[str, object]:
+    request = request or EngineeringReportRequest()
     record = _record_or_404(run_id)
     if record.status not in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
         raise HTTPException(status_code=409, detail="run is not terminal")
-    path = write_report(record)
+    path = write_report(record, request.name)
     ref = manager._ref(record.run_dir, path, "text/markdown")
     if not any(item.relative_path == ref.relative_path for item in record.files):
         record.files.append(ref)
     manager.persist(record)
-    return ref.model_dump(by_alias=True, mode="json")
+    response = ref.model_dump(by_alias=True, mode="json")
+    if request.outputDirectory:
+        output_directory = Path(request.outputDirectory).expanduser().resolve()
+        if not output_directory.is_dir():
+            raise HTTPException(status_code=422, detail="报告输出目录不存在")
+        exported = output_directory / path.name
+        exported.write_bytes(path.read_bytes())
+        response["exportedPath"] = str(exported)
+    return response
 
 
 @router.websocket("/runs/{run_id}/stream")

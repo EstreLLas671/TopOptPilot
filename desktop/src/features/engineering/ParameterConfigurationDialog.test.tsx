@@ -76,4 +76,43 @@ describe("ParameterConfigurationDialog", () => {
     expect(onApply.mock.calls[0][0]).toMatchObject({ nelx: 48, dimension: "3d" });
     expect(onApply.mock.calls[0][1]).toBe("local-matlab");
   });
+
+  it("shows only MATLAB and Python and removes redundant validation copy", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "打开参数" }));
+
+    const lane = screen.getByLabelText("求解链路") as HTMLSelectElement;
+    expect(lane.value).toBe("local-matlab");
+    expect(Array.from(lane.options).map(option => option.value)).toEqual(["local-matlab", "python-fem"]);
+    expect(screen.queryByText(/修改暂存在此窗口/)).toBeNull();
+    expect(screen.queryByText("配置校验通过")).toBeNull();
+  });
+
+  it("supports classic presets and applies a custom material", async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    render(<Harness onApply={onApply} />);
+
+    await user.click(screen.getByRole("button", { name: "打开参数" }));
+    await user.selectOptions(screen.getByLabelText("材料预设"), "structural-steel");
+    const presetName = screen.getByLabelText("材料名称") as HTMLInputElement;
+    expect(presetName.value).toBe("结构钢");
+    expect(presetName.readOnly).toBe(true);
+    expect(screen.getByText("E 200 GPa · ν 0.3")).toBeTruthy();
+
+    await user.selectOptions(screen.getByLabelText("材料预设"), "custom");
+    const values: Array<[string, string]> = [["材料名称", "测试复合材料"], ["杨氏模量 E（GPa）", "72"], ["泊松比 ν", "0.31"], ["密度（kg/m³）", "1600"], ["屈服强度（MPa）", "420"]];
+    for (const [label, value] of values) {
+      const input = screen.getByLabelText(label);
+      await user.clear(input);
+      await user.type(input, value);
+    }
+    expect(screen.getByText("ρ 1600 kg/m³ · σy 420 MPa")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "应用配置" }));
+
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+      material: { preset: "custom", name: "测试复合材料", youngsModulusGPa: 72, poissonRatio: 0.31, densityKgM3: 1600, yieldStrengthMPa: 420 },
+    }), "local-matlab");
+  });
 });

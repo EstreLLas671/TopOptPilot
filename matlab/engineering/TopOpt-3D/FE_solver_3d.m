@@ -27,7 +27,13 @@ validateattributes(Emin, {'numeric'}, ...
     {'real','finite','scalar','>=',0,'<',1});
 
 ndof = 3 * (nelx+1) * (nely+1) * (nelz+1);
-KE = lk_3d();
+E = 1.0;
+nu = 0.3;
+if isfield(bc_config, 'E') && ~isempty(bc_config.E), E = bc_config.E; end
+if isfield(bc_config, 'nu') && ~isempty(bc_config.nu), nu = bc_config.nu; end
+validateattributes(E, {'numeric'}, {'real','finite','scalar','positive'});
+validateattributes(nu, {'numeric'}, {'real','finite','scalar','>',-1,'<',0.5});
+KE = lk_3d(E, nu);
 edofMat = build_edof_matrix(nelx, nely, nelz);
 
 % 元素排序与 x(:) 一致：ely 最快，其次 elx，最后 elz。

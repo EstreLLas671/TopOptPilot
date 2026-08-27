@@ -24,10 +24,10 @@ def _write_standard_resources(root) -> None:
         path.write_bytes(b"resource")
 
 
-def test_desktop_gate_reports_v2_executable_and_installer_paths(monkeypatch, tmp_path) -> None:
+def test_desktop_gate_reports_topoptpilot_executable_and_installer_paths(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
-    executable = tmp_path / "desktop/src-tauri/target/release/idesktop-v2.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/iDeskTop-v2_2.0.0_x64-setup.exe"
+    executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.0_x64-setup.exe"
     executable.parent.mkdir(parents=True)
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")
@@ -37,22 +37,8 @@ def test_desktop_gate_reports_v2_executable_and_installer_paths(monkeypatch, tmp
     result = release_audit._desktop_gate()
 
     assert result["pass"] is True
-    assert result["executable"].endswith("idesktop-v2.exe")
-    assert result["installer"].endswith("iDeskTop-v2_2.0.0_x64-setup.exe")
-def test_desktop_gate_accepts_tauri_product_name_with_space(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(release_audit, "ROOT", tmp_path)
-    executable = tmp_path / "desktop/src-tauri/target/release/idesktop-v2.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/iDeskTop v2_2.0.0_x64-setup.exe"
-    executable.parent.mkdir(parents=True)
-    installer.parent.mkdir(parents=True)
-    executable.write_bytes(b"exe")
-    installer.write_bytes(b"installer")
-    _write_standard_resources(tmp_path)
-
-    result = release_audit._desktop_gate()
-
-    assert result["pass"] is True
-    assert result["installer"].endswith("iDeskTop v2_2.0.0_x64-setup.exe")
+    assert result["executable"].endswith("topoptpilot.exe")
+    assert result["installer"].endswith("TopOptPilot_2.0.0_x64-setup.exe")
 def test_cases_gate_requires_real_matlab_mcp_f3() -> None:
     cases = {
         "A": {"metrics": {"best_feasible_objective": 1.0}},
@@ -116,8 +102,8 @@ def test_source_gates_match_v2_lanes_and_grounded_reports() -> None:
 
 def test_desktop_gate_rejects_missing_standard_resources_and_runtime_payload(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
-    executable = tmp_path / "desktop/src-tauri/target/release/idesktop-v2.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/iDeskTop v2_2.0.0_x64-setup.exe"
+    executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.0_x64-setup.exe"
     executable.parent.mkdir(parents=True)
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")

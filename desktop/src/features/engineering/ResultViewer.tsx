@@ -4,7 +4,8 @@ import { engineeringArtifactBuffer } from "../../backend-artifact";
 import { engineeringArtifactText } from "../../backend-text";
 import type { EngineeringArtifactRef, EngineeringRun } from "../../types";
 import { parseDensityCsv, parseHistoryJson, type ConvergencePoint } from "./artifact-viewer";
-import { projectFortranVolume, readFloat32LittleEndian } from "./matlab-artifact";
+import { asFortranVolume, projectFortranVolume, readFloat32LittleEndian, type MatlabVolume } from "./matlab-artifact";
+import InteractiveVolumeView, { type ViewState } from "./InteractiveVolumeView";
 
 type Props = { run: EngineeringRun | null; onError: (message: string) => void };
 type FieldMode = "density" | "stress";
@@ -40,6 +41,10 @@ export function ConvergenceChart({ points }: { points: ConvergencePoint[] }) {
 export default function ResultViewer({ run, onError }: Props) {
   const [density, setDensity] = useState<number[][]>([]);
   const [stress, setStress] = useState<number[][]>([]);
+  const [densityVolume, setDensityVolume] = useState<MatlabVolume | null>(null);
+  const [stressVolume, setStressVolume] = useState<MatlabVolume | null>(null);
+  const [dimension, setDimension] = useState<"2d" | "3d">("2d");
+  const [viewState, setViewState] = useState<ViewState>({ rotationX: -0.52, rotationY: 0.72, zoom: 1 });
   const [fieldMode, setFieldMode] = useState<FieldMode>("density");
   const [history, setHistory] = useState<ConvergencePoint[]>([]);
   const [selected, setSelected] = useState<EngineeringArtifactRef | null>(null);
@@ -61,7 +66,7 @@ export default function ResultViewer({ run, onError }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    setDensity([]); setStress([]); setHistory([]); setSelected(null); setPreview(""); setFieldMode("density");
+    setDensity([]); setStress([]); setDensityVolume(null); setStressVolume(null); setDimension("2d"); setHistory([]); setSelected(null); setPreview(""); setFieldMode("density");
     if (!run || run.status !== "completed") return () => { cancelled = true; };
     const densityRef = run.files.find(item => item.relativePath === "density.csv");
     const historyRef = run.files.find(item => item.relativePath === "history.json");
@@ -76,22 +81,36 @@ export default function ResultViewer({ run, onError }: Props) {
       if (manifestRef) {
         const manifest = JSON.parse(await engineeringArtifactText(run.runId, manifestRef.relativePath)) as MatlabManifest;
         const densityBuffer = await engineeringArtifactBuffer(run.runId, manifest.density_file);
-        densityValues = projectFortranVolume(readFloat32LittleEndian(densityBuffer), manifest.shape);
+        const densityRaw = readFloat32LittleEndian(densityBuffer);
+        densityValues = projectFortranVolume(densityRaw, manifest.shape);
         if (manifest.stress_file) {
           const stressBuffer = await engineeringArtifactBuffer(run.runId, manifest.stress_file);
           stressValues = projectFortranVolume(readFloat32LittleEndian(stressBuffer), manifest.shape);
         }
       }
-      if (!cancelled) { setDensity(densityValues); setStress(stressValues); setHistory(parseHistoryJson(historyText)); }
+      if (!cancelled) {
+        setDensity(densityValues); setStress(stressValues); setDimension(manifestRef ? (JSON.parse(await engineeringArtifactText(run.runId, manifestRef.relativePath)) as MatlabManifest).shape.length === 3 ? "3d" : "2d" : "2d");
+        if (manifestRef) {
+          const manifest = JSON.parse(await engineeringArtifactText(run.runId, manifestRef.relativePath)) as MatlabManifest;
+          const densityBuffer = await engineeringArtifactBuffer(run.runId, manifest.density_file);
+          setDensityVolume(asFortranVolume(readFloat32LittleEndian(densityBuffer), manifest.shape));
+          if (manifest.stress_file) {
+            const stressBuffer = await engineeringArtifactBuffer(run.runId, manifest.stress_file);
+            setStressVolume(asFortranVolume(readFloat32LittleEndian(stressBuffer), manifest.shape));
+          }
+        }
+        setHistory(parseHistoryJson(historyText));
+      }
     };
     void load().catch(reason => { if (!cancelled) onError(String(reason)); });
     return () => { cancelled = true; };
   }, [run?.runId, run?.status, onError]);
 
   if (!run) return <div className="result-empty"><Gauge size={24}/><b>尚未运行工程求解</b><span>选择求解链路并启动后，真实密度、收敛历史与 provenance 会显示在这里。</span></div>;
+  const show3d = dimension === "3d" && densityVolume !== null;
   return <div className="result-viewer">
     <header className="result-summary"><div><small>Run ID</small><b>{run.runId}</b></div><div><small>链路 / 状态</small><b>{run.lane} · {run.status}</b></div><div><small>柔度</small><b>{run.metrics.compliance?.toFixed?.(4) ?? "—"}</b></div><div><small>体积分数</small><b>{run.metrics.volumeFraction?.toFixed?.(4) ?? "—"}</b></div></header>
-    <div className="result-plots"><section><h4 className="field-heading"><span>{fieldMode === "density" ? "密度场" : "Von Mises 应力场"}</span><span className="field-switch"><button className={fieldMode === "density" ? "active" : ""} onClick={() => setFieldMode("density")}>密度</button><button className={fieldMode === "stress" ? "active" : ""} disabled={!stress.length} onClick={() => setFieldMode("stress")}>应力</button></span></h4><ScalarMap values={fieldMode === "density" ? density : stress} mode={fieldMode}/></section><section><h4>柔度收敛</h4><ConvergenceChart points={history}/></section></div>
+    <div className="result-plots"><section><h4 className="field-heading"><span>{fieldMode === "density" ? "密度场" : "Von Mises 应力场"}</span><span className="field-switch"><button className={fieldMode === "density" ? "active" : ""} onClick={() => setFieldMode("density")}>密度</button><button className={fieldMode === "stress" ? "active" : ""} disabled={!stress.length || (show3d && !stressVolume)} onClick={() => setFieldMode("stress")}>应力</button></span></h4>{show3d && densityVolume ? <InteractiveVolumeView density={densityVolume} field={fieldMode === "stress" && stressVolume ? stressVolume : densityVolume} mode={fieldMode} viewState={viewState} onViewStateChange={setViewState}/> : <ScalarMap values={fieldMode === "density" ? density : stress} mode={fieldMode}/>}</section><section><h4>柔度收敛</h4><ConvergenceChart points={history}/></section></div>
     <section className="artifact-browser"><header><span><FileJson2 size={14}/>制品与快照</span><small>SHA-256 校验引用 · {run.provenance.resultKind || "unknown"}</small></header><div className="artifact-list">{[...run.files, ...run.snapshots].map(item => <button key={`${item.relativePath}-${item.sha256}`} onClick={() => void readArtifact(item)} className={selected?.sha256 === item.sha256 ? "active" : ""}><span>{item.relativePath}</span><small>{(item.sizeBytes / 1024).toFixed(1)} KB · {item.sha256.slice(0, 12)}</small></button>)}</div><pre className="artifact-preview">{loading ? <RefreshCw className="spin"/> : preview || "选择 JSON、CSV、日志或快照查看真实内容。二进制制品只显示元信息。"}</pre></section>
   </div>;
 }

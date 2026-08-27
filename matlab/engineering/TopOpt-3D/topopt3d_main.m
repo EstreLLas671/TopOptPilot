@@ -33,6 +33,11 @@ config = set_default(config, 'penal', 3.0);
 config = set_default(config, 'penal_start', 1.0);
 config = set_default(config, 'penal_schedule_power', 1.0);
 config = set_default(config, 'Emin', 1e-9);
+config = set_default(config, 'E', 1.0);
+config = set_default(config, 'nu', 0.3);
+config = set_default(config, 'material_name', '归一化参考材料');
+config = set_default(config, 'density_kg_m3', 1.0);
+config = set_default(config, 'yield_strength_MPa', 1.0);
 config = set_default(config, 'rmin', 1.5);
 config = set_default(config, 'xmin', 1e-3);
 config = set_default(config, 'max_iterations', accuracyDefaults.max_iterations);
@@ -76,6 +81,10 @@ validateattributes(config.penal_start, {'numeric'}, ...
     {'scalar','real','finite','>=',1,'<=',config.penal});
 validateattributes(config.Emin, {'numeric'}, ...
     {'scalar','real','finite','>=',0,'<',1});
+validateattributes(config.E, {'numeric'}, {'scalar','real','finite','positive'});
+validateattributes(config.nu, {'numeric'}, {'scalar','real','finite','>',-1,'<',0.5});
+validateattributes(config.density_kg_m3, {'numeric'}, {'scalar','real','finite','positive'});
+validateattributes(config.yield_strength_MPa, {'numeric'}, {'scalar','real','finite','positive'});
 validateattributes(config.change_tolerance, {'numeric'}, ...
     {'scalar','real','finite','positive'});
 validateattributes(config.objective_tolerance, {'numeric'}, ...
@@ -131,6 +140,8 @@ if isfield(config, 'bc_config') && ~isempty(config.bc_config)
 end
 bcConfig.domain_mask = domainMask;
 bcConfig.Emin = config.Emin;
+bcConfig.E = config.E;
+bcConfig.nu = config.nu;
 
 filterConfig = struct();
 filterConfig.filter_type = 'sensitivity';
@@ -150,7 +161,7 @@ ocOptions.passive_void = passiveVoid;
 ocOptions.passive_solid = passiveSolid;
 ocOptions.volume_mask = domainMask;
 
-KE = lk_3d();
+KE = lk_3d(config.E, config.nu);
 objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);
@@ -208,7 +219,8 @@ for iteration = 1:config.max_iterations
         frame.rmin = filterInfo.rmin;
         frame.penal = penalNow;
         if config.live_stress_snapshots
-            [frame.von_mises, ~] = compute_von_mises_3d(nelx, nely, nelz, x, penalNow, config.Emin, U, config.stress_measure);
+            [frame.von_mises, ~] = compute_von_mises_3d(nelx, nely, nelz, ...
+                x, penalNow, config.Emin, U, config.stress_measure, config.E, config.nu);
         end
         config.iteration_callback(frame);
     end
@@ -225,7 +237,7 @@ finalPenal = penalHistory(iteration);
     nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, KE);
 [vonMises, stress] = compute_von_mises_3d( ...
     nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, ...
-    config.stress_measure);
+    config.stress_measure, config.E, config.nu);
 objectiveHistory(iteration) = finalObjective;
 
 result = struct();

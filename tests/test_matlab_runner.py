@@ -23,7 +23,8 @@ def test_build_matlab_config_maps_engineering_task_without_demo_flags() -> None:
     config = build_engineering_matlab_config({
         "load_case": "cantilever",
         "geometry": {"nelx": 12, "nely": 8, "nelz": 3},
-        "params": {"volfrac": 0.35, "penal": 3.2, "max_iter": 7, "min_iter": 4, "rmin": 2.0, "filter_strategy": "adaptive", "accuracy": "high"},
+        "params": {"volfrac": 0.35, "penal": 3.2, "max_iter": 7, "min_iter": 4, "rmin": 2.0, "filter_strategy": "adaptive", "accuracy": "high", "E": 68.9, "nu": 0.33},
+        "material": {"preset": "aluminum-6061-t6", "name": "6061-T6 铝合金", "E_GPa": 68.9, "nu": 0.33, "density_kg_m3": 2700, "yield_strength_MPa": 276},
     })
     assert config["bc_type"] == "cantilever"
     assert config["nelx"] == 12 and config["nely"] == 8 and config["nelz"] == 3
@@ -32,6 +33,11 @@ def test_build_matlab_config_maps_engineering_task_without_demo_flags() -> None:
     assert config["penal"] == 3.2
     assert config["filter_strategy"] == "adaptive"
     assert config["accuracy"] == "high"
+    assert config["material_preset"] == "aluminum-6061-t6"
+    assert config["material_name"] == "6061-T6 铝合金"
+    assert config["E"] == 68.9 and config["nu"] == 0.33
+    assert config["density_kg_m3"] == 2700
+    assert config["yield_strength_MPa"] == 276
     assert config["display"] is False
     assert config["live_stress_snapshots"] is True
     assert config["render_iteration_frames"] is True

@@ -1,10 +1,11 @@
-function KE = lk_3d()
+function KE = lk_3d(E, nu)
 %LK_3D 返回单位立方体八节点六面体单元的 24×24 刚度矩阵。
 %   材料采用三维各向同性线弹性模型：E=1，nu=0.3。使用 2×2×2
 %   高斯积分，并将自然坐标单元 [-1,1]^3 映射至边长为 1 的物理单元。
-
-E = 1.0;
-nu = 0.3;
+if nargin < 1 || isempty(E), E = 1.0; end
+if nargin < 2 || isempty(nu), nu = 0.3; end
+validateattributes(E, {'numeric'}, {'real','finite','scalar','positive'});
+validateattributes(nu, {'numeric'}, {'real','finite','scalar','>',-1,'<',0.5});
 
 % 三维各向同性弹性矩阵，工程剪切应变记号 [exx eyy ezz gxy gyz gzx]。
 D = E / ((1 + nu) * (1 - 2 * nu)) * [ ...

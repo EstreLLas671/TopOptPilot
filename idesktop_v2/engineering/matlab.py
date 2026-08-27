@@ -316,7 +316,7 @@ async def probe_matlab_installation(
     *,
     runner: Callable[[str, list[str], float], Any] | None = None,
     marker_factory: Callable[[], tuple[str, str]] | None = None,
-    timeout_seconds: float = 45.0,
+    timeout_seconds: float = 120.0,
 ) -> MatlabProbeResult:
     begin, end = (marker_factory or (lambda: ("IDESKTOP_MATLAB_BEGIN", "IDESKTOP_MATLAB_END")))()
     expression = (

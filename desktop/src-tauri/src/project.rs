@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::State;
 
 const ALLOWED_EXTENSIONS: &[&str] = &["m", "json", "md", "txt", "log", "csv"];
 const PATCH_APPROVAL_TTL: Duration = Duration::from_secs(120);
@@ -314,7 +314,7 @@ fn canonical_picked_project(path: Option<PathBuf>) -> Result<Option<String>, Str
 #[tauri::command]
 pub async fn project_pick_folder() -> Result<Option<String>, String> {
     let selected = rfd::AsyncFileDialog::new()
-        .set_title("选择或创建 iDeskTop v2 项目文件夹")
+        .set_title("选择或创建 TopOptPilot 项目文件夹")
         .pick_folder()
         .await
         .map(|handle| handle.path().to_path_buf());
@@ -853,70 +853,13 @@ where
     Ok(outputs)
 }
 
-const WEBVIEW_LABEL: &str = "idesktop-browser";
-
-fn validate_webview_url(raw: &str) -> Result<url::Url, String> {
-    let parsed = url::Url::parse(raw).map_err(|_| "WebView URL 无效".to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("WebView 只允许 http/https 协议".into());
-    }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err("WebView URL 禁止携带凭据".into());
-    }
-    let host = parsed.host_str().ok_or("WebView URL 缺少主机名")?;
-    let allowlist = std::env::var("IDESKTOP_WEBVIEW_ALLOWLIST")
-        .unwrap_or_else(|_| "127.0.0.1,localhost".into());
-    let allowed = allowlist
-        .split(',')
-        .map(str::trim)
-        .any(|item| item.eq_ignore_ascii_case(host));
-    if !allowed {
-        return Err(format!("WebView 主机不在允许列表：{host}"));
-    }
-    Ok(parsed)
-}
-
-#[tauri::command]
-pub fn webview_create(app: AppHandle, url: String) -> Result<String, String> {
-    let parsed = validate_webview_url(&url)?;
-    if let Some(window) = app.get_webview_window(WEBVIEW_LABEL) {
-        window
-            .navigate(parsed.clone())
-            .map_err(|error| error.to_string())?;
-        return Ok(WEBVIEW_LABEL.into());
-    }
-    WebviewWindowBuilder::new(&app, WEBVIEW_LABEL, WebviewUrl::External(parsed))
-        .title("iDeskTop v2 浏览器")
-        .inner_size(1100.0, 760.0)
-        .build()
-        .map_err(|error| error.to_string())?;
-    Ok(WEBVIEW_LABEL.into())
-}
-
-#[tauri::command]
-pub fn webview_navigate(app: AppHandle, url: String) -> Result<(), String> {
-    let parsed = validate_webview_url(&url)?;
-    let window = app
-        .get_webview_window(WEBVIEW_LABEL)
-        .ok_or("受限 WebView 尚未创建")?;
-    window.navigate(parsed).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn webview_close(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(WEBVIEW_LABEL) {
-        window.close().map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::{
         apply_patch_transaction, apply_patch_transaction_with_save, apply_unified_diff,
         canonical_picked_project, clean_relative, create_unique_temp_file, digest,
         patch_apply_with_state, patch_preview_with_state, project_id_for_root,
-        proposal_base_digest, safe_file, validate_webview_url, PatchApprovalState, PatchFile,
-        PatchProposal,
+        proposal_base_digest, safe_file, PatchApprovalState, PatchFile, PatchProposal,
     };
     use std::{
         fs,
@@ -982,14 +925,6 @@ mod tests {
             digest(b"iDeskTop v2"),
             "2cfe399ea73ab4accad7ac9628dff053550466bd3192469b46fbde381cea7922"
         );
-    }
-
-    #[test]
-    fn webview_rejects_unsafe_protocols_and_external_hosts() {
-        assert!(validate_webview_url("javascript:alert(1)").is_err());
-        assert!(validate_webview_url("https://example.com").is_err());
-        assert!(validate_webview_url("http://127.0.0.1:5173").is_ok());
-        assert!(validate_webview_url("https://user:pass@localhost").is_err());
     }
 
     #[test]

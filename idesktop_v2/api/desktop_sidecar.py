@@ -1,4 +1,4 @@
-"""iDeskTop v2 authenticated sidecar entry point."""
+"""TopOptPilot authenticated sidecar entry point."""
 
 from __future__ import annotations
 

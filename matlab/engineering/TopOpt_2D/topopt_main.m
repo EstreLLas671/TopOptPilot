@@ -25,6 +25,11 @@ end
 config = set_default(config, 'volfrac', 0.5);
 config = set_default(config, 'penal', 3.0);
 config = set_default(config, 'rmin', 1.5);
+config = set_default(config, 'E', 1.0);
+config = set_default(config, 'nu', 0.3);
+config = set_default(config, 'material_name', '归一化参考材料');
+config = set_default(config, 'density_kg_m3', 1.0);
+config = set_default(config, 'yield_strength_MPa', 1.0);
 config = set_default(config, 'geometry', struct());
 config = set_default(config, 'display', true);
 config = set_default(config, 'verbose', true);
@@ -39,6 +44,8 @@ config = set_default(config, 'move_schedule_power', 1.0);
 config = set_default(config, 'passive_solid', []);
 config = set_default(config, 'passive_void', []);
 config = set_default(config, 'iteration_callback', []);
+config = set_default(config, 'live_stress_snapshots', false);
+config = set_default(config, 'stress_measure', 'gauss_max');
 
 if ~isempty(config.iteration_callback) && ...
         ~isa(config.iteration_callback, 'function_handle')
@@ -81,6 +88,8 @@ if isfield(config, 'bc_config') && ~isempty(config.bc_config)
     bcConfig.bc_type = config.bc_type;
 end
 bcConfig.domain_mask = domainMask;
+bcConfig.E = config.E;
+bcConfig.nu = config.nu;
 
 filterConfig = struct();
 filterConfig.filter_type = 'sensitivity';
@@ -101,7 +110,7 @@ ocOptions.passive_void = passiveVoid;
 ocOptions.passive_solid = passiveSolid;
 ocOptions.volume_mask = domainMask;
 
-KE = element_stiffness_matrix();
+KE = element_stiffness_matrix(config.E, config.nu);
 objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);
@@ -147,6 +156,10 @@ for loop = 1:config.max_iterations
         frame.volume_fraction = ocInfo.volume_fraction;
         frame.rmin = filterInfo.rmin;
         frame.penal = config.penal;
+        if config.live_stress_snapshots
+            [frame.von_mises, ~] = compute_von_mises_2d(nelx, nely, ...
+                x, config.penal, U, config.stress_measure, config.E, config.nu);
+        end
         config.iteration_callback(frame);
     end
     if loop >= config.min_iterations && change < config.change_tolerance
@@ -159,16 +172,28 @@ changeHistory = changeHistory(1:loop);
 radiusHistory = radiusHistory(1:loop);
 moveHistory = moveHistory(1:loop);
 
+% Re-analyze the final density so final stress and objective match the displayed topology.
+[Ufinal, Kfinal] = FE_solver(nelx, nely, x, config.penal, bcConfig);
+[finalObjective, ~] = compliance_and_sensitivity( ...
+    nelx, nely, x, config.penal, Ufinal, KE);
+[vonMises, stress] = compute_von_mises_2d( ...
+    nelx, nely, x, config.penal, Ufinal, config.stress_measure, config.E, config.nu);
+objectiveHistory(loop) = finalObjective;
+
 result = struct();
 result.x = x;
 result.domain_mask = domainMask;
 result.iterations = loop;
-result.objective = objectiveHistory(end);
+result.objective = finalObjective;
 result.volume_fraction = mean(x(domainMask));
 result.objective_history = objectiveHistory;
 result.change_history = changeHistory;
 result.radius_history = radiusHistory;
 result.move_history = moveHistory;
+result.U = Ufinal;
+result.K = Kfinal;
+result.von_mises = vonMises;
+result.stress = stress;
 result.config = config;
 
 if config.display
@@ -193,9 +218,7 @@ for elx = 1:nelx
 end
 end
 
-function KE = element_stiffness_matrix()
-E = 1.0;
-nu = 0.3;
+function KE = element_stiffness_matrix(E, nu)
 k = [1/2-nu/6,1/8+nu/8,-1/4-nu/12,-1/8+3*nu/8, ...
     -1/4+nu/12,-1/8-nu/8,nu/6,1/8-3*nu/8];
 KE = E/(1-nu^2)* ...
