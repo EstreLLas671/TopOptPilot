@@ -205,9 +205,20 @@ class DataSettings(BaseModel):
 
 class CustomThemeSettings(BaseModel):
     accent: str = Field(default="#2e73ca", pattern=r"^#[0-9a-fA-F]{6}$")
+    accent_hover: str = Field(default="#245da5", pattern=r"^#[0-9a-fA-F]{6}$")
     background: str = Field(default="#f4f7fb", pattern=r"^#[0-9a-fA-F]{6}$")
     surface: str = Field(default="#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    elevated: str = Field(default="#f8fbff", pattern=r"^#[0-9a-fA-F]{6}$")
     text: str = Field(default="#24344d", pattern=r"^#[0-9a-fA-F]{6}$")
+    muted_text: str = Field(default="#6f8095", pattern=r"^#[0-9a-fA-F]{6}$")
+    border: str = Field(default="#dce5ef", pattern=r"^#[0-9a-fA-F]{6}$")
+    success: str = Field(default="#23835c", pattern=r"^#[0-9a-fA-F]{6}$")
+    warning: str = Field(default="#b56b17", pattern=r"^#[0-9a-fA-F]{6}$")
+    danger: str = Field(default="#c64242", pattern=r"^#[0-9a-fA-F]{6}$")
+    chart: str = Field(default="#2e73ca", pattern=r"^#[0-9a-fA-F]{6}$")
+    chart_grid: str = Field(default="#cbd7e5", pattern=r"^#[0-9a-fA-F]{6}$")
+    volume_background: str = Field(default="#f1f5fa", pattern=r"^#[0-9a-fA-F]{6}$")
+    contrast: int = Field(default=100, ge=80, le=140)
 
 
 class AppSettings(BaseModel):

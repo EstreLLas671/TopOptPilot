@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import ResizableWorkspaceLayout from "./ResizableWorkspaceLayout";
 
@@ -9,6 +9,7 @@ function renderLayout() {
     <ResizableWorkspaceLayout
       mode="engineering"
       left={<span>左栏内容</span>}
+      leftHeader={<b>工程工作区</b>}
       center={<span>中栏内容</span>}
       right={<span>右栏内容</span>}
       bottom={<span>下栏内容</span>}
@@ -81,4 +82,26 @@ describe("ResizableWorkspaceLayout", () => {
     fireEvent.click(screen.getByRole("button", { name: "隐藏左侧项目栏" }));
     expect(screen.getByRole("button", { name: "项目文件" })).toBeTruthy();
   });
+  it("keeps the engineering title and collapse action in one flow header", () => {
+    const { container } = renderLayout();
+    const header = container.querySelector(".workspace-panel-header");
+    expect(header).toBeTruthy();
+    expect(header?.textContent).toContain("工程工作区");
+    expect(header?.querySelector('[aria-label="隐藏左侧项目栏"]')).toBeTruthy();
+  });
+
+  it("shows one non-blocking completion glow for a new completion signal", async () => {
+    const view = render(
+      <ResizableWorkspaceLayout mode="engineering" completionSignal="" left={<span>左栏</span>} center={<span>中栏</span>} right={<span>右栏</span>} bottom={<span>下栏</span>} />,
+    );
+    view.rerender(<ResizableWorkspaceLayout mode="engineering" completionSignal="run-completed-1" left={<span>左栏</span>} center={<span>中栏</span>} right={<span>右栏</span>} bottom={<span>下栏</span>} />);
+    await waitFor(() => expect(view.container.querySelectorAll(".workspace-completion-glow")).toHaveLength(1));
+    expect((view.container.querySelector(".workspace-completion-glow") as HTMLElement).getAttribute("aria-hidden")).toBe("true");
+  });
 });
+
+function withinElement(element: Element) {
+  return {
+    querySelector: (selector: string) => element.querySelector(selector),
+  };
+}

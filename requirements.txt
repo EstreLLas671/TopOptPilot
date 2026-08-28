@@ -24,6 +24,7 @@ pandas>=2.0            # Workspace convergence tables
 # Local authenticated desktop sidecar API
 fastapi>=0.110,<0.116
 uvicorn>=0.29
+websockets>=12,<16
 
 # CLI & Utilities
 click>=8.1             # CLI interface

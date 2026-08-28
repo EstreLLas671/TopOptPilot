@@ -34,7 +34,7 @@ TopOptPilot 是面向二维/三维结构拓扑优化的 Windows 桌面客户端�
 在本仓库 [Releases](https://github.com/EstreLLas671/TopOptPilot/releases) 下载：
 
 ```text
-TopOptPilot_2.0.0_x64-setup.exe
+TopOptPilot_2.0.1_x64-setup.exe
 ```
 
 系统要求：
@@ -111,6 +111,8 @@ desktop/src-tauri/target/release/bundle/nsis/
 
 - 工程助手不能直接修改文件，只能生成 PatchProposal；应用前必须预览并确认。
 - AI 科研实验不能绕过 Policy、Budget 和 F0–F3 审批。
+- 开发或无头部署可通过 `DASHSCOPE_API_KEY` 提供模型密钥；客户端密钥只经受限凭据接口保存和读取，不进入普通设置、日志或报告。
+- 科研保真度链路固定为 F0/F1=Python 2D、F2=Python 3D、F3=MATLAB MCP；低保真结果不能冒充 F3 证据。
 - API Key、授权头和原始附件路径不得写入运行日志、普通设置或报告。
 - 缺少真实 MATLAB 数据时，界面不会生成模拟密度、应力或迭代图。
 - MATLAB MCP 故障不能回退为 Python 并宣称 F3 成功。
@@ -130,9 +132,9 @@ desktop/src-tauri/target/release/bundle/nsis/
 
 ## 发布
 
-当前桌面版本：`2.0.0`。
+当前桌面版本：`2.0.1`。
 
-详细发布说明见 [docs/RELEASE_2.0.0.md](docs/RELEASE_2.0.0.md)。
+详细发布说明见 [docs/RELEASE_2.0.1.md](docs/RELEASE_2.0.1.md)。
 
 ## 许可证与第三方组件
 

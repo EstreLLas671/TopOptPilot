@@ -153,3 +153,48 @@ def test_engineering_chat_is_read_only_and_returns_no_secret_or_actions() -> Non
     assert response.actions == []
     assert "api_key" not in response.model_dump_json().lower()
     assert all("secret_source" not in str(message) for message in captured)
+
+def test_engineering_parameter_action_is_structured_and_removed_from_reply() -> None:
+    config = {
+        "dimension": "3d",
+        "bcType": "cantilever",
+        "accuracy": "standard",
+        "nelx": 24,
+        "nely": 8,
+        "nelz": 6,
+        "volfrac": 0.4,
+        "penal": 3.0,
+        "rmin": 1.5,
+        "maxIterations": 60,
+        "minIterations": 8,
+        "filterStrategy": "fixed",
+        "material": {
+            "preset": "normalized",
+            "name": "归一化参考材料",
+            "youngsModulusGPa": 1.0,
+            "poissonRatio": 0.3,
+            "densityKgM3": 1.0,
+            "yieldStrengthMPa": 1.0,
+        },
+    }
+    import json
+    content = (
+        "建议提高惩罚因子。"
+        "<topoptpilot-action>"
+        + json.dumps({
+            "type": "apply_optimization_config",
+            "config": config,
+            "changedFields": ["penal"],
+            "rationale": "降低中间密度",
+        }, ensure_ascii=False)
+        + "</topoptpilot-action>"
+    )
+    response = generate_engineering_chat(
+        EngineeringChatRequest(message="帮我调整参数", context={"parameters": {"penal": 2.5}}),
+        lambda _messages: {"success": True, "content": content},
+        configured=True,
+    )
+    assert response.reply == "建议提高惩罚因子。"
+    assert response.actions[0]["type"] == "apply_optimization_config"
+    assert response.actions[0]["config"]["penal"] == 3.0
+    assert "topoptpilot-action" not in response.reply

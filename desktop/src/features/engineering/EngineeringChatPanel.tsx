@@ -17,6 +17,20 @@ type Props = {
 };
 
 type PendingAttachment = ConversationAttachment & { preview: string };
+
+const configLabels: Record<string, string> = {
+  dimension: "维度", bcType: "工况", accuracy: "精度", nelx: "X 向网格", nely: "Y 向网格", nelz: "Z 向网格",
+  volfrac: "体积分数", penal: "惩罚因子", rmin: "滤波半径", maxIterations: "最大迭代",
+  minIterations: "最小迭代", filterStrategy: "滤波策略", material: "材料",
+};
+
+function displayConfigValue(value: unknown): string {
+  if (value && typeof value === "object") {
+    const material = value as Record<string, unknown>;
+    return [material.name, material.youngsModulusGPa ? `E ${material.youngsModulusGPa} GPa` : null].filter(Boolean).join(" · ");
+  }
+  return String(value ?? "—");
+}
 type EngineeringChatDraft = { message: string; allowExternalSource: boolean; attachments: PendingAttachment[] };
 const engineeringChatDrafts = new Map<string, EngineeringChatDraft>();
 
@@ -35,9 +49,11 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   const uploadingHashes = useRef(new Set<string>());
   const draftKey = conversationId ? `topoptpilot:engineering-draft:${ownerId}:${conversationId}` : "";
   const draftRef = useRef<EngineeringChatDraft>({ message: "", allowExternalSource: false, attachments: [] });
+  const hydratedDraftKey = useRef("");
   draftRef.current = { message, allowExternalSource, attachments };
   useEffect(() => {
-    if (!draftKey) return;
+    if (!draftKey || hydratedDraftKey.current !== draftKey) return;
+    hydratedDraftKey.current = "";
     const memory = engineeringChatDrafts.get(draftKey);
     if (memory) {
       setMessage(memory.message);
@@ -45,20 +61,32 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
       setAttachments(memory.attachments);
     } else {
       try {
-        const saved = JSON.parse(localStorage.getItem(draftKey) || "null") as { message?: string; allowExternalSource?: boolean } | null;
+        const saved = JSON.parse(localStorage.getItem(draftKey) || "null") as { message?: string; allowExternalSource?: boolean; attachments?: Array<ConversationAttachment & { preview?: string }> } | null;
         setMessage(saved?.message || "");
         setAllowExternalSource(Boolean(saved?.allowExternalSource));
-        setAttachments([]);
+        setAttachments(Array.isArray(saved?.attachments) ? saved.attachments.filter(item => item && typeof item.id === "string").map(item => ({ ...item, preview: typeof item.preview === "string" && item.preview.length < 350000 ? item.preview : "" })) : []);
       } catch {
         setMessage(""); setAllowExternalSource(false); setAttachments([]);
       }
     }
+    hydratedDraftKey.current = draftKey;
     return () => {
       const draft = draftRef.current;
       engineeringChatDrafts.set(draftKey, { ...draft, attachments: [...draft.attachments] });
-      localStorage.setItem(draftKey, JSON.stringify({ message: draft.message, allowExternalSource: draft.allowExternalSource }));
+      localStorage.setItem(draftKey, JSON.stringify({ message: draft.message, allowExternalSource: draft.allowExternalSource, attachments: draft.attachments.map(({ preview, ...item }) => ({ ...item, ...(preview && preview.length < 350000 ? { preview } : {}) })) }));
     };
   }, [draftKey]);
+
+  useEffect(() => {
+    if (!draftKey || hydratedDraftKey.current !== draftKey) return;
+    const draft = draftRef.current;
+    engineeringChatDrafts.set(draftKey, { ...draft, attachments: [...draft.attachments] });
+    localStorage.setItem(draftKey, JSON.stringify({
+      message: draft.message,
+      allowExternalSource: draft.allowExternalSource,
+      attachments: draft.attachments.map(({ preview, ...item }) => ({ ...item, ...(preview && preview.length < 350000 ? { preview } : {}) })),
+    }));
+  }, [draftKey, message, allowExternalSource, attachments]);
 
   async function loadConversation(id: string) {
     setConversationId(id);
@@ -193,7 +221,7 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     </header>
     <div className="chat-message-list">
       {!messages.length ? <div className="chat-empty"><Bot size={30}/><b>从当前工程上下文开始</b><span>询问 MATLAB、参数或结果，也可上传图片和常用文档。</span></div> : messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已随会话保存在本地</small> : null}{item.source ? <small>{item.source === "not_configured" ? "未配置 Qwen" : item.source}</small> : null}</div></article>)}
-      {suggestedAction ? <section className="optimization-action-card" aria-label="应用建议参数"><header><b>建议参数</b><span>仅填入配置，不会自动运行</span></header><p>{suggestedAction.rationale || "AI 返回了一组完整且通过校验的优化配置。"}</p><div className="optimization-action-fields">{suggestedAction.changedFields.map(field => <code key={field}>{field}</code>)}</div><details><summary>查看配置摘要</summary><pre>{JSON.stringify(suggestedAction.config, null, 2)}</pre></details><button className="primary-button" onClick={() => { onApplySuggestedConfig?.(suggestedAction); setSuggestedAction(null); }}>填入参数</button></section> : null}
+      {suggestedAction ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="optimization-action-card suggestion-dialog" role="dialog" aria-modal="true" aria-label="应用建议参数"><header><b>Agent 建议参数</b><button className="dialog-icon-button" aria-label="取消建议参数" title="取消" onClick={() => setSuggestedAction(null)}><X size={14}/></button></header><p>{suggestedAction.rationale || "AI 返回了一组完整且通过校验的优化配置。"}</p><div className="optimization-action-diff">{suggestedAction.changedFields.map(field => <div key={field}><b>{configLabels[field] || field}</b><span>{displayConfigValue(config[field as keyof OptimizationConfig])}</span><i>→</i><strong>{displayConfigValue(suggestedAction.config[field as keyof OptimizationConfig])}</strong></div>)}</div><footer><button className="outline-button" onClick={() => setSuggestedAction(null)}>取消</button><button className="primary-button" onClick={() => { onApplySuggestedConfig?.(suggestedAction); setSuggestedAction(null); }}>填入参数</button></footer></section></div> : null}
     </div>
     <footer ref={dropZone} className={"chat-composer chat-drop-zone" + (dragActive ? " drag-active" : "")} {...dropHandlers}>
       {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}

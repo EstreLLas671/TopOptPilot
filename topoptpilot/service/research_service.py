@@ -451,17 +451,28 @@ class ResearchService:
         self.store.update_research(research_id, mode="AUTONOMOUS", status="RUNNING")
         self.store.append_event(research_id, EventKind.SYSTEM.value, "ROUND_STARTED",
                                 f"Autonomous round {int(research.get('current_round', 0)) + 1} started.")
+        self.store.append_event(
+            research_id,
+            EventKind.SYSTEM.value,
+            "THREE_PLAN_STAGE_STARTED",
+            "本轮将先生成三套不同角度的候选方案，再比较、优选并进行问题诊断。",
+            payload={"stage": "three_plan_compare_diagnose", "required_plans": 3},
+            source="RESEARCH_ORCHESTRATOR",
+        )
         language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
         prompt = (
             "You are the primary Pi Research Agent. Begin or continue an autonomous topology-"
             "optimization campaign. First call research_get_context, research_get_budget, "
             "solver_get_capabilities and knowledge_search. Dispatch the HYPOTHESIS and "
-            "EXPERIMENT_PLANNER Subagents when their bounded review is needed. Choose one scientific "
-            "intent, call policy_compile_intent, preview every returned proposal, "
-            "then submit the safe bounded batch within the available budget. In the initial round submit "
-            "exactly one ESTABLISH_BASELINE experiment so later choices depend on FEM evidence. Never provide numeric solver "
-            "parameters directly. Await all FEM evidence "
-            f"before the next decision. Stop on goal, plateau, or exhausted budget. Reply in {language}."
+            "EXPERIMENT_PLANNER Subagents when their bounded review is needed. For every round, first "
+            "propose exactly three complete candidate plans from meaningfully different improvement angles "
+            "(for example penalty/filter strategy, mesh/volume constraints, and load/material/connectivity). "
+            "Compile each plan through policy_compile_intent, preview every returned proposal, and submit "
+            "the safe bounded batch only within the available budget. Wait for real FEM evidence from all "
+            "submitted candidates, compare compliance, volume fraction, gray ratio and connectivity, then "
+            "select the best route, record a diagnosis of its weaknesses, and formulate the next-round plan. "
+            "Do not invent metrics, do not auto-approve, and never provide numeric solver parameters directly. "
+            f"Stop on goal, plateau, or exhausted budget. Reply in {language}."
         )
         threading.Thread(target=self._send_pi_or_fallback,
                          args=(research_id, prompt, "experiment-planning"), daemon=True).start()
@@ -489,7 +500,42 @@ class ResearchService:
             return
         completed = [item for item in experiments if item.get("result")]
         if not completed:
-            intent = {"intent": "ESTABLISH_BASELINE"}
+            # Safe mode mirrors the autonomous three-plan contract with
+            # deterministic, policy-compiled alternatives. Each candidate is
+            # still previewed/submitted through the normal approval boundary.
+            intents = [
+                {"intent": "ESTABLISH_BASELINE"},
+                {"intent": "EXPLORE_PARAMETER", "factor": "beta"},
+                {"intent": "EXPLORE_PARAMETER", "factor": "rmin"},
+            ]
+            submitted = 0
+            for candidate_intent in intents:
+                if budget["remaining"]["total"] <= submitted:
+                    break
+                proposals = self.tools.policy_compile_intent(
+                    research_id, **candidate_intent, _decision_source="RULE_FALLBACK"
+                )
+                if not proposals:
+                    continue
+                try:
+                    self.submit_proposal(research_id, proposals[0]["id"])
+                    submitted += 1
+                    self.store.append_event(
+                        research_id,
+                        EventKind.SYSTEM.value,
+                        "THREE_PLAN_SUBMITTED",
+                        f"Safe Mode 已提交候选方案 {submitted}/3。",
+                        payload={"plan_index": submitted, "intent": candidate_intent["intent"]},
+                    )
+                except ValueError as exc:
+                    self.store.append_event(research_id, EventKind.SYSTEM.value,
+                                            "SAFE MODE PLAN REJECTED", str(exc))
+            if submitted:
+                return
+            self.store.update_research(research_id, status="STOPPED", termination_reason="PLATEAU")
+            self.store.append_event(research_id, EventKind.SYSTEM.value, "SAFE MODE STOPPED",
+                                    "Policy produced no novel controlled experiment.")
+            return
         else:
             last = completed[-1]
             quality = last["result"].get("quality", {})

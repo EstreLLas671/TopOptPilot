@@ -125,7 +125,8 @@ describe("EngineeringWorkspace mount", () => {
 
     const leftPanel = container.querySelector(".workspace-left");
     const rightPanel = container.querySelector(".workspace-right");
-    expect(leftPanel?.textContent).not.toContain("工程工作区");
+    expect(leftPanel?.textContent).toContain("工程工作区");
+    expect(leftPanel?.querySelector('.workspace-panel-header [aria-label="隐藏左侧项目栏"]')).toBeTruthy();
     expect(leftPanel?.textContent).toContain("工作区");
     expect(leftPanel?.textContent).toContain("历史对话");
     expect(leftPanel?.textContent).toContain("项目文件");

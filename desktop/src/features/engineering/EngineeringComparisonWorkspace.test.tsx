@@ -33,7 +33,7 @@ function savedScheme(id: string, name: string): EngineeringComparisonScheme {
     lane: "local-matlab",
     status: "completed",
     configDigest: id.repeat(64).slice(0, 64),
-    metrics: { compliance: id === "a" ? 12.5 : 10.2 },
+    metrics: { compliance: id === "a" ? 12.5 : 10.2, grayRatio: id === "a" ? 0.12 : 0.08 },
     snapshots: [],
     files: [],
     provenance: { resultKind: "solver" },
@@ -80,6 +80,7 @@ describe("EngineeringComparisonWorkspace", () => {
     vi.clearAllMocks();
     apiMocks.engineeringComparisonSchemes.mockResolvedValue([schemeA, schemeB]);
     apiMocks.engineeringComparisonScheme.mockImplementation(async (id: string) => id === schemeA.id ? schemeA : schemeB);
+    apiMocks.engineeringComparisonSchemeCreate.mockResolvedValue(savedScheme("c", "新方案"));
     apiMocks.engineeringEvents.mockImplementation(async (runId: string) => progress(runId));
     artifactMocks.engineeringArtifactBuffer.mockResolvedValue(float32([0.1, 0.2, 0.8, 0.9, 0.15, 0.25, 0.75, 0.85]));
     Object.defineProperty(HTMLCanvasElement.prototype, "getContext", { configurable: true, value: vi.fn(() => null) });
@@ -108,5 +109,16 @@ describe("EngineeringComparisonWorkspace", () => {
     fireEvent.click(stressButtons[0]);
     fireEvent.click(stressButtons[1]);
     expect(await screen.findAllByLabelText("可旋转缩放的三维 Von Mises 应力场")).toHaveLength(2);
+  });
+  it("requires a user-confirmed name before saving a completed run", async () => {
+    render(<EngineeringComparisonWorkspace current={current} run={schemeA.run} />);
+    fireEvent.click(screen.getByRole("button", { name: /保存当前运行/ }));
+    const dialog = await screen.findByRole("dialog", { name: "命名当前方案" });
+    const input = within(dialog).getByRole("textbox", { name: "方案名称" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "低灰度率候选方案");
+    expect(within(dialog).getByText(/Run ID：run-a/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认保存" }));
+    await waitFor(() => expect(apiMocks.engineeringComparisonSchemeCreate).toHaveBeenCalledWith("run-a", "低灰度率候选方案"));
   });
 });

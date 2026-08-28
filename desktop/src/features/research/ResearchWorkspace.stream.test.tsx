@@ -13,6 +13,8 @@ const apiMocks = vi.hoisted(() => ({
   conversationAttachment: vi.fn(),
   researchChat: vi.fn(),
   researchEvents: vi.fn(),
+  saveResearchHypothesis: vi.fn(),
+  applyResearchSuggestion: vi.fn(),
   stream: vi.fn(),
 }));
 
@@ -46,6 +48,8 @@ describe("ResearchWorkspace stream lifecycle", () => {
     });
     apiMocks.researchChat.mockResolvedValue({ reply: "科研回复", source: "qwen", contextDigest: "a".repeat(64) });
     apiMocks.researchEvents.mockResolvedValue([]);
+    apiMocks.saveResearchHypothesis.mockResolvedValue({ ...research, hypothesis: "滤波半径会影响灰度率" });
+    apiMocks.applyResearchSuggestion.mockResolvedValue({ research: { ...research, hypothesis: "滤波半径会影响灰度率" }, optimizationConfig: DEFAULT_OPTIMIZATION_CONFIG });
   });
 
   it("awaits the ticket-backed socket and closes the resolved socket on unmount", async () => {
@@ -115,5 +119,74 @@ describe("ResearchWorkspace stream lifecycle", () => {
     await waitFor(() => expect(apiMocks.conversationAttachment).toHaveBeenCalledWith("research-chat-1", expect.objectContaining({ fileName: "evidence.webp", mediaType: "image/webp" })));
     expect(await screen.findByAltText("evidence.webp")).toBeTruthy();
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("shows the research composer only on the conversation tab and restores it after audit", async () => {
+    const socket = { onmessage: null, onerror: null, close: vi.fn() } as unknown as WebSocket;
+    apiMocks.stream.mockResolvedValue(socket);
+    render(<ResearchWorkspace
+      researches={[research]} selected={research} command="保留这段科研草稿" busy={false} safeMode={false}
+      onCommand={() => undefined} onCreateResearch={() => undefined}
+      onArchive={async () => undefined} onRestore={async () => undefined}
+      onDecision={() => undefined} onError={() => undefined}
+      onSelect={async () => undefined} onSelectExperiment={() => undefined}
+      setCommand={() => undefined}
+    />);
+
+    expect(await screen.findByDisplayValue("保留这段科研草稿")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "过程 / 审计" }));
+    expect(screen.queryByPlaceholderText("描述目标、询问证据或提出下一项实验…")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "科研对话" }));
+    expect(await screen.findByDisplayValue("保留这段科研草稿")).toBeTruthy();
+  });
+  it("renders exactly the four ordered research-state cards and saves a hypothesis", async () => {
+    const socket = { onmessage: null, onerror: null, close: vi.fn() } as unknown as WebSocket;
+    apiMocks.stream.mockResolvedValue(socket);
+    const onSelect = vi.fn();
+    const view = render(<ResearchWorkspace
+      researches={[research]} selected={research} command="" busy={false} safeMode={false}
+      onCommand={() => undefined} onCreateResearch={() => undefined}
+      onArchive={async () => undefined} onRestore={async () => undefined}
+      onDecision={() => undefined} onError={() => undefined}
+      onSelect={onSelect} onSelectExperiment={() => undefined}
+      setCommand={() => undefined}
+    />);
+    await waitFor(() => expect(apiMocks.conversationCreate).toHaveBeenCalled());
+    const headings = Array.from(view.container.querySelectorAll(".workspace-right .inspector-card h4")).map(node => node.textContent);
+    expect(headings).toEqual(["研究目标", "研究假设", "参数配置", "结果呈现"]);
+    const hypothesis = screen.getByRole("textbox", { name: "研究假设" });
+    fireEvent.change(hypothesis, { target: { value: "滤波半径会影响灰度率" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存假设" }));
+    await waitFor(() => expect(apiMocks.saveResearchHypothesis).toHaveBeenCalledWith(research.id, "滤波半径会影响灰度率"));
+    expect(onSelect).toHaveBeenCalledWith(research.id);
+  });
+
+  it("shows an agent research-state difference and applies it only after approval", async () => {
+    const socket = { onmessage: null, onerror: null, close: vi.fn() } as unknown as WebSocket;
+    apiMocks.stream.mockResolvedValue(socket);
+    const action = {
+      type: "apply_research_state" as const,
+      hypothesis: "滤波半径会影响灰度率",
+      changedFields: ["hypothesis"] as const,
+      rationale: "基于当前实验趋势",
+    };
+    apiMocks.researchChat.mockResolvedValue({ reply: "建议如下。", source: "qwen", contextDigest: "a".repeat(64), actions: [action] });
+    apiMocks.conversationMessage
+      .mockResolvedValueOnce({ id: "msg-user-action", seq: 1, role: "user", content: "建议假设", attachmentIds: [], createdAt: Date.now() })
+      .mockResolvedValueOnce({ id: "msg-agent-action", seq: 2, role: "assistant", content: "建议如下。", attachmentIds: [], source: "qwen", createdAt: Date.now() });
+    render(<ResearchWorkspace
+      researches={[research]} selected={research} command="建议假设" busy={false} safeMode={false}
+      onCommand={() => undefined} onCreateResearch={() => undefined}
+      onArchive={async () => undefined} onRestore={async () => undefined}
+      onDecision={() => undefined} onError={() => undefined}
+      onSelect={async () => undefined} onSelectExperiment={() => undefined}
+      setCommand={() => undefined}
+    />);
+    await waitFor(() => expect(apiMocks.conversationCreate).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "发送科研消息" }));
+    expect(await screen.findByRole("region", { name: "Agent 研究状态建议" })).toBeTruthy();
+    expect(apiMocks.applyResearchSuggestion).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "批准并填入" }));
+    await waitFor(() => expect(apiMocks.applyResearchSuggestion).toHaveBeenCalledWith(research.id, action));
   });
 });

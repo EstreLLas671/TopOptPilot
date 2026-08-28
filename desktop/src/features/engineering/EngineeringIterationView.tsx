@@ -96,11 +96,26 @@ export default function EngineeringIterationView({ run, events, maxIterations, c
   const [snapshotError, setSnapshotError] = useState("");
   const snapshotCache = useRef(new Map<string, CachedSnapshot>());
   const snapshotRequests = useRef(new Map<string, Promise<CachedSnapshot>>());
+  useEffect(() => {
+    // A new run always starts on the real MATLAB image and follows its latest frame.
+    setFieldMode("matlab");
+    setFollowLatest(true);
+    setSelectedIndex(0);
+    setDensity([]);
+    setStress([]);
+    setDensityVolume(null);
+    setStressVolume(null);
+    setRenderUrl("");
+    setSnapshotError("");
+  }, [run?.runId]);
   useEffect(() => () => {
+    // Release image URLs when the run changes or the view unmounts. The cache
+    // remains available for the lifetime of one run, so dragging its slider
+    // never has to re-read an already loaded frame.
     for (const cached of snapshotCache.current.values()) if (cached.renderUrl) URL.revokeObjectURL(cached.renderUrl);
     snapshotCache.current.clear();
     snapshotRequests.current.clear();
-  }, []);
+  }, [run?.runId]);
 
   useEffect(() => {
     if (followLatest && frames.length) setSelectedIndex(frames.length - 1);
@@ -197,12 +212,12 @@ export default function EngineeringIterationView({ run, events, maxIterations, c
           </span>
         </div>
         {snapshotLoading && !density.length && !renderUrl ? <div className="snapshot-loading-indicator" aria-label="正在加载真实快照"><RefreshCw className="spin" size={18}/></div> : null}
-        {!snapshotLoading && snapshotError ? <div className="view-empty"><Activity size={24}/><b>快照读取失败</b><span>{snapshotError}</span></div> : null}
-        {!snapshotLoading && !snapshotError && displayMode === "matlab" && renderUrl ? <div className="iteration-real-frame matlab-render-frame">
+        {snapshotError && !density.length && !renderUrl ? <div className="view-empty"><Activity size={24}/><b>快照读取失败</b><span>{snapshotError}</span></div> : null}
+        {displayMode === "matlab" && renderUrl ? <div className="iteration-real-frame matlab-render-frame">
           <img src={renderUrl} alt={`MATLAB 第 ${selected?.iteration} 轮真实 ${selected?.snapshot?.dimension.toUpperCase()} 拓扑迭代图`}/>
-          <small>第 {selected?.iteration} 轮 · MATLAB 原始逐轮渲染 · SHA-256 {selected?.snapshot?.renderSha256?.slice(0, 12) || "校验中"}</small>
+          <small>第 {selected?.iteration} 轮 · MATLAB 原始逐轮渲染 · SHA-256 {selected?.snapshot?.renderSha256?.slice(0, 12) || "—"}</small>
         </div> : null}
-        {!snapshotLoading && !snapshotError && displayMode !== "matlab" && density.length ? <div className="iteration-real-frame">
+        {displayMode !== "matlab" && density.length ? <div className="iteration-real-frame">
           {selected?.snapshot?.dimension === "3d" && densityVolume
             ? <InteractiveVolumeView
                 density={densityVolume}
@@ -212,16 +227,19 @@ export default function EngineeringIterationView({ run, events, maxIterations, c
                 onViewStateChange={setVolumeViewState}
               />
             : <ScalarMap values={displayMode === "stress" ? stress : density} mode={displayMode}/>}
-          <small>第 {selected?.iteration} 轮 · {selected?.snapshot?.dimension.toUpperCase()} · MATLAB float32/F-order 制品 · SHA-256 {(displayMode === "stress" ? selected?.snapshot?.stressSha256 : selected?.snapshot?.densitySha256)?.slice(0, 12) || "校验中"}</small>
+          <small>第 {selected?.iteration} 轮 · {selected?.snapshot?.dimension.toUpperCase()} · MATLAB float32/F-order 制品 · SHA-256 {(displayMode === "stress" ? selected?.snapshot?.stressSha256 : selected?.snapshot?.densitySha256)?.slice(0, 12) || "—"}</small>
+        </div> : null}
+        {(renderUrl || density.length || isActive) ? <div className="iteration-image-progress">
+          <div className="iteration-progress-meta"><span>第 {currentIteration ?? 0} / {maxIterations} 轮 · 柔度 {selected?.compliance?.toFixed?.(4) ?? "—"} · 体积分数 {selected?.volumeFraction?.toFixed?.(4) ?? "—"} · 灰度率 {selected?.grayRatio?.toFixed?.(4) ?? run?.metrics.grayRatio?.toFixed?.(4) ?? "—"}</span><strong>{progressPercent === null ? "处理中" : `${Math.round(progressPercent)}%`}</strong></div>
+          <div className={"iteration-progress-track" + (progressPercent === null ? " indeterminate" : "")} role="progressbar" aria-label="真实优化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent === null ? undefined : Math.round(progressPercent)}>
+            <i style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}/>
+          </div>
         </div> : null}
         {!snapshotLoading && !snapshotError && !density.length && !renderUrl ? <div className="iteration-live-status">
           {!run ? <div className="view-empty"><Activity size={24}/><b>启动优化后将在这里展示实时状态</b><span>运行产生真实进度或快照后会立即更新。</span></div> : null}
           {isActive ? <>
             <div className="iteration-live-heading"><Activity className="spin" size={22}/><div><b>{solverName} 优化{run.status === "queued" ? "正在排队" : "正在运行"}</b><span>{currentIteration === null ? "等待求解器报告首轮迭代" : `真实迭代 ${currentIteration} / ${maxIterations}`}</span></div></div>
-            <div className={"iteration-progress-track" + (progressPercent === null ? " indeterminate" : "")} role="progressbar" aria-label="真实优化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent === null ? undefined : Math.round(progressPercent)}>
-              <i style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}/>
-            </div>
-            {latestConsole ? <pre className="iteration-console-line">{latestConsole}</pre> : <small>真实命令行输出会同步显示在下方“运行输出”。</small>}
+            {latestConsole ? <pre className="iteration-console-line">{latestConsole}</pre> : null}
           </> : null}
           {run?.status === "completed" ? <div className="view-empty"><CheckCircle2 size={24}/><b>优化已经完成</b><span>当前运行未产生可显示的真实迭代快照，请在结果或制品中检查求解输出。</span></div> : null}
           {run?.status === "failed" ? <div className="view-empty"><Activity size={24}/><b>优化运行失败</b><span>{run.error?.message || latestConsole || "请查看下方运行输出。"}</span></div> : null}
@@ -233,6 +251,7 @@ export default function EngineeringIterationView({ run, events, maxIterations, c
         <Metric label="迭代" value={selected?.iteration ?? run?.metrics.iteration ?? "—"}/>
         <Metric label="柔度" value={selected?.compliance}/>
         <Metric label="体积分数" value={selected?.volumeFraction}/>
+        <Metric label="灰度率" value={selected?.grayRatio ?? run?.metrics.grayRatio}/>
       </aside>
     </div>
     <div className="iteration-scrubber">

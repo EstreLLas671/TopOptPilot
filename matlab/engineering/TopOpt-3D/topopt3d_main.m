@@ -216,6 +216,7 @@ for iteration = 1:config.max_iterations
         frame.objective = objective;
         frame.change = change;
         frame.volume_fraction = ocInfo.volume_fraction;
+        frame.gray_ratio = gray_ratio_3d(x, domainMask);
         frame.rmin = filterInfo.rmin;
         frame.penal = penalNow;
         if config.live_stress_snapshots
@@ -246,6 +247,7 @@ result.domain_mask = domainMask;
 result.iterations = iteration;
 result.objective = finalObjective;
 result.volume_fraction = mean(x(domainMask));
+result.gray_ratio = gray_ratio_3d(x, domainMask);
 result.objective_history = objectiveHistory(1:iteration);
 result.change_history = changeHistory(1:iteration);
 result.radius_history = radiusHistory(1:iteration);
@@ -325,6 +327,15 @@ if maxIterations <= 1
     progress = 1;
 else
     progress = (iteration-1)/(maxIterations-1);
+end
+end
+
+function value = gray_ratio_3d(x, domainMask)
+active = x(logical(domainMask));
+if isempty(active)
+    value = 0;
+else
+    value = mean(active > 0.1 & active < 0.9);
 end
 end
 

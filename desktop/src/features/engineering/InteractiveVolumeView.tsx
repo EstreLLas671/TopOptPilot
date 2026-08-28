@@ -109,14 +109,15 @@ export default function InteractiveVolumeView({
     }
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    const gradient = ctx.createLinearGradient(0, 0, 0, height);
-    gradient.addColorStop(0, "#fbfdff");
-    gradient.addColorStop(1, "#eef3f8");
-    ctx.fillStyle = gradient;
+    const theme = getComputedStyle(document.documentElement);
+    const canvasBackground = theme.getPropertyValue("--theme-volume-background").trim() || "#f1f5fa";
+    const mutedText = theme.getPropertyValue("--theme-muted-text").trim() || "#7d8fa3";
+    const borderColor = theme.getPropertyValue("--theme-border").trim() || "#aebdca";
+    ctx.fillStyle = canvasBackground;
     ctx.fillRect(0, 0, width, height);
 
     if (!statistics.active) {
-      ctx.fillStyle = "#7d8fa3";
+      ctx.fillStyle = mutedText;
       ctx.font = "12px system-ui";
       ctx.textAlign = "center";
       ctx.fillText("当前迭代没有超过 0.5 等值阈值的材料体素", width / 2, height / 2);
@@ -252,9 +253,9 @@ export default function InteractiveVolumeView({
     }
     ctx.fillStyle = legend;
     ctx.fillRect(legendX, legendY, 9, legendHeight);
-    ctx.strokeStyle = "#aebdca";
+    ctx.strokeStyle = borderColor;
     ctx.strokeRect(legendX, legendY, 9, legendHeight);
-    ctx.fillStyle = "#61778e";
+    ctx.fillStyle = mutedText;
     ctx.font = "9px system-ui";
     ctx.textAlign = "right";
     ctx.fillText(statistics.maximum.toPrecision(4), legendX - 4, legendY + 7);
@@ -267,6 +268,16 @@ export default function InteractiveVolumeView({
     if (typeof ResizeObserver === "undefined" || !canvasRef.current) return;
     const observer = new ResizeObserver(draw);
     observer.observe(canvasRef.current);
+    return () => observer.disconnect();
+  }, [draw]);
+
+  useEffect(() => {
+    if (typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(draw);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-color-scheme", "style"],
+    });
     return () => observer.disconnect();
   }, [draw]);
 

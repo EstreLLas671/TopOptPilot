@@ -28,14 +28,30 @@ export function ScalarMap({ values, mode }: { values: number[][]; mode: FieldMod
 }
 
 export function ConvergenceChart({ points }: { points: ConvergencePoint[] }) {
-  const polyline = useMemo(() => {
-    if (!points.length) return "";
+  const chart = useMemo(() => {
+    if (!points.length) return null;
     const values = points.map(point => point.compliance);
     const min = Math.min(...values), max = Math.max(...values), span = Math.max(max - min, 1e-9);
-    return points.map((point, index) => `${(index / Math.max(points.length - 1, 1)) * 100},${42 - ((point.compliance - min) / span) * 36}`).join(" ");
+    const x0 = 14, x1 = 96, y0 = 7, y1 = 39;
+    const polyline = points.map((point, index) => {
+      const x = x0 + (index / Math.max(points.length - 1, 1)) * (x1 - x0);
+      const y = y1 - ((point.compliance - min) / span) * (y1 - y0);
+      return `${x},${y}`;
+    }).join(" ");
+    return { polyline, min, max, first: points[0].iteration, last: points.at(-1)?.iteration ?? points.length };
   }, [points]);
-  if (!polyline) return <div className="artifact-empty">尚无收敛历史。</div>;
-  return <svg className="convergence-chart" viewBox="0 0 100 46" preserveAspectRatio="none" aria-label="柔度收敛曲线"><path d="M0 42H100 M0 24H100 M0 6H100" className="chart-grid"/><polyline points={polyline} fill="none" className="chart-line"/></svg>;
+  if (!chart) return <div className="artifact-empty">尚无收敛历史。</div>;
+  return <svg className="convergence-chart" viewBox="0 0 104 50" preserveAspectRatio="xMidYMid meet" aria-label="柔度收敛曲线">
+    <path d="M14 7V39H96 M14 23H96" className="chart-grid"/>
+    <path d="M14 7V39H96" className="chart-axis"/>
+    <polyline points={chart.polyline} fill="none" className="chart-line"/>
+    <text x="12" y="9" textAnchor="end" className="chart-tick">{chart.max.toFixed(2)}</text>
+    <text x="12" y="40" textAnchor="end" className="chart-tick">{chart.min.toFixed(2)}</text>
+    <text x="14" y="45" textAnchor="middle" className="chart-tick">{chart.first}</text>
+    <text x="96" y="45" textAnchor="middle" className="chart-tick">{chart.last}</text>
+    <text x="55" y="49" textAnchor="middle" className="chart-label">迭代</text>
+    <text x="3" y="24" textAnchor="middle" transform="rotate(-90 3 24)" className="chart-label">柔度</text>
+  </svg>;
 }
 
 export default function ResultViewer({ run, onError }: Props) {
@@ -109,7 +125,7 @@ export default function ResultViewer({ run, onError }: Props) {
   if (!run) return <div className="result-empty"><Gauge size={24}/><b>尚未运行工程求解</b><span>选择求解链路并启动后，真实密度、收敛历史与 provenance 会显示在这里。</span></div>;
   const show3d = dimension === "3d" && densityVolume !== null;
   return <div className="result-viewer">
-    <header className="result-summary"><div><small>Run ID</small><b>{run.runId}</b></div><div><small>链路 / 状态</small><b>{run.lane} · {run.status}</b></div><div><small>柔度</small><b>{run.metrics.compliance?.toFixed?.(4) ?? "—"}</b></div><div><small>体积分数</small><b>{run.metrics.volumeFraction?.toFixed?.(4) ?? "—"}</b></div></header>
+    <header className="result-summary"><div><small>Run ID</small><b>{run.runId}</b></div><div><small>链路 / 状态</small><b>{run.lane} · {run.status}</b></div><div><small>柔度</small><b>{run.metrics.compliance?.toFixed?.(4) ?? "—"}</b></div><div><small>体积分数</small><b>{run.metrics.volumeFraction?.toFixed?.(4) ?? "—"}</b></div><div><small>灰度率</small><b>{run.metrics.grayRatio?.toFixed?.(4) ?? "—"}</b></div></header>
     <div className="result-plots"><section><h4 className="field-heading"><span>{fieldMode === "density" ? "密度场" : "Von Mises 应力场"}</span><span className="field-switch"><button className={fieldMode === "density" ? "active" : ""} onClick={() => setFieldMode("density")}>密度</button><button className={fieldMode === "stress" ? "active" : ""} disabled={!stress.length || (show3d && !stressVolume)} onClick={() => setFieldMode("stress")}>应力</button></span></h4>{show3d && densityVolume ? <InteractiveVolumeView density={densityVolume} field={fieldMode === "stress" && stressVolume ? stressVolume : densityVolume} mode={fieldMode} viewState={viewState} onViewStateChange={setViewState}/> : <ScalarMap values={fieldMode === "density" ? density : stress} mode={fieldMode}/>}</section><section><h4>柔度收敛</h4><ConvergenceChart points={history}/></section></div>
     <section className="artifact-browser"><header><span><FileJson2 size={14}/>制品与快照</span><small>SHA-256 校验引用 · {run.provenance.resultKind || "unknown"}</small></header><div className="artifact-list">{[...run.files, ...run.snapshots].map(item => <button key={`${item.relativePath}-${item.sha256}`} onClick={() => void readArtifact(item)} className={selected?.sha256 === item.sha256 ? "active" : ""}><span>{item.relativePath}</span><small>{(item.sizeBytes / 1024).toFixed(1)} KB · {item.sha256.slice(0, 12)}</small></button>)}</div><pre className="artifact-preview">{loading ? <RefreshCw className="spin"/> : preview || "选择 JSON、CSV、日志或快照查看真实内容。二进制制品只显示元信息。"}</pre></section>
   </div>;

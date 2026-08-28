@@ -1,3 +1,5 @@
+import type { OptimizationConfig } from "./optimization-config";
+
 export type Locale = "zh-CN" | "en-US";
 export interface BackendInfo { port: number; token: string }
 export interface ProjectEntry { relative_path: string; kind: string; size_bytes: number }
@@ -21,7 +23,7 @@ export interface Experiment {
 }
 export interface Decision { id: string; status: string; reason: string; risk: string; source?:string; evidence_ids?:string[]; experiment_id?: string; proposal: { parameters?: Record<string, unknown>; fidelity?: string } }
 export interface Research {
-  id: string; name: string; goal: string; locale: Locale; status: string; mode: string;
+  id: string; name: string; goal: string; hypothesis?: string | null; locale: Locale; status: string; mode: string;
   constraints: Record<string, any>; archived_at?: string | null; geometry?:Record<string,any>; material?:Record<string,any>; loads?:Record<string,any>[]; boundary_conditions?:Record<string,any>;
   contract?:Record<string,any>; budgets?:Record<string,number>; current_round?:number; budget_total: number; budget_used: number;
   experiments: Experiment[]; events: EventRecord[]; decisions: Decision[];
@@ -30,6 +32,14 @@ export interface Research {
 }
 export interface SubagentTask { id:string; role:string; objective:string; status:string; result?:{text?:string}; error?:string; proposal_id?:string; evidence_ids?:string[] }
 export interface Hypothesis { id:string; round_number:number; statement:string; competing?:string[]; evidence_ids?:string[]; status:string }
+export interface ResearchStateAction {
+  type: "apply_research_state";
+  goal?: string;
+  hypothesis?: string;
+  optimizationConfig?: OptimizationConfig;
+  changedFields: Array<"goal" | "hypothesis" | "optimizationConfig">;
+  rationale?: string;
+}
 export interface ArtifactLineage { id:string; artifact_type:string; path?:string; sha256?:string; parents?:string[] }
 export interface KnowledgeEntry { id:string; locale:Locale; category:string; title:string; summary:string; tags:string[]; version:string; citation:string; content?:string }
 export interface SolverCapabilities { matlab:MatlabHealth; runtime:Record<string,any>; fidelities:Array<Record<string,any>>; strict_matlab:boolean; python_fallback:boolean }
@@ -40,7 +50,11 @@ export interface SystemHealth { status:string; version:string; components:Record
 export interface AppSettings {
   locale: Locale; ui_density: "compact" | "standard" | "comfortable"; startup_behavior: "resume_last" | "research_list";
   theme: "light" | "dark" | "system" | "custom";
-  custom_theme: { accent: string; background: string; surface: string; text: string };
+  custom_theme: {
+    accent:string; accent_hover?:string; background:string; surface:string; elevated?:string;
+    text:string; muted_text?:string; border?:string; success?:string; warning?:string; danger?:string;
+    chart?:string; chart_grid?:string; volume_background?:string; contrast?:number;
+  };
   api_key_status: "environment" | "credential_manager" | "not_configured"; updated_at?: string;
   agent: { model:string; base_url:string; timeout_seconds:number; max_retries:number; safe_mode:boolean };
   compute: { matlab_root?:string|null; python_workers:number; matlab_timeout_seconds:number; matlab_retry_count:number };

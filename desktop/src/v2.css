@@ -32,7 +32,8 @@
 .layout-reset:hover,.layout-reset:focus-visible{color:#2862a5;background:#edf4ff;outline:none}
 .resizable-workspace.is-resizing *{cursor:inherit!important}
 
-.engineering-center-shell{height:100%;min-height:0;display:grid;grid-template-rows:44px minmax(0,1fr) 82px;background:#f7f9fc}
+.engineering-center-shell{height:100%;min-height:0;display:grid;grid-template-rows:44px minmax(0,1fr);background:#f7f9fc;overflow:hidden}
+.engineering-center-shell.has-compact-assistant{grid-template-rows:44px minmax(0,1fr) auto}
 .engineering-view-tabs{height:44px;align-items:stretch;overflow-x:auto;overflow-y:hidden;padding-right:8px}
 .engineering-view-tabs .tab{flex:0 0 auto;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;cursor:pointer}
 .engineering-view-tabs .tab.active{border-color:#3478e5;background:#f7f9fc}
@@ -42,8 +43,9 @@
 .tab-action:disabled{opacity:.4;cursor:default}
 .center-run-button{align-self:center;margin-left:5px;white-space:nowrap}
 .engineering-view-content{min-width:0;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.engineering-view-content.chat-view-content{overflow:hidden}
 .engineering-view-content>.monaco-host{flex:1;min-height:0}
-.engineering-composer{min-width:0;border-top:1px solid #d8e0eb;background:#fff;padding:8px 12px;display:grid;grid-template-rows:auto 34px auto;gap:4px}
+.engineering-composer{min-width:0;border-top:1px solid #d8e0eb;background:#fff;padding:8px 12px;display:grid;grid-template-rows:34px auto;gap:4px}
 .assistant-identity{display:flex;align-items:center;gap:6px;color:#718198;font-size:9px}
 .assistant-command-line{display:grid;grid-template-columns:minmax(0,1fr) 36px;border:1px solid #cdd8e7;border-radius:6px;overflow:hidden;background:#fbfcfe}
 .assistant-command-line input{min-width:0;border:0;outline:0;padding:0 10px;background:transparent;color:#31465f;font-size:11px}

@@ -31,6 +31,7 @@ describe("EngineeringWorkspace fast run event replay", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     apiMocks.engineeringInstallations.mockResolvedValue({ preference: "local-matlab", installations: [] });
     apiMocks.engineeringRuntimeInstallations.mockResolvedValue({ usable: false, runReady: false, installations: [] });
     apiMocks.engineeringBundledRuntime.mockResolvedValue({ state: "unavailable", usable: false, profileId: null, diagnostic: "standard package" });
@@ -41,6 +42,31 @@ describe("EngineeringWorkspace fast run event replay", () => {
       title: "工程对话", createdAt: "2026-08-26T00:00:00Z", updatedAt: "2026-08-26T00:00:00Z",
     });
     apiMocks.conversationMessages.mockResolvedValue([]);
+  });
+
+  it("uses all available center height for chat and only adds the compact assistant on other tabs", async () => {
+    const view = render(
+      <EngineeringWorkspace
+        health={null}
+        onError={() => undefined}
+        onResearchBaseline={async () => undefined}
+      />,
+    );
+
+    expect(await screen.findByPlaceholderText("询问当前工程、参数或结果…")).toBeTruthy();
+    const shell = view.container.querySelector(".engineering-center-shell");
+    expect(shell?.classList.contains("chat-layout")).toBe(true);
+    expect(shell?.classList.contains("has-compact-assistant")).toBe(false);
+    expect(view.container.querySelector(".engineering-composer")).toBeNull();
+
+    await userEvent.click(screen.getByRole("tab", { name: /^代码/ }));
+    expect(shell?.classList.contains("has-compact-assistant")).toBe(true);
+    expect(view.container.querySelector(".engineering-composer")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("tab", { name: "聊天" }));
+    expect(await screen.findByPlaceholderText("询问当前工程、参数或结果…")).toBeTruthy();
+    expect(shell?.classList.contains("chat-layout")).toBe(true);
+    expect(view.container.querySelector(".engineering-composer")).toBeNull();
   });
 
   it("hydrates terminal progress from REST when the run finishes before WebSocket replay", async () => {

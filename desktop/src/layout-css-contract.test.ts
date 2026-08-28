@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const css = readFileSync(new URL("./v2.css", import.meta.url), "utf8");
 const enhancementCss = readFileSync(new URL("./v2-enhancements.css", import.meta.url), "utf8");
+const themeCss = readFileSync(new URL("./theme.css", import.meta.url), "utf8");
 
 describe("four-pane layout CSS contract", () => {
   it("maps the resizable workspace to five explicit grid tracks", () => {
@@ -39,5 +40,16 @@ describe("four-pane layout CSS contract", () => {
     expect(enhancementCss).toMatch(/\.parameter-dialog\s*>\s*footer button\s*\{[^}]*white-space:\s*nowrap[^}]*writing-mode:\s*horizontal-tb/s);
     expect(enhancementCss).toMatch(/\.engineering-center-shell\s*\{[^}]*grid-template-rows:\s*auto\s+minmax\(0,1fr\)/s);
     expect(enhancementCss).toMatch(/\.engineering-view-tabs\s*\{[^}]*height:\s*auto\s*!important/s);
+  });
+
+  it("uses the titlebar remainder for each kept-alive workspace", () => {
+    expect(themeCss).toMatch(/\.workspace-mode-layer\s*\{[^}]*flex:\s*1\s+1\s+auto[^}]*min-height:\s*0[^}]*height:\s*auto[^}]*overflow:\s*hidden/s);
+    expect(themeCss).toMatch(/\.workspace-mode-layer\s*>\s*\.v2-workspace\s*\{[^}]*height:\s*100%[^}]*min-height:\s*0/s);
+  });
+
+  it("does not reserve an empty assistant row on the engineering chat tab", () => {
+    expect(enhancementCss).toMatch(/\.engineering-center-shell\s*\{[^}]*grid-template-rows:\s*auto\s+minmax\(0,1fr\)\s*!important/s);
+    expect(enhancementCss).toMatch(/\.engineering-center-shell\.has-compact-assistant\s*\{[^}]*grid-template-rows:\s*auto\s+minmax\(0,1fr\)\s+auto\s*!important/s);
+    expect(enhancementCss).not.toMatch(/\.engineering-center-shell\s*\{[^}]*82px/s);
   });
 });

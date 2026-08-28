@@ -25,6 +25,14 @@ def test_build_script_checks_dependency_install_exit_codes() -> None:
     assert 'throw "npm install failed with exit code $LASTEXITCODE."' in script
 
 
+def test_desktop_sidecar_bundles_a_websocket_protocol_implementation() -> None:
+    script = (ROOT / "scripts" / "build_desktop.ps1").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "websockets>=" in requirements
+    assert "--collect-submodules websockets" in script
+
+
 def test_build_script_stages_matlab_mcp_solver_sources() -> None:
     script = (ROOT / "scripts" / "build_desktop.ps1").read_text(encoding="utf-8")
 

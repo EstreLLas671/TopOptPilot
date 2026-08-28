@@ -53,3 +53,18 @@ def test_2d_solver_emits_true_von_mises_for_live_and_final_views() -> None:
     assert "gauss_max" in stress_source
     assert "Eeff = x(ely,elx)^penal" in stress_source
     assert "sigma(1)^2 - sigma(1)*sigma(2)" in stress_source
+
+def test_matlab_2d_and_3d_publish_true_gray_ratio_every_iteration() -> None:
+    root = Path(__file__).parents[1] / "matlab" / "engineering"
+    bridge = (root / "run_topopt_job.m").read_text(encoding="utf-8")
+    solver_2d = (root / "TopOpt_2D" / "topopt_main.m").read_text(encoding="utf-8")
+    solver_3d = (root / "TopOpt-3D" / "topopt3d_main.m").read_text(encoding="utf-8")
+
+    assert "'gray_ratio',double(frame.gray_ratio)" in bridge
+    assert "'gray_ratio'" in bridge.split("function summary = make_summary", 1)[1]
+    assert "frame.gray_ratio = gray_ratio(x, domainMask);" in solver_2d
+    assert "result.gray_ratio = gray_ratio(x, domainMask);" in solver_2d
+    assert "active > 0.1 & active < 0.9" in solver_2d
+    assert "frame.gray_ratio = gray_ratio_3d(x, domainMask);" in solver_3d
+    assert "result.gray_ratio = gray_ratio_3d(x, domainMask);" in solver_3d
+    assert "active > 0.1 & active < 0.9" in solver_3d

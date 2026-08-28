@@ -96,3 +96,67 @@ def test_research_chat_does_not_persist_message_bodies_in_sqlite(monkeypatch, tm
         assert response.json()["contextDigest"]
     finally:
         isolated.close()
+
+def test_research_hypothesis_update_versions_and_audits(monkeypatch, tmp_path) -> None:
+    isolated = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    monkeypatch.setattr(research_router, "service", isolated)
+    try:
+        created = _research(isolated)
+        response = TestClient(app).put(
+            f"/api/researches/{created['id']}/hypothesis",
+            json={"hypothesis": "增大滤波半径将降低中间密度单元比例"},
+        )
+        assert response.status_code == 200
+        assert response.json()["hypothesis"] == "增大滤波半径将降低中间密度单元比例"
+        versions = isolated.store.list_hypotheses(created["id"])
+        assert versions[-1]["statement"] == "增大滤波半径将降低中间密度单元比例"
+        assert isolated.store.list_events(created["id"])[-1]["kind"] == "HYPOTHESIS_UPDATED"
+    finally:
+        isolated.close()
+
+
+def test_research_agent_suggestion_requires_confirmation_and_never_runs(monkeypatch, tmp_path) -> None:
+    isolated = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    monkeypatch.setattr(research_router, "service", isolated)
+    try:
+        created = _research(isolated)
+        client = TestClient(app)
+        config = client.get(f"/api/researches/{created['id']}/optimization-config").json()
+        payload = {
+            "type": "apply_research_state",
+            "goal": "在体积分数约束下降低柔度",
+            "hypothesis": "提高惩罚因子会降低灰度率",
+            "optimizationConfig": config,
+            "changedFields": ["goal", "hypothesis", "optimizationConfig"],
+            "rationale": "由当前证据提出的受限建议",
+        }
+        response = client.post(f"/api/researches/{created['id']}/apply-suggestion", json=payload)
+        assert response.status_code == 200
+        assert response.json()["research"]["goal"] == payload["goal"]
+        assert response.json()["research"]["hypothesis"] == payload["hypothesis"]
+        assert response.json()["optimizationConfig"] == config
+        events = isolated.store.list_events(created["id"])
+        assert events[-1]["kind"] == "AGENT_SUGGESTION_APPROVED"
+        assert isolated.get_research(created["id"])["experiments"] == []
+
+        rejected = client.post(
+            f"/api/researches/{created['id']}/apply-suggestion",
+            json=payload | {"command": "run matlab now"},
+        )
+        assert rejected.status_code == 422
+    finally:
+        isolated.close()
+
+
+def test_research_action_is_removed_from_visible_reply() -> None:
+    content = (
+        "建议补充假设。"
+        "<topoptpilot-research-action>"
+        '{"type":"apply_research_state","hypothesis":"滤波半径影响灰度率",'
+        '"changedFields":["hypothesis"]}'
+        "</topoptpilot-research-action>"
+    )
+    reply, actions = research_router._research_action(content)
+    assert reply == "建议补充假设。"
+    assert actions[0]["type"] == "apply_research_state"
+    assert "topoptpilot-research-action" not in reply

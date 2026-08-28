@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import uuid
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from idesktop_v2.artifacts.models import RunStatus
 from idesktop_v2.assistant.router import _model_chat
@@ -83,6 +85,7 @@ def research_compare(research_id: str, a: str = Query(min_length=1), b: str = Qu
 
 
 class ResearchMaterialConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     preset: Literal["normalized", "structural-steel", "aluminum-6061-t6", "titanium-ti6al4v", "custom"] = "normalized"
     name: str = Field(default="归一化参考材料", min_length=1, max_length=80)
     youngsModulusGPa: float = Field(default=1, gt=0)
@@ -92,6 +95,7 @@ class ResearchMaterialConfig(BaseModel):
 
 
 class ResearchOptimizationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     version: int = Field(default=1, ge=1)
     dimension: Literal["2d", "3d"] = "3d"
     bcType: Literal["cantilever", "MBB", "simply_supported", "L-bracket"] = "cantilever"
@@ -116,6 +120,31 @@ class ResearchOptimizationConfig(BaseModel):
 
 class ResearchGoalRequest(BaseModel):
     goal: str = Field(min_length=1, max_length=2000)
+
+
+class ResearchHypothesisRequest(BaseModel):
+    hypothesis: str = Field(min_length=1, max_length=4000)
+
+
+class ResearchStateActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["apply_research_state"] = "apply_research_state"
+    goal: str | None = Field(default=None, min_length=1, max_length=2000)
+    hypothesis: str | None = Field(default=None, min_length=1, max_length=4000)
+    optimizationConfig: ResearchOptimizationConfig | None = None
+    changedFields: list[Literal["goal", "hypothesis", "optimizationConfig"]] = Field(min_length=1, max_length=3)
+    rationale: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_changed_fields(self):
+        unique = list(dict.fromkeys(self.changedFields))
+        if len(unique) != len(self.changedFields):
+            raise ValueError("changedFields must not contain duplicates")
+        for field in unique:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} must be present when listed in changedFields")
+        return self
 
 
 class ResearchVisionRequest(BaseModel):
@@ -203,6 +232,91 @@ def put_research_goal(research_id: str, request: ResearchGoalRequest) -> dict[st
     return updated
 
 
+@router.put("/{research_id}/hypothesis")
+@settings_router.put("/api/researches/{research_id}/hypothesis")
+def put_research_hypothesis(research_id: str, request: ResearchHypothesisRequest) -> dict[str, object]:
+    statement = request.hypothesis.strip()
+    try:
+        current = service.get_research(research_id)
+        previous = current.get("hypothesis") or ""
+        updated = service.store.update_research(research_id, hypothesis=statement)
+        service.store.create_hypothesis({
+            "id": "hyp-" + uuid.uuid4().hex,
+            "research_id": research_id,
+            "round_number": max(1, int(current.get("current_round") or 0) + 1),
+            "statement": statement,
+            "source": "USER",
+            "status": "ACTIVE",
+        })
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    service.store.append_event(
+        research_id, "HYPOTHESIS_UPDATED", "研究假设已更新",
+        "研究者更新了当前假设；历史版本已保留。",
+        payload={"previous": previous, "current": statement},
+    )
+    return service.get_research(updated["id"])
+
+
+@settings_router.post("/api/researches/{research_id}/apply-suggestion")
+def apply_research_suggestion(research_id: str, request: ResearchStateActionRequest) -> dict[str, object]:
+    try:
+        current = service.get_research(research_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload: dict[str, object] = {"changed_fields": request.changedFields}
+    if "goal" in request.changedFields and request.goal is not None:
+        service.store.update_research(research_id, goal=request.goal.strip())
+    if "hypothesis" in request.changedFields and request.hypothesis is not None:
+        statement = request.hypothesis.strip()
+        service.store.update_research(research_id, hypothesis=statement)
+        service.store.create_hypothesis({
+            "id": "hyp-" + uuid.uuid4().hex,
+            "research_id": research_id,
+            "round_number": max(1, int(current.get("current_round") or 0) + 1),
+            "statement": statement,
+            "source": "AGENT_APPROVED",
+            "status": "ACTIVE",
+        })
+    saved_config = None
+    if "optimizationConfig" in request.changedFields and request.optimizationConfig is not None:
+        defaults = dict(current.get("defaults") or {})
+        config_payload = request.optimizationConfig.model_dump()
+        defaults["optimization_config"] = config_payload
+        service.store.update_research_json(research_id, defaults=defaults)
+        payload["config_digest"] = hashlib.sha256(
+            json.dumps(config_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        saved_config = config_payload
+    service.store.append_event(
+        research_id, "AGENT_SUGGESTION_APPROVED", "已批准并填入 Agent 建议",
+        request.rationale or "研究者确认了目标、假设或参数变更；未自动启动实验。",
+        payload=payload,
+    )
+    return {"research": service.get_research(research_id), "optimizationConfig": saved_config}
+
+
+def _research_action(content: str) -> tuple[str, list[dict[str, object]]]:
+    match = re.search(
+        r"<topoptpilot-research-action>\s*([\s\S]*?)\s*</topoptpilot-research-action>",
+        content,
+        re.IGNORECASE,
+    )
+    action = None
+    if match:
+        try:
+            action = ResearchStateActionRequest.model_validate(json.loads(match.group(1)))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            action = None
+    reply = re.sub(
+        r"<topoptpilot-research-action>\s*[\s\S]*?\s*</topoptpilot-research-action>",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).strip()
+    return reply, [action.model_dump(exclude_none=True)] if action else []
+
+
 @router.post("/{research_id}/vision-chat")
 def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> dict[str, object]:
     try:
@@ -213,6 +327,10 @@ def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> di
                 "content": (
                     "你是 TopOptPilot 的科研图像分析助手。仅基于提供的 Research State 与图片回答，"
                     "区分观察与假设，不得绕过 Policy、预算或 F0-F3 审批，不得直接启动实验。"
+                    "若研究目标或假设为空，应明确指出并给出可编辑建议；仅在用户要求填入时，可在回复末尾附加"
+                    "<topoptpilot-research-action>{\"type\":\"apply_research_state\",\"goal\":\"可选\","
+                    "\"hypothesis\":\"可选\",\"optimizationConfig\":完整合法配置,\"changedFields\":[实际字段],"
+                    "\"rationale\":\"简短原因\"}</topoptpilot-research-action>。"
                 ),
             },
             {
@@ -229,7 +347,8 @@ def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> di
     if not response.get("success"):
         source = "not_configured" if response.get("error") == "not_configured" else "safe_mode"
         return {"reply": "", "source": source, "contextDigest": digest}
-    return {"reply": str(response.get("content") or ""), "source": "qwen", "contextDigest": digest}
+    reply, actions = _research_action(str(response.get("content") or ""))
+    return {"reply": reply, "source": "qwen", "contextDigest": digest, "actions": actions}
 
 @router.post("/{research_id}/chat")
 def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, object]:
@@ -254,6 +373,11 @@ def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, o
                     "你是 TopOptPilot 的科研对话助手。仅基于提供的 Research State 回答，"
                     "区分事实、观察与假设；不得伪造实验结果，不得绕过 Policy、预算或 F0-F3 审批，"
                     "也不得直接启动实验。用户要求执行时，应说明需要进入受控自主研究或审批流程。"
+                    "若研究目标或假设为空，必须明确提示缺失项并给出推荐内容。只有用户要求填入或修改时，"
+                    "才可在回复末尾附加 <topoptpilot-research-action>{\"type\":\"apply_research_state\","
+                    "\"goal\":\"可选\",\"hypothesis\":\"可选\",\"optimizationConfig\":完整合法配置,"
+                    "\"changedFields\":[实际字段],\"rationale\":\"简短原因\"}</topoptpilot-research-action>；"
+                    "动作不得包含命令、文件路径、代码或自动运行字段。"
                 ),
             },
             {
@@ -269,4 +393,5 @@ def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, o
     if not response.get("success"):
         source = "not_configured" if response.get("error") == "not_configured" else "safe_mode"
         return {"reply": "", "source": source, "contextDigest": digest}
-    return {"reply": str(response.get("content") or ""), "source": "qwen", "contextDigest": digest}
+    reply, actions = _research_action(str(response.get("content") or ""))
+    return {"reply": reply, "source": "qwen", "contextDigest": digest, "actions": actions}

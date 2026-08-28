@@ -11,6 +11,7 @@ import { applyTheme } from "./theme";
 import { buildResearchBaselineRequest } from "./engineering-workspace";
 import "./v2.css";
 import "./v2-enhancements.css";
+import "./theme.css";
 
 type EngineeringHealth = { status: string; service: string; version: string; capabilities: { localMatlab: string; compiledRuntime: string } };
 
@@ -27,6 +28,9 @@ export default function V2App() {
   const [selectedExperiment, setSelectedExperiment] = useState<Experiment | null>(null);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
+  const [researchNameOpen, setResearchNameOpen] = useState(false);
+  const [researchNameDraft, setResearchNameDraft] = useState("");
+  const [researchNameBusy, setResearchNameBusy] = useState(false);
 
   const reportError = useCallback((message: string) => setError(message), []);
   const refreshSelected = useCallback(async (id: string) => {
@@ -78,12 +82,24 @@ export default function V2App() {
     setMode("research");
   }, [settings?.new_research.budget_total]);
 
-  async function createResearch() {
+  function createResearch() {
+    setResearchNameDraft("");
+    setResearchNameOpen(true);
+  }
+  async function confirmCreateResearch() {
+    const name = researchNameDraft.trim();
+    if (!name || researchNameBusy) return;
+    setResearchNameBusy(true);
     try {
       const defaults = settings?.new_research;
-      const created = await api.createResearch({ name: "新拓扑研究", goal: "验证工程基线与科研策略的差异", budget_total: defaults?.budget_total ?? 12, mode: defaults?.mode ?? "COPILOT", constraints: defaults?.constraints ?? {} });
-      setResearches(items => [created, ...items]); setSelectedResearch(created); setSelectedExperiment(null); setMode("research");
+      const created = await api.createResearch({ name, goal: "", hypothesis: null, budget_total: defaults?.budget_total ?? 12, mode: defaults?.mode ?? "COPILOT", constraints: defaults?.constraints ?? {} });
+      setResearches(items => [created, ...items]);
+      setSelectedResearch(created);
+      setSelectedExperiment(null);
+      setResearchNameOpen(false);
+      setMode("research");
     } catch (reason) { reportError(String(reason)); }
+    finally { setResearchNameBusy(false); }
   }
   async function runResearchCommand(message = command) {
     const text = message.trim();
@@ -121,13 +137,20 @@ export default function V2App() {
       setResearches(items => [restored, ...items.filter(item => item.id !== restored.id)]);
     } catch (reason) { reportError(String(reason)); }
   }
-  const workspace = useMemo(() => mode === "engineering"
-    ? <EngineeringWorkspace health={health} environment={environment} onRefreshEnvironment={refreshEnvironment} onError={reportError} onResearchBaseline={createResearchFromRun} researches={researches} selectedResearch={selectedResearch} onCreateResearch={createResearch} onSelectResearch={refreshSelected}/>
-    : <ResearchWorkspace researches={researches} selected={selectedResearch} active={active} command={command} busy={busy} safeMode={safeMode} onCommand={runResearchCommand} onCreateResearch={createResearch} onArchive={archiveResearch} onRestore={restoreResearch} onDecision={decide} onError={reportError} onSelect={refreshSelected} onSelectExperiment={setSelectedExperiment} setCommand={setCommand}/>,
-    [mode, health, reportError, createResearchFromRun, researches, selectedResearch, active, command, busy, safeMode, refreshSelected]);
+  // Keep both workspaces mounted while switching modes.  The backend run and
+  // event stream therefore continue to be owned by the same Engineering
+  // component instead of being torn down when Research is selected.
+  const workspace = useMemo(() => <>
+    <div className={`workspace-mode-layer ${mode === "engineering" ? "active" : "inactive"}`} aria-hidden={mode !== "engineering"}>
+      <EngineeringWorkspace health={health} environment={environment} onRefreshEnvironment={refreshEnvironment} onError={reportError} onResearchBaseline={createResearchFromRun} researches={researches} selectedResearch={selectedResearch} onCreateResearch={createResearch} onSelectResearch={refreshSelected}/>
+    </div>
+    <div className={`workspace-mode-layer ${mode === "research" ? "active" : "inactive"}`} aria-hidden={mode !== "research"}>
+      <ResearchWorkspace researches={researches} selected={selectedResearch} active={active} command={command} busy={busy} safeMode={safeMode} onCommand={runResearchCommand} onCreateResearch={createResearch} onArchive={archiveResearch} onRestore={restoreResearch} onDecision={decide} onError={reportError} onSelect={refreshSelected} onSelectExperiment={setSelectedExperiment} setCommand={setCommand}/>
+    </div>
+  </>, [mode, health, environment, refreshEnvironment, reportError, createResearchFromRun, researches, selectedResearch, active, command, busy, safeMode, refreshSelected]);
 
   if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 TopOptPilot</b><span>{error || "连接统一 sidecar…"}</span></div>;
-  if (settingsOpen && settings) return <SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={value => { setSettings(value); document.documentElement.lang = value.locale; document.documentElement.dataset.density = value.ui_density; }}/>
+  if (settingsOpen && settings) return <SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={value => { setSettings(value); document.documentElement.lang = value.locale; document.documentElement.dataset.density = value.ui_density; applyTheme(value); }}/>
   return <div className="v2-shell">
     <header className="v2-titlebar" data-tauri-drag-region>
       <div className="v2-brand"><span className="v2-brand-mark"><Boxes size={18}/></span><div><b>TopOptPilot</b><small>TOPOLOGY WORKBENCH</small></div></div>
@@ -135,6 +158,7 @@ export default function V2App() {
       <div className="v2-actions"><span className="connection"><i/>SIDECAR {health?.version || ""}</span><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/></button></div>
     </header>
     {error ? <div className="v2-error"><ShieldCheck size={15}/>{error}<button aria-label="关闭错误" onClick={() => setError("")}>×</button></div> : null}
+    {researchNameOpen ? <div className="research-name-backdrop" role="presentation"><section className="research-name-dialog" role="dialog" aria-modal="true" aria-label="命名新研究"><header><div><span className="view-kicker">NEW RESEARCH</span><h2>命名新研究</h2></div><button aria-label="关闭新建研究" onClick={() => setResearchNameOpen(false)}>×</button></header><label>研究名称<input autoFocus maxLength={120} value={researchNameDraft} onChange={event => setResearchNameDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && researchNameDraft.trim()) void confirmCreateResearch(); }}/></label><footer><button className="outline-button" onClick={() => setResearchNameOpen(false)}>取消</button><button className="primary-button" disabled={researchNameBusy || !researchNameDraft.trim()} onClick={() => void confirmCreateResearch()}>{researchNameBusy ? "创建中…" : "创建 Research"}</button></footer></section></div> : null}
     {workspace}
   </div>;
 }

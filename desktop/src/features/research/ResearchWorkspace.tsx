@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArchiveRestore, Bot, CheckCircle2, ChevronRight, FileJson2, FlaskConical, ImagePlus, LoaderCircle, MessageCircle, Play, Send, Settings2, ShieldCheck, Trash2, X } from "lucide-react";
 import { api } from "../../api";
-import type { ConversationAttachment, ConversationMessage, Experiment, Research } from "../../types";
+import type { ConversationAttachment, ConversationMessage, Experiment, Research, ResearchStateAction } from "../../types";
 import { DEFAULT_OPTIMIZATION_CONFIG, type OptimizationConfig } from "../../optimization-config";
 import type { EngineeringSolverLane } from "../../engineering-workspace";
 import { solverLaneLabel } from "../../workspace";
@@ -52,6 +52,10 @@ export default function ResearchWorkspace(props: Props) {
   const [configOpen, setConfigOpen] = useState(false);
   const [goalDraft, setGoalDraft] = useState("");
   const [goalBusy, setGoalBusy] = useState(false);
+  const [hypothesisDraft, setHypothesisDraft] = useState("");
+  const [hypothesisBusy, setHypothesisBusy] = useState(false);
+  const [suggestedAction, setSuggestedAction] = useState<ResearchStateAction | null>(null);
+  const [completionSignal, setCompletionSignal] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const dropZone = useRef<HTMLElement>(null);
   const uploadingHashes = useRef(new Set<string>());
@@ -67,6 +71,7 @@ export default function ResearchWorkspace(props: Props) {
     if (!conversationId || !content.trim()) return;
     const saved = await api.conversationMessage(conversationId, { role: "assistant", content: content.trim(), source });
     setMessages(items => items.some(item => item.id === saved.id) ? items : [...items, saved]);
+    if (source === "qwen") setCompletionSignal("research-reply-" + saved.id);
   }, [conversationId]);
 
   useEffect(() => {
@@ -77,7 +82,9 @@ export default function ResearchWorkspace(props: Props) {
       return;
     }
     let cancelled = false;
-    setGoalDraft(selected.goal);
+    setGoalDraft(selected.goal || "");
+    setHypothesisDraft(selected.hypothesis || "");
+    setSuggestedAction(null);
     recordedAgentEvents.current.clear();
     lastEventId.current = Math.max(0, ...(selected.events || []).map(item => Number(item.id) || 0));
     Promise.all([
@@ -167,8 +174,12 @@ export default function ResearchWorkspace(props: Props) {
 
   async function autonomous() {
     if (!selected) return;
+    if (!selected.goal?.trim()) {
+      onError("请先填写研究目标，再启动三方案比较与诊断流程。");
+      return;
+    }
     setAutonomousBusy(true);
-    setProgressText("正在理解目标并制定实验方案");
+    setProgressText("正在根据研究目标制定三套候选方案");
     try { await api.autonomous(selected.id); await onSelect(selected.id); }
     catch (reason) { onError(String(reason)); }
     finally { setAutonomousBusy(false); }
@@ -272,14 +283,18 @@ export default function ResearchWorkspace(props: Props) {
       setMessages(items => [...items, user]);
       if (attachmentIds.length) {
         const response = await api.researchVisionChat(selected.id, value, attachmentIds);
-        const reply = response.reply || (response.source === "not_configured" ? "当前未配置可用的 Qwen 凭据。" : "当前模型无法处理该附件，草稿已保留。");
+        setSuggestedAction(response.actions?.[0] || null);
+        const reply = response.reply || (response.actions?.length ? "已生成可确认的研究状态建议。" : response.source === "not_configured" ? "当前未配置可用的 Qwen 凭据。" : "当前模型无法处理该附件，草稿已保留。");
         await persistAssistant(reply, response.source);
       } else if (!value.startsWith("/")) {
         setProgressText("正在读取 Research State 并生成真实回复");
         const response = await api.researchChat(selected.id, value, active?.id);
-        const reply = response.reply || (response.source === "not_configured"
-          ? "当前未配置 Qwen 凭据。科研对话已保留，但不会生成伪造回复。"
-          : "当前模型不可用，科研对话已保留。");
+        setSuggestedAction(response.actions?.[0] || null);
+        const reply = response.reply || (response.actions?.length
+          ? "已生成可确认的研究状态建议。"
+          : response.source === "not_configured"
+            ? "当前未配置 Qwen 凭据。科研对话已保留，但不会生成伪造回复。"
+            : "当前模型不可用，科研对话已保留。");
         await persistAssistant(reply, response.source);
       } else {
         setProgressText("正在理解目标并读取 Research State");
@@ -299,6 +314,26 @@ export default function ResearchWorkspace(props: Props) {
     try { await api.saveResearchGoal(selected.id, goalDraft.trim()); await onSelect(selected.id); }
     catch (reason) { onError(String(reason)); }
     finally { setGoalBusy(false); }
+  }
+
+  async function saveHypothesis() {
+    if (!selected || !hypothesisDraft.trim() || hypothesisDraft.trim() === (selected.hypothesis || "")) return;
+    setHypothesisBusy(true);
+    try { await api.saveResearchHypothesis(selected.id, hypothesisDraft.trim()); await onSelect(selected.id); }
+    catch (reason) { onError(String(reason)); }
+    finally { setHypothesisBusy(false); }
+  }
+
+  async function applySuggestion() {
+    if (!selected || !suggestedAction) return;
+    try {
+      const value = await api.applyResearchSuggestion(selected.id, suggestedAction);
+      if (value.optimizationConfig) setResearchConfig(value.optimizationConfig);
+      setGoalDraft(value.research.goal || "");
+      setHypothesisDraft(value.research.hypothesis || "");
+      setSuggestedAction(null);
+      await onSelect(selected.id);
+    } catch (reason) { onError(String(reason)); }
   }
 
   async function saveConfig(config: OptimizationConfig, lane: EngineeringSolverLane) {
@@ -324,6 +359,7 @@ export default function ResearchWorkspace(props: Props) {
     <ParameterConfigurationDialog open={configOpen} config={researchConfig} lane={researchLane} busy={Boolean(runningExperiment)} matlabDiagnostic="科研 MATLAB 任务将通过 Policy、审批和 MATLAB MCP 执行。" runtimeDiagnostic="Runtime 为可选工程链路，不替代科研审批。" onClose={() => setConfigOpen(false)} onApply={(config, lane) => void saveConfig(config, lane)}/>
     <ResizableWorkspaceLayout mode="research"
       activitySignal={runningExperiment ? "research-" + (selected?.id || "none") + "-" + runningExperiment.id : autonomousBusy ? "research-planning-" + (selected?.id || "none") : ""}
+      completionSignal={completionSignal}
       leftRail={<div className="left-rail-icons"><button aria-label="研究项目" title="研究项目"><FlaskConical size={15}/></button><button aria-label="科研对话" title="科研对话" onClick={() => setCenterTab("chat")}><MessageCircle size={15}/></button><button aria-label="科研审批" title="科研审批" onClick={() => setCenterTab("audit")}><ShieldCheck size={15}/></button></div>}
       left={leftPane}
       center={<section className="v2-center research-center research-chat-workspace">
@@ -332,14 +368,53 @@ export default function ResearchWorkspace(props: Props) {
         <div className="research-stage-strip"><span className="connection-dot"/><b>{stage}</b><small>{agentEvent}</small></div>
         {centerTab === "chat" ? <div className="research-chat-main">
           <div className="chat-message-list research-message-list">{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State，提案仍需通过 Policy 与 F0-F3 审批。</span></div> : null}</div>
+          {suggestedAction ? <div className="suggestion-dialog-backdrop" role="presentation"><ResearchSuggestionCard action={suggestedAction} currentGoal={selected?.goal || ""} currentHypothesis={selected?.hypothesis || ""} currentConfig={researchConfig} onApply={() => void applySuggestion()} onCancel={() => setSuggestedAction(null)} /></div> : null}
           {active ? <section className="research-result-panel compact"><header><span>真实实验结果 · {active.id}</span><small>{active.fidelity} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4>密度场</h4><ScalarMap values={resultView.density} mode="density"/></section><section><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}
           <footer ref={dropZone} className={"chat-composer research-chat-composer chat-drop-zone" + (dragActive ? " drag-active" : "")} {...dropHandlers}>{dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}{attachments.length ? <div className="chat-attachment-preview">{attachments.map(item => <figure key={item.id}>{item.preview ? <img src={item.preview} alt={item.fileName || "待发送附件"}/> : <span className="attachment-file-name">{item.fileName || "附件"}</span>}<button aria-label="移除附件" onClick={() => setAttachments(values => values.filter(value => value.id !== item.id))}><X size={12}/></button></figure>)}</div> : null}<div><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf,.docx,.xlsx,.txt,.md,.csv" multiple onChange={event => void uploadFiles(event.target.files)}/><button type="button" aria-label="上传科研附件" onClick={() => fileInput.current?.click()} disabled={sending}><ImagePlus size={15}/></button><textarea value={command} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendResearchMessage(); } }} placeholder="描述目标、询问证据或提出下一项实验…"/><button aria-label="发送科研消息" onClick={() => void sendResearchMessage()} disabled={(!command.trim() && !attachments.length) || sending || busy}>{sending || busy ? <LoaderCircle className="spin"/> : <Send size={15}/>}</button></div></footer>
         </div> : <div className="research-audit-main">{selected?.events?.slice(-30).map(event => <article className="timeline-item" key={event.id}><span className="timeline-icon"><CheckCircle2 size={14}/></span><div><small>{event.kind} · {new Date(event.created_at).toLocaleTimeString()}</small><h3>{event.title}</h3><p>{event.body}</p></div></article>)}{selected?.decisions?.filter(decision => decision.status === "PENDING").map(decision => <article className="decision-card" key={decision.id}><header><ShieldCheck size={14}/>Policy 审批 <span>{decision.risk}</span></header><h3>{decision.proposal?.fidelity || "实验提案"}</h3><p>{decision.reason}</p><div><button className="approve" onClick={() => onDecision(decision.id, "approve")}>批准并提交</button><button onClick={() => onDecision(decision.id, "reject")}>拒绝</button></div></article>)}</div>}
       </section>}
       bottom={<section className="research-bottom-progress"><header><b>科研执行进度</b><span>{stage}</span></header><div className="research-progress-events">{selected?.events?.slice(-8).map(event => <div key={event.id}><small>{event.kind}</small><span>{event.title}</span></div>)}</div></section>}
-      right={<><div className="v2-pane-title"><span>研究目标与参数</span><span className="permission research">research</span></div>{selected ? <><section className="inspector-card research-goal-card"><h4>研究目标</h4><textarea aria-label="研究目标" value={goalDraft} onChange={event => setGoalDraft(event.target.value)} maxLength={2000}/><button className="primary-button" disabled={goalBusy || !goalDraft.trim() || goalDraft.trim() === selected.goal} onClick={() => void saveGoal()}>{goalBusy ? "保存中…" : "保存目标"}</button><small>修改会写入 Research State 并保留审计事件。</small></section><section className="inspector-card research-config-card"><header className="inspector-card-heading"><h4>参数配置</h4><button aria-label="打开科研详细参数" onClick={() => setConfigOpen(true)}><Settings2 size={14}/></button></header><div className="configuration-summary"><code>{researchConfig.dimension.toUpperCase()} · {researchConfig.nelx}×{researchConfig.nely}×{researchConfig.dimension === "2d" ? 1 : researchConfig.nelz}</code><code>{researchConfig.bcType} · volfrac {researchConfig.volfrac}</code><code>{researchConfig.material.name}</code><code>{solverLaneLabel(researchLane)}</code></div></section></> : null}{active ? <><section className="inspector-card"><div className="run-heading"><div><h3>{active.id}</h3><small>{active.fidelity}</small></div><span className={"status status-" + active.status.toLowerCase()}>{active.status}</span></div><div className="metric-cards"><Metric label="compliance" value={metrics.compliance}/><Metric label="backend" value={active.backend}/></div></section><section className="inspector-card"><h4>执行边界</h4><div className="policy-row"><ShieldCheck size={14}/>Policy 审批链 <b>受保护</b></div><div className="policy-row"><FlaskConical size={14}/>MATLAB MCP / F3 <b>{active.backend === "matlab" ? "真实 F3" : "未调用"}</b></div>{active.error ? <p className="error-text">{active.error}</p> : null}</section></> : null}<section className="inspector-card"><h4>统一制品</h4>{artifactIndex.experiments.slice(-5).map(item => <div className="artifact-row" key={item.experimentId}><span><FileJson2 size={12}/>{item.experimentId} · {item.backend}</span><small>{item.files.length} 个文件 · {item.provenance.resultKind || "unknown"}</small></div>)}<div className="inspector-actions artifact-actions"><button className="outline-button" onClick={() => void pareto()}>查看 Pareto</button><button className="outline-button" disabled={experiments.length < 2} onClick={() => void compare()}>比较实验</button><button className="outline-button" disabled={!selected} onClick={() => void createResearchArtifact("/report")}>生成报告</button><button className="outline-button" disabled={!selected} onClick={() => void createResearchArtifact("/export")}>复现包</button></div></section><section className="inspector-card"><h4>实验列表</h4>{experiments.slice(-8).map(experiment => <button className={"experiment-row " + (active?.id === experiment.id ? "active" : "")} key={experiment.id} onClick={() => onSelectExperiment(experiment)}><span className="experiment-status"/><span>{experiment.id}<small>{solverLaneLabel(experiment.backend === "matlab" ? "matlab-mcp" : "python-fem")} · {experiment.fidelity}</small></span></button>)}</section></>}
+      right={<>
+        <div className="v2-pane-title"><span>研究状态</span><span className="permission research">research</span></div>
+        {selected ? <>
+          <section className="inspector-card research-goal-card">
+            <h4>研究目标</h4>
+            <textarea aria-label="研究目标" placeholder="填写希望达成的科研目标" value={goalDraft} onChange={event => setGoalDraft(event.target.value)} maxLength={2000}/>
+            <button className="primary-button" disabled={goalBusy || !goalDraft.trim() || goalDraft.trim() === selected.goal} onClick={() => void saveGoal()}>{goalBusy ? "保存中…" : "保存目标"}</button>
+          </section>
+          <section className="inspector-card research-hypothesis-card">
+            <h4>研究假设</h4>
+            <textarea aria-label="研究假设" placeholder="填写待验证的机制、趋势或因果假设" value={hypothesisDraft} onChange={event => setHypothesisDraft(event.target.value)} maxLength={4000}/>
+            <button className="primary-button" disabled={hypothesisBusy || !hypothesisDraft.trim() || hypothesisDraft.trim() === (selected.hypothesis || "")} onClick={() => void saveHypothesis()}>{hypothesisBusy ? "保存中…" : "保存假设"}</button>
+          </section>
+          <section className="inspector-card research-config-card">
+            <header className="inspector-card-heading"><h4>参数配置</h4><button aria-label="打开科研详细参数" onClick={() => setConfigOpen(true)}><Settings2 size={14}/></button></header>
+            <div className="configuration-summary"><code>{researchConfig.dimension.toUpperCase()} · {researchConfig.nelx}×{researchConfig.nely}×{researchConfig.dimension === "2d" ? 1 : researchConfig.nelz}</code><code>{researchConfig.bcType} · volfrac {researchConfig.volfrac}</code><code>{researchConfig.material.name}</code><code>{solverLaneLabel(researchLane)}</code></div>
+          </section>
+          <section className="inspector-card research-results-card">
+            <h4>结果呈现</h4>
+            {active ? <><div className="run-heading"><div><h3>{active.id}</h3><small>{active.fidelity} · {active.backend}</small></div><span className={"status status-" + active.status.toLowerCase()}>{active.status}</span></div><div className="metric-cards"><Metric label="柔度" value={metrics.compliance}/><Metric label="灰度率" value={metrics.gray}/></div>{active.error ? <p className="error-text">{active.error}</p> : null}</> : <p className="inspector-empty-copy">尚无科研实验结果。</p>}
+            <div className="research-plan-flow" aria-label="三方案科研流程"><span className="active">1 · 三方案</span><span>2 · 真实实验比较</span><span>3 · 优选路线</span><span>4 · 问题诊断</span><span>5 · 下一轮建议</span></div>
+            <div className="research-artifact-list">{artifactIndex.experiments.slice(-5).map(item => <div className="artifact-row" key={item.experimentId}><span><FileJson2 size={12}/>{item.experimentId} · {item.backend}</span><small>{item.files.length} 个文件 · {item.provenance.resultKind || "unknown"}</small></div>)}</div>
+            {experiments.length ? <div className="research-result-experiments"><h5>实验</h5>{experiments.slice(-8).map(experiment => <button className={"experiment-row " + (active?.id === experiment.id ? "active" : "")} key={experiment.id} onClick={() => onSelectExperiment(experiment)}><span className="experiment-status"/><span>{experiment.id}<small>{solverLaneLabel(experiment.backend === "matlab" ? "matlab-mcp" : "python-fem")} · {experiment.fidelity}</small></span></button>)}</div> : null}
+            <div className="inspector-actions artifact-actions"><button className="outline-button" onClick={() => void pareto()}>查看 Pareto</button><button className="outline-button" disabled={experiments.length < 2} onClick={() => void compare()}>比较实验</button><button className="outline-button" onClick={() => void createResearchArtifact("/report")}>生成报告</button><button className="outline-button" onClick={() => void createResearchArtifact("/export")}>复现包</button></div>
+          </section>
+        </> : <div className="inspector-empty"><FlaskConical size={24}/><span>选择或新建 Research</span></div>}
+      </>}
     />
   </>;
+}
+
+function ResearchSuggestionCard({ action, currentGoal, currentHypothesis, currentConfig, onApply, onCancel }: { action: ResearchStateAction; currentGoal: string; currentHypothesis: string; currentConfig: OptimizationConfig; onApply: () => void; onCancel: () => void }) {
+  const rows = action.changedFields.map(field => {
+    if (field === "goal") return { label: "研究目标", current: currentGoal || "未填写", next: action.goal || "—" };
+    if (field === "hypothesis") return { label: "研究假设", current: currentHypothesis || "未填写", next: action.hypothesis || "—" };
+    const current = `${currentConfig.dimension.toUpperCase()} · ${currentConfig.nelx}×${currentConfig.nely}×${currentConfig.nelz} · volfrac ${currentConfig.volfrac}`;
+    const nextConfig = action.optimizationConfig;
+    const next = nextConfig ? `${nextConfig.dimension.toUpperCase()} · ${nextConfig.nelx}×${nextConfig.nely}×${nextConfig.nelz} · volfrac ${nextConfig.volfrac}` : "—";
+    return { label: "参数配置", current, next };
+  });
+  return <section className="research-suggestion-card suggestion-dialog" role="region" aria-label="Agent 研究状态建议"><header><b>Agent 研究状态建议</b><button className="dialog-icon-button" aria-label="取消研究建议" title="取消" onClick={onCancel}><X size={14}/></button></header>{action.rationale ? <p>{action.rationale}</p> : null}<div>{rows.map(row => <article key={row.label}><b>{row.label}</b><span>{row.current}</span><i>→</i><strong>{row.next}</strong></article>)}</div><footer><button className="outline-button" onClick={onCancel}>取消</button><button className="primary-button" onClick={onApply}>批准并填入</button></footer></section>;
 }
 
 function Metric({ label, value }: { label: string; value: unknown }) {

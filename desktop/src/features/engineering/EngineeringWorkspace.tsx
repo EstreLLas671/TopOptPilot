@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ChevronRight, FileCode2, FlaskConical, FolderOpen, Gauge, MessageCircle, Pencil, Plus, Save, Search, Send, Settings2, SquareTerminal } from "lucide-react";
+import { Activity, ChevronRight, FileCode2, FlaskConical, FolderOpen, Gauge, MessageCircle, Pencil, Plus, Save, Search, Send, Settings2 } from "lucide-react";
 import { api } from "../../api";
 import type { Conversation, EngineeringRun, PatchApproval, PatchProposal, ProjectEntry, ProjectFile, Research } from "../../types";
 import { solverLaneLabel } from "../../workspace";
@@ -93,6 +93,7 @@ export default function EngineeringWorkspace({
   const nelx = optimizationConfig.nelx, nely = optimizationConfig.nely, nelz = optimizationConfig.nelz, volfrac = optimizationConfig.volfrac, maxIter = optimizationConfig.maxIterations;
   const [events, setEvents] = useState<Array<Record<string, unknown>>>([]);
   const [runBusy, setRunBusy] = useState(false);
+  const [completionSignal, setCompletionSignal] = useState("");
   const [bottomActivitySignal, setBottomActivitySignal] = useState("");
   const [terminalSession, setTerminalSession] = useState("");
   const [terminalCommand, setTerminalCommand] = useState("");
@@ -437,24 +438,39 @@ export default function EngineeringWorkspace({
     if (errors.length) { reportError(errors.join("；")); return; }
     if (lane === "local-matlab" && matlabProbeState !== "ready") { reportError("本机 MATLAB 尚未通过探测，不能开始优化。"); return; }
     setBottomActivitySignal(`engineering-run-${Date.now()}`);
-    setRunBusy(true); setEvents([]); setViewTab(lane === "local-matlab" ? "iteration" : "results");
+    setRunBusy(true); setEvents([]);
+    // Every new optimization opens the real MATLAB iteration view.
+    setViewTab("iteration");
     try {
       if (lane !== "python-fem") await api.engineeringPreference(lane);
       const payload = buildEngineeringRunRequest(lane, projectId || "engineering-ui", runtimeProfileId);
       payload.task = engineeringTaskFromConfig(optimizationConfig);
       const created = await api.engineeringRun(payload);
       setRun(created);
-      const socket = api.engineeringStream(created.runId, event => setEvents(items => [...items, event].slice(-80)));
+      const seenEventKeys = new Set<string>();
+      const acceptEvent = (event: Record<string, unknown>) => {
+        const key = String(event.seq ?? `${event.type || "event"}:${event.iteration ?? ""}:${event.status ?? ""}:${event.text ?? ""}`);
+        if (seenEventKeys.has(key)) return;
+        seenEventKeys.add(key);
+        setEvents(items => [...items, event].slice(-120));
+      };
+      const socket = api.engineeringStream(created.runId, acceptEvent);
+      const eventPoller = window.setInterval(() => {
+        void api.engineeringEvents(created.runId).then(value => value.events.forEach(acceptEvent)).catch(() => undefined);
+      }, 500);
       try {
         for (;;) {
           await new Promise(resolve => window.setTimeout(resolve, 250));
           const current = await api.engineeringRunGet(created.runId);
           setRun(current);
-          if (["completed", "failed", "cancelled"].includes(current.status)) break;
+          if (["completed", "failed", "cancelled"].includes(current.status)) {
+            if (current.status === "completed") setCompletionSignal("engineering-completed-" + current.runId);
+            break;
+          }
         }
         const history = await api.engineeringEvents(created.runId);
         setEvents(history.events.slice(-80));
-      } finally { socket.close(); }
+      } finally { window.clearInterval(eventPoller); socket.close(); }
     } catch (reason) { reportError(reason); }
     finally { setRunBusy(false); }
   }
@@ -537,6 +553,8 @@ export default function EngineeringWorkspace({
     <ParameterConfigurationDialog open={detailsOpen} config={optimizationConfig} lane={lane} busy={runBusy} matlabDiagnostic={matlabDiagnostic} runtimeDiagnostic={runtimeDiagnostic} onRefreshEnvironment={() => void scanEngineeringEnvironment()} onClose={() => setDetailsOpen(false)} onApply={(nextConfig, nextLane) => { setOptimizationConfig(nextConfig); setLane(nextLane); setDetailsOpen(false); }}/>
     <ResizableWorkspaceLayout mode="engineering"
     activitySignal={bottomActivitySignal}
+    completionSignal={completionSignal}
+    leftHeader={<b>工程工作区</b>}
     leftRail={<div className="left-rail-icons"><button aria-label="工作区与项目文件" title="工作区与项目文件" onClick={() => setRightTab("workspace")}><FolderOpen size={15}/></button><button aria-label="历史对话" title="历史对话" onClick={() => setRightTab("history")}><MessageCircle size={15}/></button></div>}
     left={<>
       <div className="v2-pane-title engineering-left-title"><div className="pane-actions"><button role="tab" aria-selected={rightTab === "workspace"} className={rightTab === "workspace" ? "active" : ""} onClick={() => setRightTab("workspace")}>工作区</button><button role="tab" aria-selected={rightTab === "history"} className={rightTab === "history" ? "active" : ""} onClick={() => setRightTab("history")}>历史对话</button></div></div>
@@ -552,7 +570,7 @@ export default function EngineeringWorkspace({
         {!conversationHistory.length ? <div className="v2-empty inspector-empty">暂无历史对话</div> : null}
       </section>}
     </>}
-    center={<section className="engineering-center-shell">
+    center={<section className={`engineering-center-shell${viewTab === "chat" ? " chat-layout" : " has-compact-assistant"}`}>
       <nav className="v2-tabs engineering-view-tabs" role="tablist" aria-label="工程中央视图">
         <button role="tab" aria-selected={viewTab === "chat"} className={`tab ${viewTab === "chat" ? "active" : ""}`} onClick={() => setViewTab("chat")}><MessageCircle size={14}/>聊天</button>
         <button role="tab" aria-selected={viewTab === "code"} className={`tab ${viewTab === "code" ? "active" : ""}`} onClick={() => setViewTab("code")}><FileCode2 size={14}/>代码{dirty ? <i>●</i> : null}</button>
@@ -560,10 +578,10 @@ export default function EngineeringWorkspace({
         <button role="tab" aria-selected={viewTab === "iteration"} className={`tab ${viewTab === "iteration" ? "active" : ""}`} onClick={() => setViewTab("iteration")}><Activity size={14}/>迭代可视化</button>
         <button role="tab" aria-selected={viewTab === "compare"} className={`tab ${viewTab === "compare" ? "active" : ""}`} onClick={() => setViewTab("compare")}><Settings2 size={14}/>参数调整与对比</button>
         <div className="engineering-tab-actions"><span title={selectedFile?.relative_path}>{selectedFile?.relative_path || "未选择文件"}</span><button title="重命名当前文件" className="tab-action" onClick={() => void renameFile()} disabled={!selectedFile || dirty || patchApplyBusy}><Pencil size={13}/>重命名</button><button title="保存当前文件" className="tab-action" onClick={() => void saveFile()} disabled={!dirty || projectBusy || patchApplyBusy}><Save size={13}/>保存</button></div>
-        <EngineeringRunButton busy={runBusy} disabled={configErrors.length > 0 || (lane === "local-matlab" && matlabProbeState !== "ready")} label={"运行 " + solverLaneLabel(lane)} onRun={() => void startRun()}/>
-        <div className="engineering-run-secondary-actions"><button aria-label="取消运行" disabled={!runBusy} onClick={() => void cancelRun()}><SquareTerminal size={13}/></button><button aria-label="导出运行报告" title="生成运行报告" disabled={!run || runBusy} onClick={() => void exportReport()}><FileCode2 size={13}/></button><button aria-label="创建科研基线" title="创建科研基线" disabled={baselineBusy || !run || run.status !== "completed" || run.provenance.resultKind !== "solver" || !run.files.length} onClick={() => void createResearchBaseline()}><FlaskConical size={13}/></button></div>
+        <EngineeringRunButton busy={runBusy || run?.status === "queued" || run?.status === "running"} disabled={configErrors.length > 0 || (lane === "local-matlab" && matlabProbeState !== "ready")} label={"运行 " + solverLaneLabel(lane)} onRun={() => void startRun()} onStop={() => void cancelRun()}/>
+        <div className="engineering-run-secondary-actions"><button aria-label="导出运行报告" title="生成运行报告" disabled={!run || runBusy} onClick={() => void exportReport()}><FileCode2 size={13}/></button><button aria-label="创建科研基线" title="创建科研基线" disabled={baselineBusy || !run || run.status !== "completed" || run.provenance.resultKind !== "solver" || !run.files.length} onClick={() => void createResearchBaseline()}><FlaskConical size={13}/></button></div>
       </nav>
-      <div className="engineering-view-content" role="tabpanel">
+      <div className={`engineering-view-content${viewTab === "chat" ? " chat-view-content" : ""}`} role="tabpanel">
         {viewTab === "chat" ? <EngineeringChatPanel projectId={projectId} selectedFile={selectedFile} run={run} config={optimizationConfig} onError={reportError} requestedConversationId={requestedConversationId} onHistoryChange={receiveConversationHistory} onApplySuggestedConfig={action => updateConfig(action.config)}/> : null}
         {viewTab === "code" ? <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}><MonacoEditor language={languageFor(selectedFile?.relative_path)} value={selectedFile?.content || "% 打开项目后选择 UTF-8 源文件"} onChange={value => { if (selectedFile && !patchApplyBusy) { setSelectedFile({ ...selectedFile, content: value || "" }); setDirty(true); } }} options={{ readOnly: !selectedFile || projectBusy || patchApplyBusy, minimap: { enabled: false }, fontSize: 13, lineHeight: 22, automaticLayout: true, scrollBeyondLastLine: false, wordWrap: "off" }} theme="vs"/></Suspense></div> : null}
         {viewTab === "results" ? <ResultViewer run={run} onError={reportError}/> : null}

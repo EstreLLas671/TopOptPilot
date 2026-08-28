@@ -15,22 +15,26 @@ import type { WorkspaceMode } from "../workspace";
 type Props = {
   mode: WorkspaceMode;
   left: ReactNode;
+  leftHeader?: ReactNode;
   leftRail?: ReactNode;
   center: ReactNode;
   right: ReactNode;
   bottom: ReactNode;
   activitySignal?: string;
+  completionSignal?: string;
 };
 
 type ResizePanel = "left" | "right" | "bottom";
 
-export default function ResizableWorkspaceLayout({ mode, left, leftRail, center, right, bottom, activitySignal = "" }: Props) {
+export default function ResizableWorkspaceLayout({ mode, left, leftHeader, leftRail, center, right, bottom, activitySignal = "", completionSignal = "" }: Props) {
   const [layout, setLayout] = useState<WorkspaceLayout>(() => loadWorkspaceLayout(mode));
   const [resizing, setResizing] = useState<ResizePanel | null>(null);
   const [layoutMode, setLayoutMode] = useState<WorkspaceMode>(mode);
   const layoutRef = useRef(layout);
   const resizeRef = useRef<{ panel: ResizePanel; x: number; y: number; start: WorkspaceLayout } | null>(null);
   const consumedActivity = useRef("");
+  const consumedCompletion = useRef("");
+  const [completionGlow, setCompletionGlow] = useState(false);
 
   useEffect(() => {
     const next = loadWorkspaceLayout(mode);
@@ -55,6 +59,18 @@ export default function ResizableWorkspaceLayout({ mode, left, leftRail, center,
       setLayout(next);
     }
   }, [activitySignal]);
+
+  useEffect(() => {
+    if (!completionSignal || consumedCompletion.current === completionSignal) return;
+    consumedCompletion.current = completionSignal;
+    setCompletionGlow(false);
+    const frame = window.requestAnimationFrame(() => setCompletionGlow(true));
+    const timer = window.setTimeout(() => setCompletionGlow(false), 1500);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [completionSignal]);
 
   const updateLayout = useCallback((next: WorkspaceLayout) => {
     const normalized = clampLayout(next, { viewportWidth: window.innerWidth });
@@ -121,7 +137,7 @@ export default function ResizableWorkspaceLayout({ mode, left, leftRail, center,
   const reset = useCallback(() => updateLayout(resetWorkspaceLayout(mode)), [mode, updateLayout]);
 
   return <main
-    className={`v2-workspace resizable-workspace ${resizing ? "is-resizing" : ""}`}
+    className={`v2-workspace resizable-workspace ${resizing ? "is-resizing" : ""} ${completionGlow ? "completion-glow-active" : ""}`}
     style={{
       "--left-track": layout.leftOpen ? `${layout.leftWidth}px` : "48px",
       "--right-track": layout.rightOpen ? `${layout.rightWidth}px` : "0px",
@@ -131,7 +147,8 @@ export default function ResizableWorkspaceLayout({ mode, left, leftRail, center,
     } as CSSProperties}
     data-workspace={mode}
   >
-    {layout.leftOpen ? <aside className="v2-sidebar workspace-panel workspace-left" data-panel="left"><div className="workspace-panel-toggle-row"><button className="panel-toggle" aria-label="隐藏左侧项目栏" title="隐藏左侧项目栏" onClick={() => setPanel("left")}><ChevronLeft size={13}/></button></div><div className="workspace-panel-content">{left}</div><div className="workspace-mobile-left-rail">{leftRail}</div></aside> : <aside className="workspace-left-rail" data-panel="left-rail" onClick={event => { if ((event.target as HTMLElement).closest(".left-rail-icons button")) setPanel("left"); }}><button className="panel-restore panel-restore-left" aria-label="显示左侧项目栏" title="显示左侧项目栏" onClick={() => setPanel("left")}><ChevronRight size={14}/></button>{leftRail || <div className="left-rail-fallback"><SlidersHorizontal size={15}/></div>}</aside>}
+    {completionGlow ? <div className="workspace-completion-glow" aria-hidden="true"/> : null}
+    {layout.leftOpen ? <aside className="v2-sidebar workspace-panel workspace-left" data-panel="left"><div className="workspace-panel-header"><div className="workspace-panel-header-title">{leftHeader}</div><button className="panel-toggle" aria-label="隐藏左侧项目栏" title="隐藏左侧项目栏" onClick={() => setPanel("left")}><ChevronLeft size={13}/></button></div><div className="workspace-panel-content">{left}</div><div className="workspace-mobile-left-rail">{leftRail}</div></aside> : <aside className="workspace-left-rail" data-panel="left-rail" onClick={event => { if ((event.target as HTMLElement).closest(".left-rail-icons button")) setPanel("left"); }}><button className="panel-restore panel-restore-left" aria-label="显示左侧项目栏" title="显示左侧项目栏" onClick={() => setPanel("left")}><ChevronRight size={14}/></button>{leftRail || <div className="left-rail-fallback"><SlidersHorizontal size={15}/></div>}</aside>}
     {layout.leftOpen ? <button className="panel-resize panel-resize-left" role="separator" aria-label="调整左侧面板宽度" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={420} aria-valuenow={layout.leftWidth} title="拖动或用方向键调整左侧面板" onKeyDown={event => resizeWithKeyboard("left", event)} onPointerDown={event => startResize("left", event)}><GripVertical size={10}/></button> : null}
     <section className="workspace-main-column">
       <section className="v2-center workspace-center">{center}<div className="center-toolbar-actions" aria-label="中央工作区面板控制"><button className="center-panel-action" aria-pressed={layout.bottomOpen} aria-label={layout.bottomOpen ? "隐藏底部面板" : "显示底部面板"} title={layout.bottomOpen ? "隐藏底部面板" : "显示底部面板"} onClick={() => setPanel("bottom")}>{layout.bottomOpen ? <PanelBottomClose size={16}/> : <PanelBottom size={16}/>}</button><button className="center-panel-action" aria-pressed={layout.rightOpen} aria-label={layout.rightOpen ? "隐藏右侧检查器" : "显示右侧检查器"} title={layout.rightOpen ? "隐藏右侧检查器" : "显示右侧检查器"} onClick={() => setPanel("right")}>{layout.rightOpen ? <PanelRightClose size={16}/> : <PanelRight size={16}/>}</button></div></section>

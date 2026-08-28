@@ -12,7 +12,7 @@ def test_engineering_health_reports_unprobed_capabilities() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["service"] == "engineering"
-    assert payload["version"] == "2.0.0"
+    assert payload["version"] == "2.0.1"
     assert payload["capabilities"] == {
         "localMatlab": "unprobed",
         "compiledRuntime": "optional",

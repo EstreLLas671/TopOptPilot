@@ -252,9 +252,16 @@ def generate_engineering_chat(
             source="safe_mode",
             contextDigest=digest,
         )
-    action = _validated_optimization_action(str(response.get("content") or ""))
+    content = str(response.get("content") or "")
+    action = _validated_optimization_action(content)
+    reply = re.sub(
+        r"<topoptpilot-action>\s*[\s\S]*?\s*</topoptpilot-action>",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).strip()
     return EngineeringChatResponse(
-        reply=str(response.get("content") or "Agent 未返回文本"),
+        reply=reply or ("已生成可确认的参数建议。" if action else "Agent 未返回文本"),
         source="qwen",
         actions=[action] if action else [],
         contextDigest=digest,

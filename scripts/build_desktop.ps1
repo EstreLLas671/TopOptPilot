@@ -133,7 +133,7 @@ if (-not $SkipSidecar) {
         --specpath (Join-Path $ProjectRoot "build") `
         --paths $ProjectRoot --hidden-import idesktop_v2.api.app --hidden-import idesktop_v2.api.desktop_sidecar `
         --hidden-import solver.topopt_engine --hidden-import solver.topopt3d `
-        --collect-submodules openai `
+        --collect-submodules openai --collect-submodules websockets `
         $SidecarSource
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE." }
 }

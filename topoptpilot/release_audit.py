@@ -83,7 +83,7 @@ def _desktop_gate() -> dict:
     release_dir = ROOT / "desktop/src-tauri/target/release"
     executable_candidates = (release_dir / "topoptpilot.exe",)
     installer_dir = release_dir / "bundle/nsis"
-    installer_candidates = (installer_dir / "TopOptPilot_2.0.0_x64-setup.exe",)
+    installer_candidates = (installer_dir / "TopOptPilot_2.0.1_x64-setup.exe",)
     executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
     installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
     resources = release_dir / "resources"

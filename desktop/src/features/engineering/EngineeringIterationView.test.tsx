@@ -49,6 +49,7 @@ describe("EngineeringIterationView", () => {
     }]}/>);
 
     expect(screen.queryByText("等待真实 MATLAB 迭代快照")).toBeNull();
+    expect(screen.queryByText(/真实命令行输出会同步显示/)).toBeNull();
     expect(screen.getByText("MATLAB 优化正在运行")).toBeTruthy();
     expect(screen.getByText("真实迭代 12 / 60")).toBeTruthy();
     expect(screen.getByText("Iteration 12: compliance=8.42")).toBeTruthy();
@@ -63,7 +64,7 @@ describe("EngineeringIterationView", () => {
     render(<EngineeringIterationView run={run} maxIterations={60} events={[{
       type: "progress",
       iteration: 1,
-      metrics: { compliance: 12.5, volumeFraction: 0.4 },
+      metrics: { compliance: 12.5, volumeFraction: 0.4, grayRatio: 0.25 },
       snapshot: {
         densityPath: "snapshots/iter_0001_density.bin",
         stressPath: null,
@@ -81,6 +82,7 @@ describe("EngineeringIterationView", () => {
       expect(screen.getByLabelText("密度场").querySelectorAll("span")).toHaveLength(4);
     });
     expect(screen.getByText(/第 1 轮 · 2D/)).toBeTruthy();
+    expect(screen.getByText("0.2500")).toBeTruthy();
     expect(screen.queryByText(/占位/)).toBeNull();
   });
 
@@ -104,7 +106,7 @@ describe("EngineeringIterationView", () => {
     render(<EngineeringIterationView run={run} maxIterations={60} events={[{
       type: "progress",
       iteration: 1,
-      metrics: { compliance: 12.5, volumeFraction: 0.4 },
+      metrics: { compliance: 12.5, volumeFraction: 0.4, grayRatio: 0.25 },
       snapshot: {
         densityPath: "snapshots/iter_0001_density.bin",
         stressPath: "snapshots/iter_0001_stress.bin",
