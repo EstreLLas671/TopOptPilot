@@ -46,14 +46,16 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   const [suggestedAction, setSuggestedAction] = useState<OptimizationConfigAction | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const dropZone = useRef<HTMLElement>(null);
+  const messageList = useRef<HTMLDivElement>(null);
+  const messageEnd = useRef<HTMLDivElement>(null);
+  const followMessages = useRef(true);
   const uploadingHashes = useRef(new Set<string>());
-  const draftKey = conversationId ? `topoptpilot:engineering-draft:${ownerId}:${conversationId}` : "";
+  const draftKey = `topoptpilot:engineering-draft:${ownerId}:${conversationId || "new"}`;
   const draftRef = useRef<EngineeringChatDraft>({ message: "", allowExternalSource: false, attachments: [] });
   const hydratedDraftKey = useRef("");
   draftRef.current = { message, allowExternalSource, attachments };
   useEffect(() => {
-    if (!draftKey || hydratedDraftKey.current !== draftKey) return;
-    hydratedDraftKey.current = "";
+    if (!draftKey || hydratedDraftKey.current === draftKey) return;
     const memory = engineeringChatDrafts.get(draftKey);
     if (memory) {
       setMessage(memory.message);
@@ -88,16 +90,19 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     }));
   }, [draftKey, message, allowExternalSource, attachments]);
 
-  async function loadConversation(id: string) {
+  async function loadConversation(id: string, preserveDraft = false) {
     setConversationId(id);
     setMessages(await api.conversationMessages(id));
-    setAttachments([]);
+    if (!preserveDraft) setAttachments([]);
+    followMessages.current = true;
+    window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
   }
 
   async function createConversation() {
     const created = await api.conversationCreate("engineering", ownerId, "工程对话");
     setConversations(items => [created, ...items]);
-    await loadConversation(created.id);
+    hydratedDraftKey.current = `topoptpilot:engineering-draft:${ownerId}:${created.id}`;
+    await loadConversation(created.id, true);
     return created.id;
   }
 
@@ -106,8 +111,9 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     void api.conversationList("engineering", ownerId).then(async items => {
       if (cancelled) return;
       setConversations(items);
-      const id = items[0]?.id || await createConversation();
-      if (!cancelled) await loadConversation(id);
+      const id = items[0]?.id;
+      if (!cancelled && id) await loadConversation(id);
+      else if (!cancelled) { setConversationId(""); setMessages([]); }
     }).catch(reason => { if (!cancelled) onError(String(reason)); });
     return () => { cancelled = true; };
   }, [ownerId]);
@@ -127,6 +133,11 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     }).catch(reason => { if (!cancelled) onError(String(reason)); });
     return () => { cancelled = true; };
   }, [requestedConversationId, ownerId]);
+
+  useEffect(() => {
+    if (!followMessages.current) return;
+    window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
+  }, [messages, busy]);
 
   async function uploadCandidates(candidates: DroppedImageCandidate[]) {
     const existing = new Set(attachments.flatMap(item => item.sha256 ? [item.sha256] : []));
@@ -178,13 +189,15 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   });
   async function send() {
     const value = message.trim();
-    if ((!value && !attachments.length) || busy || !conversationId) return;
+    if ((!value && !attachments.length) || busy) return;
+    let targetConversationId = conversationId;
+    if (!targetConversationId) targetConversationId = await createConversation();
     const attachmentIds = attachments.map(item => item.id);
     setMessage("");
     setAttachments([]);
     setBusy(true);
     try {
-      const user = await api.conversationMessage(conversationId, {
+      const user = await api.conversationMessage(targetConversationId, {
         role: "user", content: value || "请分析这些附件", attachmentIds,
       });
       setMessages(items => [...items, user]);
@@ -200,7 +213,7 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
         allowExternalSource,
         attachmentIds,
       });
-      const assistant = await api.conversationMessage(conversationId, {
+      const assistant = await api.conversationMessage(targetConversationId, {
         role: "assistant", content: response.reply, source: response.source,
       });
       setMessages(items => [...items, assistant]);
@@ -215,23 +228,27 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     }
   }
 
-  return <section className="engineering-chat-panel" aria-label="工程开发聊天">
+  return <section ref={dropZone} className={"engineering-chat-panel chat-drop-zone" + (dragActive ? " drag-active" : "")} aria-label="工程开发聊天" {...dropHandlers}>
+    {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
     <header className="chat-panel-header">
       <div><span className="eyebrow">ENGINEERING ASSISTANT</span><h2>工程开发聊天</h2></div>
     </header>
-    <div className="chat-message-list">
+    <div ref={messageList} className="chat-message-list" onScroll={() => {
+      const node = messageList.current;
+      if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+    }}>
       {!messages.length ? <div className="chat-empty"><Bot size={30}/><b>从当前工程上下文开始</b><span>询问 MATLAB、参数或结果，也可上传图片和常用文档。</span></div> : messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已随会话保存在本地</small> : null}{item.source ? <small>{item.source === "not_configured" ? "未配置 Qwen" : item.source}</small> : null}</div></article>)}
       {suggestedAction ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="optimization-action-card suggestion-dialog" role="dialog" aria-modal="true" aria-label="应用建议参数"><header><b>Agent 建议参数</b><button className="dialog-icon-button" aria-label="取消建议参数" title="取消" onClick={() => setSuggestedAction(null)}><X size={14}/></button></header><p>{suggestedAction.rationale || "AI 返回了一组完整且通过校验的优化配置。"}</p><div className="optimization-action-diff">{suggestedAction.changedFields.map(field => <div key={field}><b>{configLabels[field] || field}</b><span>{displayConfigValue(config[field as keyof OptimizationConfig])}</span><i>→</i><strong>{displayConfigValue(suggestedAction.config[field as keyof OptimizationConfig])}</strong></div>)}</div><footer><button className="outline-button" onClick={() => setSuggestedAction(null)}>取消</button><button className="primary-button" onClick={() => { onApplySuggestedConfig?.(suggestedAction); setSuggestedAction(null); }}>填入参数</button></footer></section></div> : null}
+      <div ref={messageEnd} className="chat-message-end" aria-hidden="true"/>
     </div>
-    <footer ref={dropZone} className={"chat-composer chat-drop-zone" + (dragActive ? " drag-active" : "")} {...dropHandlers}>
-      {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
+    <footer className="chat-composer">
       {attachments.length ? <div className="chat-attachment-preview">{attachments.map(item => <figure key={item.id}>{item.preview ? <img src={item.preview} alt={item.fileName || "待发送附件"}/> : <span className="attachment-file-name">{item.fileName || "附件"}</span>}<button aria-label="移除附件" onClick={() => setAttachments(values => values.filter(value => value.id !== item.id))}><X size={12}/></button></figure>)}</div> : null}
       <label><input type="checkbox" checked={allowExternalSource} onChange={event => setAllowExternalSource(event.target.checked)}/>允许本次把当前文件源代码发送给 Qwen</label>
       <div>
         <input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf,.docx,.xlsx,.txt,.md,.csv" multiple onChange={event => void uploadFiles(event.target.files)}/>
-        <button type="button" aria-label="上传附件" onClick={() => fileInput.current?.click()} disabled={busy}><ImagePlus size={15}/></button>
+        <button type="button" className="chat-composer-action" aria-label="上传附件" title="上传附件" onClick={() => fileInput.current?.click()} disabled={busy}><ImagePlus size={15}/></button>
         <textarea value={message} onChange={event => setMessage(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="询问当前工程、参数或结果…" />
-        <button aria-label="发送聊天消息" onClick={() => void send()} disabled={(!message.trim() && !attachments.length) || busy}>{busy ? <LoaderCircle className="spin" size={15}/> : <Send size={15}/>}</button>
+        <button className="chat-composer-action" aria-label="发送聊天消息" title="发送" onClick={() => void send()} disabled={(!message.trim() && !attachments.length) || busy}>{busy ? <LoaderCircle className="spin" size={15}/> : <Send size={15}/>}</button>
       </div>
     </footer>
   </section>;

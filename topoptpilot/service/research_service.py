@@ -459,6 +459,26 @@ class ResearchService:
             payload={"stage": "three_plan_compare_diagnose", "required_plans": 3},
             source="RESEARCH_ORCHESTRATOR",
         )
+        baseline = (research.get("defaults") or {}).get("engineering_scheme_baseline")
+        baseline_ids = [value for value in [
+            (baseline or {}).get("schemeId"), (baseline or {}).get("runId")
+        ] if value]
+        self.store.append_event(
+            research_id, EventKind.SYSTEM.value, "WORKFLOW_CONTEXT_COMPLETED",
+            "已读取研究目标、假设、预算和可用真实基线。",
+            payload={
+                "workflow_step": "context", "status": "completed",
+                "reflection": "优先采用已导入工程方案；其后才使用当前 Research 的真实实验和历史最优结果。",
+                "evidence_ids": baseline_ids, "next_action": "生成三套不同角度的候选方案",
+            },
+            source="RESEARCH_ORCHESTRATOR",
+        )
+        self.store.append_event(
+            research_id, EventKind.SYSTEM.value, "WORKFLOW_PLANNING_STARTED",
+            "正在生成三套受 Policy 约束的候选方案。",
+            payload={"workflow_step": "planning", "status": "active", "required_plans": 3},
+            source="RESEARCH_ORCHESTRATOR",
+        )
         language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
         prompt = (
             "You are the primary Pi Research Agent. Begin or continue an autonomous topology-"
@@ -621,6 +641,141 @@ class ResearchService:
         self._require_research(research_id)
         return self.store.update_research(research_id, archived_at=None)
 
+    @staticmethod
+    def _workflow_progress(research: dict[str, Any]) -> dict[str, Any]:
+        labels = [
+            ("context", "读取目标、假设、预算与真实基线"),
+            ("planning", "生成三套不同角度的候选方案"),
+            ("approval", "Policy 编译与审批"),
+            ("experiments", "执行三套真实实验"),
+            ("comparison", "比较真实结果"),
+            ("selection", "选择当前最优方案"),
+            ("diagnosis", "问题诊断与阶段反思"),
+            ("next_round", "形成下一轮建议或终止结论"),
+        ]
+        events = list(research.get("events") or [])
+        start_index = max(
+            (index for index, event in enumerate(events)
+             if str(event.get("title") or "") == "ROUND_STARTED"),
+            default=0,
+        )
+        round_events = events[start_index:]
+        titles = [str(event.get("title") or "") for event in round_events]
+        experiments = list(research.get("experiments") or [])
+        round_number = max(
+            [int(item.get("round_number") or 0) for item in experiments]
+            + [int(research.get("current_round") or 0), 1]
+        )
+        current_experiments = [
+            item for item in experiments
+            if int(item.get("round_number") or 0) == round_number
+        ]
+        current_ids = [str(item["id"]) for item in current_experiments]
+        terminal = [item for item in current_experiments
+                    if str(item.get("status") or "").upper() in {"SUCCESS", "FAILED", "CANCELLED"}]
+        pending = [
+            item for item in research.get("decisions") or []
+            if item.get("status") == "PENDING"
+            and (not item.get("experiment_id") or item.get("experiment_id") in current_ids)
+        ]
+        batch_complete = "EXPERIMENT_BATCH_COMPLETED" in titles or "WORKFLOW_ROUND_COMPLETED" in titles
+        stopped = str(research.get("status") or "").upper() in {"STOPPED", "COMPLETED", "FAILED"}
+        baseline = (research.get("defaults") or {}).get("engineering_scheme_baseline") or {}
+        baseline_ids = [str(value) for value in (baseline.get("schemeId"), baseline.get("runId")) if value]
+        reflection_events = [
+            event for event in round_events
+            if (event.get("payload") or {}).get("workflow_step")
+            and (event.get("payload") or {}).get("reflection")
+        ]
+        reflections_by_step: dict[str, list[dict[str, Any]]] = {}
+        for event in reflection_events:
+            step_key = str((event.get("payload") or {}).get("workflow_step") or "")
+            if step_key:
+                reflections_by_step.setdefault(step_key, []).append(event)
+        best = research.get("best_experiment") or {}
+
+        statuses: dict[str, str] = {key: "pending" for key, _ in labels}
+        if "ROUND_STARTED" in titles or "WORKFLOW_CONTEXT_COMPLETED" in titles:
+            statuses["context"] = "completed"
+            statuses["planning"] = "active"
+        if current_experiments or any(title == "THREE_PLAN_SUBMITTED" for title in titles):
+            statuses["planning"] = "completed"
+            statuses["approval"] = "active" if pending else "completed"
+        if current_experiments and not pending:
+            statuses["experiments"] = "active"
+        if batch_complete or (current_experiments and len(terminal) == len(current_experiments)):
+            statuses["experiments"] = "completed"
+        if batch_complete:
+            statuses.update(comparison="completed", selection="completed", diagnosis="completed")
+            statuses["next_round"] = "completed" if "WORKFLOW_ROUND_COMPLETED" in titles or stopped else "active"
+        if stopped and terminal:
+            statuses["next_round"] = "completed"
+
+        completed_units = sum(1.0 for key, _ in labels if statuses[key] == "completed")
+        if statuses["experiments"] == "active" and current_experiments:
+            completed_units += min(1.0, len(terminal) / max(3, len(current_experiments)))
+        percent = int(round(100 * completed_units / len(labels)))
+        active_key = next((key for key, _ in labels if statuses[key] == "active"), None)
+        stage = active_key or ("completed" if percent == 100 else "idle")
+        experiment_result = f"已完成 {len(terminal)} / {max(3, len(current_experiments))} 个真实方案"
+        experiment_reflection = "；".join(
+            str((event.get("payload") or {}).get("reflection") or event.get("body") or "")
+            for event in reflections_by_step.get("experiments", [])[-3:]
+        )
+        steps = []
+        for key, label in labels:
+            evidence_ids = baseline_ids if key == "context" else current_ids
+            result = None
+            reflection = None
+            next_action = None
+            if key == "context":
+                result = "已导入工程基线" if baseline_ids else "使用当前 Research 已完成实验或历史最优结果"
+                reflection = "证据优先级：工程基线 → 当前真实实验 → 历史最优。"
+                next_action = "生成三套候选方案"
+            elif key == "planning":
+                result = f"已形成 {min(3, len(current_experiments))} / 3 套受控方案"
+                if reflections_by_step.get(key):
+                    reflection = str((reflections_by_step[key][-1].get("payload") or {}).get("reflection") or "") or None
+                next_action = "进入 Policy 编译与审批"
+            elif key == "approval":
+                result = f"待审批 {len(pending)} 项" if pending else ("审批边界已满足" if current_experiments else None)
+                if reflections_by_step.get(key):
+                    reflection = str((reflections_by_step[key][-1].get("payload") or {}).get("reflection") or "") or None
+                next_action = "批准后执行真实实验" if pending else "执行候选实验"
+            elif key == "experiments":
+                result = experiment_result
+                reflection = experiment_reflection or None
+                next_action = "等待真实终态" if statuses[key] == "active" else "比较真实结果"
+            elif key == "comparison" and batch_complete:
+                result = f"比较 {len(terminal)} 个真实终态方案"
+                event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
+                reflection = str(((event or {}).get("payload") or {}).get("reflection") or "失败方案只保留失败原因，不补造指标。")
+            elif key == "selection" and batch_complete:
+                result = f"当前最优：{best.get('id')}" if best else "本轮没有真实成功方案"
+                evidence_ids = [str(best.get("id"))] if best else current_ids
+                event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
+                reflection = str(((event or {}).get("payload") or {}).get("reflection") or "") or None
+            elif key == "diagnosis" and batch_complete:
+                result = "已完成最优方案弱点诊断与逐方案反思"
+                event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
+                reflection = str(((event or {}).get("payload") or {}).get("reflection") or experiment_reflection or "诊断仅引用真实实验与工程基线。")
+            elif key == "next_round" and statuses[key] == "completed":
+                result = research.get("termination_reason") or "已形成下一轮受控建议"
+                event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
+                reflection = str(((event or {}).get("payload") or {}).get("reflection") or "") or None
+                next_action = "下一轮仍需 Policy、预算与审批"
+            steps.append({
+                "id": key, "label": label, "status": statuses[key],
+                "summary": label, "result": result, "reflection": reflection,
+                "evidenceIds": evidence_ids, "experimentIds": current_ids,
+                "nextAction": next_action,
+            })
+        return {
+            "round": round_number, "stage": stage, "percent": percent, "steps": steps,
+            "budgetUsed": int(research.get("budget_used") or 0),
+            "budgetTotal": int(research.get("budget_total") or 0),
+        }
+
     def get_research(self, research_id: str) -> dict[str, Any]:
         research = self.store.get_research(research_id)
         if not research:
@@ -644,6 +799,7 @@ class ResearchService:
             comparable, key=lambda e: e["result"].get("objective", {}).get("compliance", float("inf")),
             default=None,
         )
+        research["workflow"] = self._workflow_progress(research)
         return research
 
     def create_experiment(self, research_id: str,
@@ -686,6 +842,23 @@ class ResearchService:
                                 f"Risk: {safety['risk']}\n\n{safety['reason']}", experiment_id, safety)
         self.store.append_event(research_id, EventKind.EXPERIMENT.value,
                                 f"PROPOSED EXPERIMENT {experiment_id}", body, experiment_id)
+        if research.get("mode") == "AUTONOMOUS":
+            parameter_digest = hashlib.sha256(
+                json.dumps(parameters, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+            ).hexdigest()
+            self.store.append_event(
+                research_id, EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                f"{experiment_id} 已作为受控候选方案进入科研流程。", experiment_id,
+                {
+                    "workflow_step": "planning", "status": "completed",
+                    "experiment_ids": [experiment_id],
+                    "evidence_ids": list(model.evidence_ids or []),
+                    "result": {"fidelity": model.fidelity, "parameter_digest": parameter_digest},
+                    "reflection": "该候选只表达经 Policy 与 Safety 校验的实验意图；尚无求解结果，不把计划当作证据。",
+                    "next_action": "等待审批或进入真实实验",
+                },
+                source="RESEARCH_ORCHESTRATOR",
+            )
         if requires_approval or research["mode"] == "COPILOT":
             decision_id = f"D-{uuid.uuid4().hex[:8].upper()}"
             self.store.create_decision({
@@ -697,6 +870,19 @@ class ResearchService:
             })
             experiment["decision_id"] = decision_id
         else:
+            if research.get("mode") == "AUTONOMOUS":
+                self.store.append_event(
+                    research_id, EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                    f"{experiment_id} 已通过自动 Policy 与 Safety 边界。", experiment_id,
+                    {
+                        "workflow_step": "approval", "status": "completed",
+                        "experiment_ids": [experiment_id],
+                        "evidence_ids": list(model.evidence_ids or []),
+                        "reflection": "该保真度不要求人工审批，但仍已通过 Policy、Safety 与预算校验；放行不等同于结果成功。",
+                        "next_action": "执行真实实验并等待确定性评估",
+                    },
+                    source="POLICY_ENGINE",
+                )
             self.run_experiment(experiment_id)
         return experiment
 
@@ -913,6 +1099,25 @@ class ResearchService:
                                                         "evaluation": analysis["evaluation"]})
                 self.store.append_event(research["id"], EventKind.FEEDBACK.value,
                                         "NEXT DECISION", analysis["feedback"], experiment_id)
+                self.store.append_event(
+                    research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                    f"{experiment_id} 已依据真实求解结果完成阶段反思。",
+                    experiment_id,
+                    {
+                        "workflow_step": "experiments", "status": status.lower(),
+                        "experiment_ids": [experiment_id],
+                        "evidence_ids": list(experiment.get("evidence_ids") or []) + [experiment_id],
+                        "result": {
+                            "compliance": result.get("objective", {}).get("compliance"),
+                            "volume_fraction": result.get("constraints", {}).get("volume_fraction"),
+                            "gray_ratio": result.get("quality", {}).get("gray_ratio"),
+                            "connected_components": result.get("quality", {}).get("connected_components"),
+                        },
+                        "reflection": analysis["analysis"],
+                        "next_action": analysis["feedback"],
+                    },
+                    source="DETERMINISTIC_EVALUATOR",
+                )
             except Exception as exc:
                 failure_type = ("MATLAB_INFRASTRUCTURE" if isinstance(exc, MatlabMcpError)
                                 or experiment["backend"] == "matlab" else "INFRASTRUCTURE")
@@ -932,8 +1137,21 @@ class ResearchService:
                                          "matlab_health": (self.matlab_worker.health()
                                                            if experiment["backend"] == "matlab" else None),
                                          "failed_at": utc_now()})
+                self.store.append_event(
+                    research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                    f"{experiment_id} 失败，已保留真实失败原因并纳入方案比较。",
+                    experiment_id,
+                    {
+                        "workflow_step": "experiments", "status": "failed",
+                        "experiment_ids": [experiment_id], "evidence_ids": [experiment_id],
+                        "result": {"failure_type": failure_type, "reason": str(exc)},
+                        "reflection": "该方案没有产生可用于结论的真实指标，不以模拟值补齐。",
+                        "next_action": "比较其余真实方案并诊断失败原因",
+                    },
+                    source="DETERMINISTIC_EVALUATOR",
+                )
             running = [e for e in self.store.list_experiments(research["id"])
-                       if e["status"] in {"WAITING", "RUNNING"} and e["run_id"]]
+                       if e["status"] in {"WAITING", "RUNNING"}]
             if not running:
                 current = self._require_research(research["id"])
                 next_round = int(current.get("current_round", 0)) + 1
@@ -972,22 +1190,111 @@ class ResearchService:
                             research["id"], "REPORT_WRITER",
                             "Review the final deterministic report for evidence attribution and missing values.")
                 elif current["mode"] == "AUTONOMOUS":
-                    completed_items = [item for item in self.store.list_experiments(research["id"])
-                                       if item.get("completed_at")]
+                    all_experiments = self.store.list_experiments(research["id"])
+                    batch_round = max(
+                        [int(item.get("round_number") or 0) for item in all_experiments]
+                        + [int(current.get("current_round") or 0) + 1]
+                    )
+                    completed_items = [item for item in all_experiments
+                                       if item.get("completed_at")
+                                       and int(item.get("round_number") or 0) == batch_round]
                     completed_ids = [item["id"] for item in completed_items]
                     self.store.append_event(research["id"], EventKind.SYSTEM.value,
                                             "EXPERIMENT_BATCH_COMPLETED",
-                                            f"Completed evidence batch: {completed_ids[-6:]}")
+                                            f"Completed evidence batch: {completed_ids}")
+                    refreshed = self.get_research(research["id"])
+                    successful_items = [
+                        item for item in completed_items
+                        if item.get("status") == "SUCCESS"
+                        and isinstance((item.get("result") or {}).get("objective", {}).get("compliance"), (int, float))
+                    ]
+                    best = min(
+                        successful_items,
+                        key=lambda item: item["result"]["objective"]["compliance"],
+                        default=None,
+                    ) or {}
+                    failed_items = [item for item in completed_items if item.get("status") in {"FAILED", "CANCELLED"}]
+                    weak_points: list[str] = []
+                    if best:
+                        quality = (best.get("result") or {}).get("quality", {})
+                        if quality.get("connected_components") not in {None, 1}:
+                            weak_points.append("连通分量约束未满足")
+                        gray = quality.get("gray_ratio")
+                        if isinstance(gray, (int, float)) and gray > float(refreshed.get("constraints", {}).get("gray_max", 0.05)):
+                            weak_points.append("灰度率仍高于研究约束")
+                    if failed_items:
+                        weak_points.append(f"{len(failed_items)} 个候选未产生可用于结论的真实成功结果")
+                    comparison_reflection = "失败或取消方案只保留状态与原因，不以模拟指标补齐。"
+                    self.store.append_event(
+                        research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                        "已完成本轮真实结果比较。",
+                        payload={
+                            "workflow_step": "comparison", "status": "completed",
+                            "experiment_ids": completed_ids, "evidence_ids": completed_ids,
+                            "result": {
+                                "successful": len(successful_items), "failed_or_cancelled": len(failed_items),
+                            },
+                            "reflection": comparison_reflection,
+                            "next_action": "从真实成功结果中选择当前最优路线",
+                        },
+                        source="DETERMINISTIC_EVALUATOR",
+                    )
+                    self.store.append_event(
+                        research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                        "已按真实柔度选择当前最优方案。" if best else "本轮没有可选的真实成功方案。",
+                        payload={
+                            "workflow_step": "selection", "status": "completed",
+                            "experiment_ids": completed_ids,
+                            "evidence_ids": [best["id"]] if best else completed_ids,
+                            "result": {
+                                "best_experiment_id": best.get("id"),
+                                "best_compliance": (best.get("result") or {}).get("objective", {}).get("compliance"),
+                            },
+                            "reflection": "优选只使用同一 Research 中本轮持久化的真实成功结果；无成功结果时不指定最优方案。",
+                            "next_action": "诊断最优方案弱点与失败候选原因",
+                        },
+                        source="DETERMINISTIC_EVALUATOR",
+                    )
+                    self.store.append_event(
+                        research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                        "已完成本轮问题诊断。",
+                        payload={
+                            "workflow_step": "diagnosis", "status": "completed",
+                            "experiment_ids": completed_ids, "evidence_ids": completed_ids,
+                            "result": {"weak_points": weak_points},
+                            "reflection": "；".join(weak_points) if weak_points else "当前真实最优方案未触发连通性、灰度率或失败候选诊断项。",
+                            "next_action": "基于诊断形成下一轮受控建议",
+                        },
+                        source="DETERMINISTIC_EVALUATOR",
+                    )
+                    self.store.append_event(
+                        research["id"], EventKind.ANALYSIS.value, "WORKFLOW_ROUND_COMPLETED",
+                        "本轮真实实验已完成比较、优选和问题诊断，正在形成下一轮建议。",
+                        payload={
+                            "workflow_step": "next_round", "status": "completed",
+                            "experiment_ids": completed_ids,
+                            "evidence_ids": completed_ids,
+                            "best_experiment_id": best.get("id"),
+                            "result": {
+                                "best_compliance": (best.get("result") or {}).get("objective", {}).get("compliance"),
+                                "successful": len(successful_items),
+                                "failed": len(failed_items),
+                            },
+                            "reflection": "下一轮只依据本轮真实实验、已导入工程基线和已审计诊断提出建议；仍不自动批准或运行。",
+                            "next_action": "由 Agent 基于诊断提出下一轮受控方案，仍需 Policy 与审批",
+                        },
+                        source="RESEARCH_ORCHESTRATOR",
+                    )
                     prompt = (
-                        f"EXPERIMENT_BATCH_COMPLETED: {completed_ids[-6:]}. Read structured results, "
+                        f"EXPERIMENT_BATCH_COMPLETED: {completed_ids}. Read structured results, "
                         "search relevant offline knowledge and inspect solver capabilities. Dispatch the "
                         "HYPOTHESIS Subagent for competing explanations and the EXPERIMENT_PLANNER Subagent "
                         "for proposal review, then choose the next scientific intent. You must call "
                         "policy_compile_intent; do not invent numeric parameters. Submit the complete safe "
                         "controlled batch within budget, or state a termination reason."
                     )
-                    skill = ("failure-diagnosis" if any(item["status"] == "FAILED" and item.get("result")
-                                                        for item in completed_items[-6:])
+                    skill = ("failure-diagnosis" if any(item["status"] in {"FAILED", "CANCELLED"} and item.get("result")
+                                                        for item in completed_items)
                              else "hypothesis-evaluation")
                     threading.Thread(target=self._send_pi_or_fallback,
                                      args=(research["id"], prompt, skill), daemon=True).start()
@@ -1006,6 +1313,12 @@ class ResearchService:
         density = np.asarray(artifacts.get("density"), dtype=float)
         density_path = directory / "density.npy"
         np.save(density_path, density)
+        stress_value = artifacts.get("stress")
+        stress_path = directory / "stress.npy"
+        if stress_value is not None:
+            stress = np.asarray(stress_value, dtype=float)
+            if stress.shape == density.shape and np.isfinite(stress).all():
+                np.save(stress_path, stress)
         history_path = directory / "history.json"
         history_path.write_text(json.dumps(artifacts.get("history", []), default=str), encoding="utf-8")
         solver_path = directory / "solver.json"
@@ -1042,10 +1355,14 @@ class ResearchService:
                           "vtk": str(vtk_path), "topology_image": str(topology_path),
                           "convergence_image": str(convergence_path)})
         parent_ids: list[str] = []
-        for artifact_type, artifact_path in (("DENSITY", density_path), ("HISTORY", history_path),
+        stored_artifacts = [("DENSITY", density_path), ("HISTORY", history_path),
                                              ("SOLVER_EVIDENCE", solver_path), ("VTK", vtk_path),
                                              ("TOPOLOGY_IMAGE", topology_path),
-                                             ("CONVERGENCE_IMAGE", convergence_path)):
+                                             ("CONVERGENCE_IMAGE", convergence_path)]
+        if stress_path.is_file():
+            stored_artifacts.append(("STRESS", stress_path))
+            artifacts["stress_path"] = str(stress_path)
+        for artifact_type, artifact_path in stored_artifacts:
             artifact_id = f"AR-{uuid.uuid4().hex[:12].upper()}"
             self.store.create_artifact({
                 "id": artifact_id, "research_id": research_id, "experiment_id": experiment_id,
@@ -1088,6 +1405,18 @@ class ResearchService:
             self.store.append_event(decision["research_id"], EventKind.HUMAN.value,
                                     "HUMAN APPROVAL", f"Approved {decision['intent']}.",
                                     experiment_id, {"decision_id": decision_id})
+            if experiment_id:
+                self.store.append_event(
+                    decision["research_id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                    f"{experiment_id} 已通过人工审批边界。", experiment_id,
+                    {
+                        "workflow_step": "approval", "status": "completed",
+                        "experiment_ids": [experiment_id], "evidence_ids": [decision_id],
+                        "reflection": "审批只授权执行受控实验，不等同于确认方案有效或结果成功。",
+                        "next_action": "执行真实实验并等待确定性评估",
+                    },
+                    source="HUMAN",
+                )
         if experiment_id:
             self.run_experiment(experiment_id)
         return self._require_decision(decision_id)
@@ -1133,6 +1462,18 @@ class ResearchService:
             self.store.append_event(decision["research_id"], EventKind.HUMAN.value,
                                     "HUMAN REJECTION", f"Rejected {decision['intent']}.",
                                     experiment_id, {"decision_id": decision_id})
+            if experiment_id:
+                self.store.append_event(
+                    decision["research_id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
+                    f"{experiment_id} 未通过人工审批，已作为取消方案保留。", experiment_id,
+                    {
+                        "workflow_step": "approval", "status": "completed",
+                        "experiment_ids": [experiment_id], "evidence_ids": [decision_id],
+                        "reflection": "该方案未执行，因此没有真实 FEM 指标；只保留拒绝事实，不补造结果。",
+                        "next_action": "继续处理其余候选方案",
+                    },
+                    source="HUMAN",
+                )
         return self._require_decision(decision_id)
 
     def execute_command(self, research_id: str, text: str,

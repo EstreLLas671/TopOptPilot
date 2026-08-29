@@ -6,7 +6,7 @@ from topoptpilot.api.fastapi_app import app
 
 from idesktop_v2 import __version__
 from idesktop_v2.assistant.router import router as engineering_assistant_router
-from idesktop_v2.conversations import router as conversation_router
+from idesktop_v2.conversations import cleanup_empty_test_conversations_once, router as conversation_router
 from idesktop_v2.engineering.router import router as engineering_router
 from idesktop_v2.research_router import router as research_artifact_router, settings_router as research_settings_router
 from idesktop_v2.engineering.environment_discovery import initialize_engineering_discovery
@@ -18,6 +18,7 @@ _topoptpilot_lifespan = app.router.lifespan_context
 @asynccontextmanager
 async def _idesktop_lifespan(application):
     initialize_engineering_discovery()
+    cleanup_empty_test_conversations_once()
     async with _topoptpilot_lifespan(application):
         yield
 

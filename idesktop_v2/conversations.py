@@ -21,6 +21,10 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 _ALLOWED_MEDIA = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/svg+xml": ".svg", "application/pdf": ".pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx", "text/plain": ".txt", "text/csv": ".csv"}
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _lock = threading.RLock()
+_EMPTY_TEST_TITLE = re.compile(
+    r"(?:测试|演示|样例|(?<![A-Za-z0-9])(?:test|demo)(?![A-Za-z0-9]))",
+    re.IGNORECASE,
+)
 
 
 def _root() -> Path:
@@ -135,6 +139,38 @@ def create_conversation(request: ConversationCreate) -> dict[str, Any]:
         items.append(item)
         _save_index(items)
     return item
+
+
+def cleanup_empty_test_conversations_once() -> list[str]:
+    """Remove only legacy zero-message test/demo conversations once per data directory."""
+    root = _root()
+    marker = root / ".cleanup-empty-test-v1"
+    if marker.exists():
+        return []
+    removed: list[str] = []
+    with _lock:
+        retained: list[dict[str, Any]] = []
+        for item in _index():
+            conversation_id = str(item.get("id") or "")
+            title = str(item.get("title") or "")
+            if not _EMPTY_TEST_TITLE.search(title):
+                retained.append(item)
+                continue
+            try:
+                if read_messages(conversation_id):
+                    retained.append(item)
+                    continue
+                directory = _conversation_dir(conversation_id)
+                for path in directory.iterdir():
+                    if path.is_file():
+                        path.unlink()
+                directory.rmdir()
+                removed.append(conversation_id)
+            except (KeyError, OSError):
+                retained.append(item)
+        _save_index(retained)
+        marker.write_text(json.dumps({"version": 1, "removed": removed}, ensure_ascii=False), encoding="utf-8")
+    return removed
 
 
 def append_message(conversation_id: str, request: MessageCreate) -> dict[str, Any]:

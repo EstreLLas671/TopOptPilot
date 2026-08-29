@@ -230,7 +230,7 @@ export default function EngineeringIterationView({ run, events, maxIterations, c
           <small>第 {selected?.iteration} 轮 · {selected?.snapshot?.dimension.toUpperCase()} · MATLAB float32/F-order 制品 · SHA-256 {(displayMode === "stress" ? selected?.snapshot?.stressSha256 : selected?.snapshot?.densitySha256)?.slice(0, 12) || "—"}</small>
         </div> : null}
         {(renderUrl || density.length || isActive) ? <div className="iteration-image-progress">
-          <div className="iteration-progress-meta"><span>第 {currentIteration ?? 0} / {maxIterations} 轮 · 柔度 {selected?.compliance?.toFixed?.(4) ?? "—"} · 体积分数 {selected?.volumeFraction?.toFixed?.(4) ?? "—"} · 灰度率 {selected?.grayRatio?.toFixed?.(4) ?? run?.metrics.grayRatio?.toFixed?.(4) ?? "—"}</span><strong>{progressPercent === null ? "处理中" : `${Math.round(progressPercent)}%`}</strong></div>
+          <div className="iteration-progress-meta"><span>第 {currentIteration ?? 0} / {maxIterations} 轮</span></div>
           <div className={"iteration-progress-track" + (progressPercent === null ? " indeterminate" : "")} role="progressbar" aria-label="真实优化进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent === null ? undefined : Math.round(progressPercent)}>
             <i style={progressPercent === null ? undefined : { width: `${progressPercent}%` }}/>
           </div>

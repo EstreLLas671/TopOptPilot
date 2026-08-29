@@ -25,10 +25,31 @@ export interface Decision { id: string; status: string; reason: string; risk: st
 export interface Research {
   id: string; name: string; goal: string; hypothesis?: string | null; locale: Locale; status: string; mode: string;
   constraints: Record<string, any>; archived_at?: string | null; geometry?:Record<string,any>; material?:Record<string,any>; loads?:Record<string,any>[]; boundary_conditions?:Record<string,any>;
-  contract?:Record<string,any>; budgets?:Record<string,number>; current_round?:number; budget_total: number; budget_used: number;
+  contract?:Record<string,any>; defaults?:Record<string,any>; budgets?:Record<string,number>; current_round?:number; budget_total: number; budget_used: number;
   experiments: Experiment[]; events: EventRecord[]; decisions: Decision[];
   subagent_tasks?:SubagentTask[]; hypotheses?:Hypothesis[]; artifact_lineage?:ArtifactLineage[];
   best_experiment?: Experiment; termination_reason?: string;
+  workflow?: ResearchWorkflowProgress;
+}
+export type ResearchWorkflowStage = "idle" | "context" | "planning" | "approval" | "experiments" | "comparison" | "selection" | "diagnosis" | "next_round" | "completed" | "failed";
+export interface ResearchWorkflowStep {
+  id:string; label:string; status:"pending"|"active"|"completed"|"failed";
+  summary?:string; result?:string; reflection?:string; evidenceIds:string[]; experimentIds:string[];
+  nextAction?:string; completedAt?:string;
+}
+export interface ResearchWorkflowProgress {
+  round:number; stage:ResearchWorkflowStage; percent:number; steps:ResearchWorkflowStep[];
+  budgetUsed:number; budgetTotal:number;
+}
+export interface ImportedEngineeringBaseline {
+  schemeId:string; name:string; runId:string; configDigest:string;
+  metrics:Record<string,number|null>; provenance:Record<string,string>; importedFrom:"engineering-comparison-scheme";
+}
+export interface ResearchVisualizationManifest {
+  researchId:string; experimentId:string; dimension:"2d"|"3d"; shape:[number,number,number];
+  encoding:"float32-le"; order:"F"; hasStress:boolean;
+  history:Array<Record<string,number>>; metrics:{compliance?:number|null;volumeFraction?:number|null;grayRatio?:number|null;connectedComponents?:number|null};
+  config:Record<string,unknown>; backend:string; fidelity:string; status:string; evidenceIds:string[]; resultSource?:string;
 }
 export interface SubagentTask { id:string; role:string; objective:string; status:string; result?:{text?:string}; error?:string; proposal_id?:string; evidence_ids?:string[] }
 export interface Hypothesis { id:string; round_number:number; statement:string; competing?:string[]; evidence_ids?:string[]; status:string }

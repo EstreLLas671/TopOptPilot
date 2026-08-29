@@ -66,9 +66,9 @@ describe("EngineeringChatPanel", () => {
     const onError = vi.fn();
     render(<EngineeringChatPanel projectId="project-1" selectedFile={selectedFile} run={null} config={DEFAULT_OPTIMIZATION_CONFIG} onError={onError} />);
     const textarea = await screen.findByPlaceholderText("询问当前工程、参数或结果…");
-    await waitFor(() => expect(apiMocks.conversationMessages).toHaveBeenCalledWith("conversation-1"));
-    const composer = textarea.closest("footer");
-    expect(composer).toBeTruthy();
+    expect(apiMocks.conversationCreate).not.toHaveBeenCalled();
+    const chatRegion = textarea.closest(".engineering-chat-panel");
+    expect(chatRegion).toBeTruthy();
     const file = new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "structure.png", { type: "" });
     const dataTransfer = {
       types: ["Files"],
@@ -77,11 +77,12 @@ describe("EngineeringChatPanel", () => {
       dropEffect: "none",
     };
 
-    fireEvent.dragEnter(composer!, { dataTransfer });
+    fireEvent.dragEnter(chatRegion!, { dataTransfer });
     expect(screen.getByText("松开以上传附件")).toBeTruthy();
-    fireEvent.drop(composer!, { dataTransfer });
+    fireEvent.drop(chatRegion!, { dataTransfer });
 
     await waitFor(() => expect(apiMocks.conversationAttachment).toHaveBeenCalledTimes(1));
+    expect(apiMocks.conversationCreate).toHaveBeenCalledTimes(1);
     expect(apiMocks.conversationAttachment.mock.calls[0][0]).toBe("conversation-1");
     expect(apiMocks.conversationAttachment.mock.calls[0][1]).toMatchObject({ fileName: "structure.png", mediaType: "image/png" });
     expect(await screen.findByAltText("structure.png")).toBeTruthy();

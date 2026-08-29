@@ -554,7 +554,7 @@ export default function EngineeringWorkspace({
     <ResizableWorkspaceLayout mode="engineering"
     activitySignal={bottomActivitySignal}
     completionSignal={completionSignal}
-    leftHeader={<b>工程工作区</b>}
+    leftHeader={<b className="workspace-panel-heading">工程工作区</b>}
     leftRail={<div className="left-rail-icons"><button aria-label="工作区与项目文件" title="工作区与项目文件" onClick={() => setRightTab("workspace")}><FolderOpen size={15}/></button><button aria-label="历史对话" title="历史对话" onClick={() => setRightTab("history")}><MessageCircle size={15}/></button></div>}
     left={<>
       <div className="v2-pane-title engineering-left-title"><div className="pane-actions"><button role="tab" aria-selected={rightTab === "workspace"} className={rightTab === "workspace" ? "active" : ""} onClick={() => setRightTab("workspace")}>工作区</button><button role="tab" aria-selected={rightTab === "history"} className={rightTab === "history" ? "active" : ""} onClick={() => setRightTab("history")}>历史对话</button></div></div>
@@ -565,7 +565,7 @@ export default function EngineeringWorkspace({
         <div className="project-root-label" title={projectRoot}>{projectRoot || "未打开项目文件夹"}</div>
         <ProjectTree entries={visibleFiles} selected={selectedFile} disabled={patchApplyBusy} onOpen={entry => void openFile(entry)}/>
       </section> : <section className="engineering-history-panel" aria-label="历史对话">
-        <header><div><h4>历史对话</h4></div><button aria-label="新建历史对话" title="新建对话" onClick={() => void createHistoryConversation()}><Plus size={14}/></button></header>
+        <header><div><h4>历史对话</h4></div><button className="theme-icon-button" aria-label="新建历史对话" title="新建对话" onClick={() => void createHistoryConversation()}><Plus size={14}/></button></header>
         <div className="engineering-history-list">{conversationHistory.map(item => <div className={"engineering-history-row " + (activeConversationId === item.id ? "active" : "")} key={item.id}><button onClick={() => { setRequestedConversationId(item.id); setViewTab("chat"); }}><MessageCircle size={13}/><span>{item.title}<small>{relativeConversationTime(item.updatedAt, clockNow)}</small></span></button><button aria-label={"重命名对话 " + item.title} title="重命名对话" onClick={() => void renameHistoryConversation(item)}><Pencil size={12}/></button><button aria-label={"删除对话 " + item.title} title="删除对话" onClick={() => void deleteHistoryConversation(item.id)}>×</button></div>)}</div>
         {!conversationHistory.length ? <div className="v2-empty inspector-empty">暂无历史对话</div> : null}
       </section>}

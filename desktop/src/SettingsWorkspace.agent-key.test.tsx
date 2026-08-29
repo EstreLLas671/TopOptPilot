@@ -37,6 +37,8 @@ describe("SettingsWorkspace Agent credential controls", () => {
     apiMocks.setAgentKey.mockResolvedValue({ configured: true, source: "credential_manager" });
     apiMocks.deleteAgentKey.mockResolvedValue({ deleted: true, source: "not_configured" });
     apiMocks.settings.mockResolvedValue({ ...settings, api_key_status: "credential_manager" });
+    apiMocks.saveSettings.mockImplementation(async value => value);
+    apiMocks.testAgent.mockResolvedValue({ ok: true, status: "verified", model: "qwen3.7-plus" });
   });
 
   it("saves and removes the API key through dedicated credential endpoints", async () => {
@@ -54,5 +56,26 @@ describe("SettingsWorkspace Agent credential controls", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "删除已保存密钥" }));
     expect(apiMocks.deleteAgentKey).toHaveBeenCalledOnce();
+  });
+
+  it("applies general settings only through the local Apply button", async () => {
+    render(<SettingsWorkspace settings={settings} onClose={vi.fn()} onSaved={vi.fn()}/>);
+    await userEvent.selectOptions(screen.getByLabelText("主题"), "dark");
+    await userEvent.selectOptions(screen.getByLabelText("界面密度"), "compact");
+    expect(apiMocks.saveSettings).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "应用" }));
+    expect(apiMocks.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ theme: "dark", ui_density: "compact" }));
+  });
+
+  it("keeps unapplied general drafts out of the top save and scopes connection output to Agent", async () => {
+    render(<SettingsWorkspace settings={settings} onClose={vi.fn()} onSaved={vi.fn()}/>);
+    await userEvent.selectOptions(screen.getByLabelText("主题"), "dark");
+    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    expect(apiMocks.saveSettings).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "light" }));
+    await userEvent.click(screen.getByRole("button", { name: "Agent 与模型" }));
+    await userEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText('{"ok":true,"status":"verified","model":"qwen3.7-plus"}')).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "通用与主题" }));
+    expect(screen.queryByText('{"ok":true,"status":"verified","model":"qwen3.7-plus"}')).toBeNull();
   });
 });

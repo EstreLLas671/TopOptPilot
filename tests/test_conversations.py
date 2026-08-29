@@ -4,7 +4,15 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from idesktop_v2.api.app import app
-from idesktop_v2.conversations import attachment_for_ai
+from idesktop_v2.conversations import (
+    ConversationCreate,
+    MessageCreate,
+    append_message,
+    attachment_for_ai,
+    cleanup_empty_test_conversations_once,
+    create_conversation,
+    list_conversations,
+)
 
 
 PNG_1X1 = base64.b64encode(
@@ -104,3 +112,21 @@ def test_document_attachments_are_extracted_for_ai_only_after_upload(monkeypatch
         extracted = attachment_for_ai(response.json()["id"])
         assert extracted["kind"] == "document"
         assert expected in extracted["content"]
+
+
+def test_cleanup_only_removes_empty_explicit_test_conversations_once(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    empty_test = create_conversation(ConversationCreate(scope="engineering", ownerId="P1", title="测试空白"))
+    empty_demo = create_conversation(ConversationCreate(scope="research", ownerId="R1", title="demo empty"))
+    populated_test = create_conversation(ConversationCreate(scope="research", ownerId="R1", title="测试但有消息"))
+    ordinary = create_conversation(ConversationCreate(scope="engineering", ownerId="P1", title="普通空白"))
+    embedded_word = create_conversation(ConversationCreate(scope="engineering", ownerId="P1", title="contest analysis"))
+    append_message(populated_test["id"], MessageCreate(role="user", content="保留这条真实消息"))
+
+    removed = cleanup_empty_test_conversations_once()
+    assert set(removed) == {empty_test["id"], empty_demo["id"]}
+    remaining = {item["id"] for item in list_conversations()}
+    assert populated_test["id"] in remaining
+    assert ordinary["id"] in remaining
+    assert embedded_word["id"] in remaining
+    assert cleanup_empty_test_conversations_once() == []

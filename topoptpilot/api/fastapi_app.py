@@ -167,7 +167,7 @@ async def stream_research(websocket: WebSocket, research_id: str):
         await websocket.close(code=4404)
         return
     await websocket.accept()
-    after, last_stream = 0, None
+    after, last_stream, last_workflow = 0, None, None
     try:
         while True:
             events = [item for item in service.store.list_events(research_id)
@@ -185,6 +185,10 @@ async def stream_research(websocket: WebSocket, research_id: str):
             running = [item for item in experiments if item["status"] in {"WAITING", "RUNNING"}]
             if running:
                 await websocket.send_json({"type": "progress", "experiments": running})
+            workflow = service.get_research(research_id).get("workflow")
+            if workflow != last_workflow:
+                last_workflow = workflow
+                await websocket.send_json({"type": "workflow_progress", "workflow": workflow})
             await asyncio.sleep(.5)
     except (WebSocketDisconnect, RuntimeError):
         return

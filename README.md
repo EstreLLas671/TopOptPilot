@@ -34,7 +34,7 @@ TopOptPilot 是面向二维/三维结构拓扑优化的 Windows 桌面客户端�
 在本仓库 [Releases](https://github.com/EstreLLas671/TopOptPilot/releases) 下载：
 
 ```text
-TopOptPilot_2.0.1_x64-setup.exe
+TopOptPilot_2.0.2_x64-setup.exe
 ```
 
 系统要求：
@@ -132,9 +132,9 @@ desktop/src-tauri/target/release/bundle/nsis/
 
 ## 发布
 
-当前桌面版本：`2.0.1`。
+当前桌面版本：`2.0.2`。
 
-详细发布说明见 [docs/RELEASE_2.0.1.md](docs/RELEASE_2.0.1.md)。
+详细发布说明见 [docs/RELEASE_2.0.2.md](docs/RELEASE_2.0.2.md)。
 
 ## 许可证与第三方组件
 

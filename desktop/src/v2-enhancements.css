@@ -785,3 +785,56 @@ html[data-theme=dark] .chat-attachment-preview figure { border-color: #405263; b
   .scheme-dialog-actions label{max-width:190px}
 }
 @media(max-width:520px){.result-summary{grid-template-columns:1fr}}
+
+/* TopOptPilot 2.0.2 shared header and chat action alignment. */
+.workspace-panel-heading{color:var(--theme-text,#536a84);font:inherit;font-size:inherit;font-weight:700;letter-spacing:inherit}
+.theme-icon-button,.engineering-history-panel>header .theme-icon-button{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid var(--theme-border,#d7e2ee);border-radius:7px;background:var(--theme-elevated,#fff);color:var(--theme-muted-text,#52759a);cursor:pointer}
+.theme-icon-button:hover,.theme-icon-button:focus-visible{border-color:var(--theme-accent,#2e73ca);background:color-mix(in srgb,var(--theme-accent,#2e73ca) 12%,var(--theme-surface,#fff));color:var(--theme-accent,#2e73ca);outline:none}
+.chat-composer>div,.research-chat-composer>div{align-items:center!important}
+.chat-composer button.chat-composer-action,.research-chat-composer button.chat-composer-action{display:inline-flex!important;align-items:center!important;justify-content:center!important;flex:0 0 32px;width:32px;height:32px;padding:0;line-height:1}
+.chat-composer-action svg,.chat-composer-action .spin{display:block;margin:0}
+.engineering-chat-panel>.chat-drop-overlay,.research-chat-main>.chat-drop-overlay{inset:0!important;border-radius:0!important}
+.chat-message-end{flex:0 0 1px;width:100%;height:1px}
+
+.research-result-panel,.research-result-panel.compact{flex:0 0 auto;margin:8px 0 12px;max-height:none;overflow:visible;padding:12px;border:1px solid var(--theme-border,#dce5f0);border-radius:9px;background:var(--theme-surface,#fff)}
+.research-result-panel>header{display:flex;justify-content:space-between;gap:12px;margin-bottom:10px;color:var(--theme-text,#536a84)}
+.research-result-panel>header small{color:var(--theme-muted-text,#8193a7)}
+.research-workflow-progress{display:grid;gap:5px;padding:8px max(16px,8%);border-bottom:1px solid var(--theme-border,#e1e9f2);background:var(--theme-surface,#fff)}
+.research-workflow-progress header{display:flex;align-items:center;justify-content:space-between;color:var(--theme-text,#4b6179);font-size:11px}
+.research-workflow-progress small{color:var(--theme-muted-text,#7c8fa3);font-size:10px}
+.research-workflow-track{height:7px;overflow:hidden;border-radius:999px;background:color-mix(in srgb,var(--theme-border,#dce5f0) 70%,transparent)}
+.research-workflow-track i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--theme-accent,#2e73ca),#8868d9);transition:width .25s ease}
+.research-workflow-steps{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(245px,1fr);gap:8px;min-height:0;padding:8px;overflow:auto}
+.research-workflow-step{display:grid;align-content:start;gap:5px;padding:8px 9px;border:1px solid var(--theme-border,#dce5f0);border-radius:7px;background:var(--theme-surface,#fff);color:var(--theme-muted-text,#72869a);font-size:10px}
+.research-workflow-step>header{display:flex;align-items:center;gap:6px}.research-workflow-step>header small{margin-left:auto}
+.workflow-step-state{width:8px;height:8px;border-radius:50%;background:var(--theme-border,#a8b5c3)}
+.research-workflow-step.active .workflow-step-state{background:var(--theme-accent,#2e73ca)}
+.research-workflow-step.completed .workflow-step-state{background:var(--theme-success,#43a36e)}
+.research-workflow-step.failed .workflow-step-state{background:var(--theme-danger,#c45a5a)}
+.research-workflow-step p{display:grid;grid-template-columns:42px 1fr;gap:5px;margin:0;line-height:1.4;overflow-wrap:anywhere}.research-workflow-step p strong{color:var(--theme-text,#536a84)}
+.research-progress-empty{display:grid;place-items:center;color:var(--theme-muted-text,#8193a7)}
+.engineering-scheme-import-dialog{width:min(620px,92vw);max-height:82vh}
+.engineering-scheme-import-list{display:grid;gap:7px;max-height:52vh;overflow:auto}
+.engineering-scheme-import-list label{display:flex;align-items:flex-start;gap:9px;padding:10px;border:1px solid var(--theme-border,#dce5f0);border-radius:8px;background:var(--theme-surface,#fff);cursor:pointer}
+.engineering-scheme-import-list label.active{border-color:var(--theme-accent,#2e73ca)}
+.engineering-scheme-import-list label span{display:grid;gap:4px;min-width:0}.engineering-scheme-import-list small{color:var(--theme-muted-text,#76899d);overflow-wrap:anywhere}
+.engineering-scheme-import-dialog>footer{display:flex;justify-content:flex-end;gap:8px}.engineering-scheme-import-dialog>footer button{width:auto;min-width:104px}
+.scheme-import-button{background:var(--theme-elevated,#edf3f9)!important;color:var(--theme-accent,#2e73ca)!important;border:1px solid var(--theme-border,#d5e0eb)!important}
+.research-final-result-button{width:100%}.experiment-row-shell{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;border-bottom:1px solid var(--theme-border,#eef2f7)}
+.experiment-row-shell .experiment-row{border-bottom:0}.experiment-detail-button{padding:5px 7px;border:1px solid var(--theme-border,#d5e0eb);border-radius:5px;background:var(--theme-elevated,#f7faff);color:var(--theme-accent,#2e73ca);font-size:9px;cursor:pointer}.experiment-detail-button:disabled{opacity:.45;cursor:not-allowed}
+
+.research-result-dialog-backdrop{z-index:120}
+.research-result-dialog{display:flex;flex-direction:column;width:min(1180px,94vw);height:min(820px,92vh);min-height:520px;border:1px solid var(--theme-border,#cfdbe7);border-radius:12px;background:var(--theme-surface,#fff);color:var(--theme-text,#344b63);box-shadow:0 24px 80px #0e22384d;overflow:hidden}
+.research-result-dialog>header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:0 0 auto;padding:13px 15px;border-bottom:1px solid var(--theme-border,#dce5f0);background:var(--theme-elevated,#f8fbfe)}
+.research-result-dialog>header>div{display:grid;gap:3px}.research-result-dialog>header small{color:var(--theme-muted-text,#778b9f)}
+.research-result-dialog-body{display:grid;grid-template-columns:minmax(230px,290px) minmax(0,1fr);flex:1;min-height:0}
+.research-result-dialog-body>aside{min-height:0;padding:14px;overflow:auto;border-right:1px solid var(--theme-border,#dce5f0)}
+.research-result-dialog-body h3{margin:0 0 9px;font-size:12px}.research-result-dialog-body dl{display:grid;margin:0 0 18px}.research-result-dialog-body dl>div{display:grid;gap:3px;padding:7px 0;border-bottom:1px solid var(--theme-border,#e8eef4)}.research-result-dialog-body dt{color:var(--theme-muted-text,#71859a);font-size:10px}.research-result-dialog-body dd{margin:0;overflow-wrap:anywhere;font-size:12px}
+.result-evidence-ids{overflow-wrap:anywhere;color:var(--theme-muted-text,#71859a);font-size:9px}
+.research-result-dialog-body>main{display:flex;min-width:0;min-height:0;flex-direction:column;gap:9px;padding:12px;overflow:auto}
+.research-result-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.research-result-metrics>div{padding:8px;border:1px solid var(--theme-border,#dce5f0);border-radius:7px;background:var(--theme-elevated,#f8fafc)}.research-result-metrics small,.research-result-metrics b{display:block}.research-result-metrics small{color:var(--theme-muted-text,#7a8da0);font-size:9px}.research-result-metrics b{margin-top:3px}
+.result-field-tabs{display:flex;gap:5px}.result-field-tabs button{padding:6px 10px;border:1px solid var(--theme-border,#d7e1eb);border-radius:6px;background:var(--theme-surface,#fff);color:var(--theme-muted-text,#6d8196);cursor:pointer}.result-field-tabs button.active{border-color:var(--theme-accent,#2e73ca);color:var(--theme-accent,#2e73ca)}
+.research-result-visualization{flex:1;min-height:330px;border:1px solid var(--theme-border,#dce5f0);border-radius:8px;overflow:hidden}.research-result-visualization>.interactive-volume{height:100%}.research-result-visualization>.density-map{height:100%;min-height:330px}
+.research-result-convergence{flex:0 0 180px;padding:10px;border:1px solid var(--theme-border,#dce5f0);border-radius:8px}.research-result-convergence h4{margin:0 0 5px}.research-result-convergence .convergence-chart{height:135px}
+.research-result-loading{display:grid;flex:1;place-content:center;justify-items:center;gap:8px}
+@media(max-width:920px){.research-result-dialog-body{grid-template-columns:210px minmax(0,1fr)}.research-result-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.research-result-visualization{min-height:280px}}

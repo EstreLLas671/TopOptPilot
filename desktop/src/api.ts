@@ -50,6 +50,13 @@ async function download(path:string,filename:string):Promise<void>{
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
+async function requestBuffer(path:string):Promise<ArrayBuffer>{
+  await initializeBackend();
+  const response=await fetch(base()+path,{headers:{"X-TopOptPilot-Token":backend!.token}});
+  if(!response.ok)throw new Error((await response.json().catch(()=>({}))).detail||response.statusText);
+  return response.arrayBuffer();
+}
+
 export const api = {
   projectPickFolder: () => invoke<string | null>("project_pick_folder"),
   readDroppedImages: (paths: string[]) => invoke<import("./types").DroppedImageData[]>("read_dropped_images", { paths }),
@@ -88,6 +95,9 @@ export const api = {
   researchPareto: (id: string) => request<Array<Record<string,unknown>>>(`/api/research/${id}/pareto`),
   researchCompare: (id: string, a: string, b: string) => request<Record<string,unknown>>(`/api/research/${id}/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
   researchFromEngineeringRun: (runId: string, data: object) => request<Research>(`/api/research/from-engineering-run/${encodeURIComponent(runId)}`, { method: "POST", body: JSON.stringify(data) }),
+  researchImportEngineeringScheme: (researchId: string, schemeId: string) => request<{research:Research;optimizationConfig:import("./optimization-config").OptimizationConfig;baseline:import("./types").ImportedEngineeringBaseline}>(`/api/research/${encodeURIComponent(researchId)}/engineering-baselines`, { method: "POST", body: JSON.stringify({ schemeId }) }),
+  researchVisualization: (researchId:string, experimentId:string) => request<import("./types").ResearchVisualizationManifest>(`/api/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization`),
+  researchVisualizationField: (researchId:string, experimentId:string, field:"density"|"stress") => requestBuffer(`/api/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization/${field}`),
   compare: (id:string,a:string,b:string) => request<Record<string,unknown>>(`/api/research/${id}/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
   createResearch: (data: object) => request<Research>("/api/research", { method: "POST", body: JSON.stringify(data) }),
   previewGuide: (text:string,locale:Locale) => request<Record<string,any>>("/api/guide", {method:"POST",body:JSON.stringify({text,locale})}),

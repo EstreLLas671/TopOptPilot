@@ -266,6 +266,19 @@ html[data-theme="dark"] .research-result-panel {
   border-color: var(--theme-border) !important;
 }
 
+html[data-theme="dark"] .engineering-settings-card > header button {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-muted-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+html[data-theme="dark"] .engineering-settings-card > header button:hover,
+html[data-theme="dark"] .engineering-settings-card > header button:focus-visible {
+  background: color-mix(in srgb, var(--theme-accent) 18%, var(--theme-elevated)) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-accent) !important;
+}
+
 html[data-theme="dark"] .chat-message p,
 html[data-theme="dark"] .chat-empty b,
 html[data-theme="dark"] .chat-empty span,
