@@ -28,10 +28,10 @@ _EMPTY_TEST_TITLE = re.compile(
 
 
 def _root() -> Path:
-    configured = os.environ.get("IDESKTOP_V2_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
+    configured = os.environ.get("TOPOPTPILOT_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
     base = Path(configured).expanduser().resolve() if configured else Path(
         os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")
-    ) / "iDeskTopV2"
+    ) / "TopOptPilot"
     value = base / "conversations"
     value.mkdir(parents=True, exist_ok=True)
     (value / "items").mkdir(exist_ok=True)

@@ -27,7 +27,7 @@ def _write_standard_resources(root) -> None:
 def test_desktop_gate_reports_topoptpilot_executable_and_installer_paths(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
     executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.2_x64-setup.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.3_x64-setup.exe"
     executable.parent.mkdir(parents=True)
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")
@@ -38,7 +38,7 @@ def test_desktop_gate_reports_topoptpilot_executable_and_installer_paths(monkeyp
 
     assert result["pass"] is True
     assert result["executable"].endswith("topoptpilot.exe")
-    assert result["installer"].endswith("TopOptPilot_2.0.2_x64-setup.exe")
+    assert result["installer"].endswith("TopOptPilot_2.0.3_x64-setup.exe")
 def test_cases_gate_requires_real_matlab_mcp_f3() -> None:
     cases = {
         "A": {"metrics": {"best_feasible_objective": 1.0}},
@@ -103,7 +103,7 @@ def test_source_gates_match_v2_lanes_and_grounded_reports() -> None:
 def test_desktop_gate_rejects_missing_standard_resources_and_runtime_payload(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
     executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.2_x64-setup.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.3_x64-setup.exe"
     executable.parent.mkdir(parents=True)
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")

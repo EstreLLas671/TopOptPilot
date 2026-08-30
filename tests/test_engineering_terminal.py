@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from idesktop_v2.engineering.terminal import MAX_COMMAND_BYTES, TerminalManager
+from topoptpilot_desktop.engineering.terminal import MAX_COMMAND_BYTES, TerminalManager
 
 
 def test_terminal_session_queues_utf8_command_atomically(tmp_path) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from idesktop_v2.engineering.artifact_index import discover_artifact_files, media_type_for
+from topoptpilot_desktop.engineering.artifact_index import discover_artifact_files, media_type_for
 
 
 def test_artifact_index_recurses_and_separates_snapshots(tmp_path: Path) -> None:
@@ -22,4 +22,4 @@ def test_artifact_index_recurses_and_separates_snapshots(tmp_path: Path) -> None
 def test_artifact_index_assigns_stable_media_types() -> None:
     assert media_type_for(Path("result.json")) == "application/json"
     assert media_type_for(Path("density.csv")) == "text/csv"
-    assert media_type_for(Path("final_density.bin")) == "application/vnd.idesktop.float32"
+    assert media_type_for(Path("final_density.bin")) == "application/vnd.topoptpilot.float32"

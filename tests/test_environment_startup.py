@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 def test_sidecar_lifespan_initializes_engineering_environment(monkeypatch) -> None:
-    import idesktop_v2.api.app as app_module
+    import topoptpilot_desktop.api.app as app_module
 
     calls = 0
 
@@ -20,7 +20,7 @@ def test_sidecar_lifespan_initializes_engineering_environment(monkeypatch) -> No
     assert calls == 1
 
 def test_matlab_inventory_is_initialized_once_then_explicitly_refreshed() -> None:
-    from idesktop_v2.engineering.environment_discovery import MatlabInventory
+    from topoptpilot_desktop.engineering.environment_discovery import MatlabInventory
 
     calls = 0
 

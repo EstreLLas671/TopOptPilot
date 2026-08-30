@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Boxes, LoaderCircle, Settings2, ShieldCheck } from "lucide-react";
 import { api, initializeBackend } from "./api";
 import EngineeringWorkspace from "./features/engineering/EngineeringWorkspace";
@@ -31,14 +31,28 @@ export default function V2App() {
   const [researchNameOpen, setResearchNameOpen] = useState(false);
   const [researchNameDraft, setResearchNameDraft] = useState("");
   const [researchNameBusy, setResearchNameBusy] = useState(false);
+  const researchDetailRequest = useRef(0);
+  const selectedResearchId = useRef("");
+  const researchesRef = useRef<Research[]>([]);
+  researchesRef.current = researches;
 
   const reportError = useCallback((message: string) => setError(message), []);
   const refreshSelected = useCallback(async (id: string) => {
+    const request = ++researchDetailRequest.current;
+    const changed = selectedResearchId.current !== id;
+    selectedResearchId.current = id;
+    if (changed) setSelectedExperiment(null);
+    setSelectedResearch(current => current?.id === id
+      ? current
+      : researchesRef.current.find(item => item.id === id) || null);
     try {
       const value = await api.getResearch(id);
+      if (request !== researchDetailRequest.current || selectedResearchId.current !== id) return;
       setSelectedResearch(value);
       setResearches(items => items.map(item => item.id === value.id ? value : item));
-    } catch (reason) { reportError(String(reason)); }
+    } catch (reason) {
+      if (request === researchDetailRequest.current && selectedResearchId.current === id) reportError(String(reason));
+    }
   }, [reportError]);
 
   useEffect(() => {
@@ -52,7 +66,11 @@ export default function V2App() {
         document.documentElement.lang = appSettings.locale;
         document.documentElement.dataset.density = appSettings.ui_density;
         applyTheme(appSettings);
-        if (researchList[0]) setSelectedResearch(await api.getResearch(researchList[0].id));
+        if (researchList[0]) {
+          selectedResearchId.current = researchList[0].id;
+          const first = await api.getResearch(researchList[0].id);
+          if (!cancelled && selectedResearchId.current === first.id) setSelectedResearch(first);
+        }
         if (!cancelled) setReady(true);
       } catch (reason) { if (!cancelled) setError(String(reason)); }
     }
@@ -77,6 +95,8 @@ export default function V2App() {
     const payload = { ...buildResearchBaselineRequest(run, settings?.new_research.budget_total ?? 12), name: name.trim() };
     const created = await api.researchFromEngineeringRun(run.runId, payload);
     setResearches(items => [created, ...items.filter(item => item.id !== created.id)]);
+    selectedResearchId.current = created.id;
+    researchDetailRequest.current += 1;
     setSelectedResearch(created);
     setSelectedExperiment(null);
     setMode("research");
@@ -94,6 +114,8 @@ export default function V2App() {
       const defaults = settings?.new_research;
       const created = await api.createResearch({ name, goal: "", hypothesis: null, budget_total: defaults?.budget_total ?? 12, mode: defaults?.mode ?? "COPILOT", constraints: defaults?.constraints ?? {} });
       setResearches(items => [created, ...items]);
+      selectedResearchId.current = created.id;
+      researchDetailRequest.current += 1;
       setSelectedResearch(created);
       setSelectedExperiment(null);
       setResearchNameOpen(false);
@@ -127,7 +149,12 @@ export default function V2App() {
       setResearches(remaining);
       if (selectedResearch?.id === id) {
         setSelectedExperiment(null);
-        setSelectedResearch(remaining[0] ? await api.getResearch(remaining[0].id) : null);
+        if (remaining[0]) await refreshSelected(remaining[0].id);
+        else {
+          researchDetailRequest.current += 1;
+          selectedResearchId.current = "";
+          setSelectedResearch(null);
+        }
       }
     } catch (reason) { reportError(String(reason)); }
   }
@@ -140,14 +167,14 @@ export default function V2App() {
   // Keep both workspaces mounted while switching modes.  The backend run and
   // event stream therefore continue to be owned by the same Engineering
   // component instead of being torn down when Research is selected.
-  const workspace = useMemo(() => <>
+  const workspace = <>
     <div className={`workspace-mode-layer ${mode === "engineering" ? "active" : "inactive"}`} aria-hidden={mode !== "engineering"}>
       <EngineeringWorkspace health={health} environment={environment} onRefreshEnvironment={refreshEnvironment} onError={reportError} onResearchBaseline={createResearchFromRun} researches={researches} selectedResearch={selectedResearch} onCreateResearch={createResearch} onSelectResearch={refreshSelected}/>
     </div>
     <div className={`workspace-mode-layer ${mode === "research" ? "active" : "inactive"}`} aria-hidden={mode !== "research"}>
       <ResearchWorkspace researches={researches} selected={selectedResearch} active={active} command={command} busy={busy} safeMode={safeMode} onCommand={runResearchCommand} onCreateResearch={createResearch} onArchive={archiveResearch} onRestore={restoreResearch} onDecision={decide} onError={reportError} onSelect={refreshSelected} onSelectExperiment={setSelectedExperiment} setCommand={setCommand}/>
     </div>
-  </>, [mode, health, environment, refreshEnvironment, reportError, createResearchFromRun, researches, selectedResearch, active, command, busy, safeMode, refreshSelected]);
+  </>;
 
   if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 TopOptPilot</b><span>{error || "连接统一 sidecar…"}</span></div>;
   if (settingsOpen && settings) return <SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={value => { setSettings(value); document.documentElement.lang = value.locale; document.documentElement.dataset.density = value.ui_density; applyTheme(value); }}/>

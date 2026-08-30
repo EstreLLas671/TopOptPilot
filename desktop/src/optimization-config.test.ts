@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_OPTIMIZATION_CONFIG, engineeringTaskFromConfig, validateOptimizationConfig } from "./optimization-config";
 
 describe("optimization config", () => {
-  it("keeps the legacy iDeskTop defaults and emits the complete run task", () => {
+  it("keeps the legacy TopOptPilot defaults and emits the complete run task", () => {
     expect(DEFAULT_OPTIMIZATION_CONFIG).toEqual({
       dimension: "3d", bcType: "cantilever", accuracy: "standard", nelx: 24, nely: 8, nelz: 6,
       volfrac: 0.4, penal: 3, rmin: 1.5, maxIterations: 60,
@@ -10,7 +10,7 @@ describe("optimization config", () => {
       material: { preset: "normalized", name: "归一化参考材料", youngsModulusGPa: 1, poissonRatio: 0.3, densityKgM3: 1, yieldStrengthMPa: 1 },
     });
     expect(engineeringTaskFromConfig(DEFAULT_OPTIMIZATION_CONFIG)).toEqual({
-      task_id: "idesktop-v2-ui",
+      task_id: "topoptpilot-ui",
       dimension: "3d",
       load_case: "cantilever",
       geometry: { nelx: 24, nely: 8, nelz: 6 },

@@ -23,15 +23,15 @@ def default_bridge_script() -> Path | None:
     resource_root = os.environ.get("TOPPILOT_RESOURCE_ROOT")
     candidates = []
     if resource_root:
-        candidates.append(Path(resource_root) / "matlab" / "engineering" / "idesktop_terminal_bridge.m")
-    candidates.append(Path(__file__).resolve().parents[2] / "matlab" / "engineering" / "idesktop_terminal_bridge.m")
+        candidates.append(Path(resource_root) / "matlab" / "engineering" / "topoptpilot_terminal_bridge.m")
+    candidates.append(Path(__file__).resolve().parents[2] / "matlab" / "engineering" / "topoptpilot_terminal_bridge.m")
     return next((path for path in candidates if path.is_file()), None)
 
 
 class TerminalManager:
     def __init__(self, data_root: Path | None = None) -> None:
-        configured = os.environ.get("IDESKTOP_V2_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
-        local = Path(configured).expanduser().resolve() if configured else Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "iDeskTopV2"
+        configured = os.environ.get("TOPOPTPILOT_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
+        local = Path(configured).expanduser().resolve() if configured else Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "TopOptPilot"
         self.root = Path(data_root or local) / "sessions"
         self.sessions: dict[str, dict[str, Any]] = {}
 
@@ -62,14 +62,14 @@ class TerminalManager:
         if script is not None:
             if not script.is_file():
                 raise ValueError("MATLAB 命令桥不存在")
-            (session_root / "idesktop_terminal_bridge.m").write_bytes(script.read_bytes())
+            (session_root / "topoptpilot_terminal_bridge.m").write_bytes(script.read_bytes())
 
         child = None
         status = "waiting-matlab"
         if executable:
             root = str(session_root).replace("\\", "/").replace("'", "''")
             child = subprocess.Popen(
-                [executable, "-wait", "-batch", f"addpath('{root}'); idesktop_terminal_bridge('{root}/config.json');"],
+                [executable, "-wait", "-batch", f"addpath('{root}'); topoptpilot_terminal_bridge('{root}/config.json');"],
                 cwd=session_root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

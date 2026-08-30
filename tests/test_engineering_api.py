@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
+from topoptpilot_desktop.api.app import app
 
 
 def test_engineering_health_reports_unprobed_capabilities() -> None:
@@ -12,7 +12,7 @@ def test_engineering_health_reports_unprobed_capabilities() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["service"] == "engineering"
-    assert payload["version"] == "2.0.2"
+    assert payload["version"] == "2.0.3"
     assert payload["capabilities"] == {
         "localMatlab": "unprobed",
         "compiledRuntime": "optional",
@@ -36,7 +36,7 @@ def test_engineering_health_uses_the_existing_desktop_token_guard(monkeypatch) -
     assert allowed.status_code == 200
 
 def test_engineering_matlab_installations_expose_only_verified_files(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_MATLAB_PATH", str(tmp_path / "missing"))
+    monkeypatch.setenv("TOPOPTPILOT_MATLAB_PATH", str(tmp_path / "missing"))
     response = TestClient(app).get(
         "/api/engineering/matlab/installations",
         headers={"x-topoptpilot-token": ""},
@@ -67,7 +67,7 @@ def test_runtime_probe_requires_solver_and_returns_verified_profile(monkeypatch,
     solver = tmp_path / "app" / "solver" / "TopOptSolver.exe"
     solver.parent.mkdir(parents=True)
     solver.write_bytes(b"solver")
-    monkeypatch.setenv("IDESKTOP_RUNTIME_SOLVER_ALLOWLIST", str(solver))
+    monkeypatch.setenv("TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST", str(solver))
     client = TestClient(app)
 
     root_only = client.post("/api/engineering/runtime/probe", json={"root": str(runtime_root)})

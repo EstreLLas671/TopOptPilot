@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from idesktop_v2.engineering import matlab_runner
-from idesktop_v2.engineering.matlab_runner import (
+from topoptpilot_desktop.engineering import matlab_runner
+from topoptpilot_desktop.engineering.matlab_runner import (
     MatlabInfrastructureError,
     build_engineering_matlab_config,
     build_matlab_batch_expression,

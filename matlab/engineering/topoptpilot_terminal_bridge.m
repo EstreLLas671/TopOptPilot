@@ -1,5 +1,5 @@
-function idesktop_terminal_bridge(configPath)
-% Hidden MATLAB command bridge for iDeskTop.
+function topoptpilot_terminal_bridge(configPath)
+% Hidden MATLAB command bridge for TopOptPilot.
 % The Electron controller owns the session directory and writes atomic JSON
 % command files. This loop never opens a desktop command window.
 try

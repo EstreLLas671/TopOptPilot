@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from idesktop_v2.engineering.matlab_runner import (
+from topoptpilot_desktop.engineering.matlab_runner import (
     MatlabInfrastructureError,
     build_runtime_environment,
     run_runtime_solver,
 )
-from idesktop_v2.engineering.runtime_profiles import (
+from topoptpilot_desktop.engineering.runtime_profiles import (
     RuntimeProfileError,
     RuntimeProfileStore,
     stage_runtime_solver,
@@ -45,10 +45,10 @@ def test_profile_rejects_arbitrary_exe_and_accepts_explicit_allowlist(tmp_path: 
         RuntimeProfileStore(environ={}).verify(runtime_root, solver)
 
     by_file = RuntimeProfileStore(
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver)}
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver)}
     ).verify(runtime_root, solver)
     by_root = RuntimeProfileStore(
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver.parent)}
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver.parent)}
     ).verify(runtime_root, solver)
     assert by_file.solver_executable == solver.resolve()
     assert by_root.solver_executable == solver.resolve()
@@ -72,13 +72,13 @@ def test_headless_solver_must_also_be_allowlisted(tmp_path: Path) -> None:
     _runtime_layout(runtime_root)
     solver = _solver(tmp_path / "external" / "TopOptSolver.exe")
     configured = {
-        "IDESKTOP_RUNTIME_ROOT": str(runtime_root),
-        "IDESKTOP_RUNTIME_SOLVER": str(solver),
+        "TOPOPTPILOT_RUNTIME_ROOT": str(runtime_root),
+        "TOPOPTPILOT_RUNTIME_SOLVER": str(solver),
     }
     with pytest.raises(RuntimeProfileError, match="可信"):
         RuntimeProfileStore(environ=configured).verify_environment()
 
-    configured["IDESKTOP_RUNTIME_SOLVER_ALLOWLIST"] = str(solver)
+    configured["TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST"] = str(solver)
     assert RuntimeProfileStore(environ=configured).verify_environment().usable
 
 
@@ -91,7 +91,7 @@ def test_profile_prunes_expired_entries_and_bounds_capacity(tmp_path: Path) -> N
         ttl_seconds=2.0,
         max_profiles=2,
         clock=lambda: now[0],
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver)},
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver)},
     )
     expired = store.verify(runtime_root, solver)
     now[0] = 3.0
@@ -111,7 +111,7 @@ def test_profile_store_serializes_concurrent_capacity_updates(tmp_path: Path) ->
     solver = _solver(tmp_path / "trusted" / "TopOptSolver.exe")
     store = RuntimeProfileStore(
         max_profiles=32,
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver)},
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver)},
     )
     with ThreadPoolExecutor(max_workers=8) as pool:
         profiles = list(pool.map(lambda _: store.verify(runtime_root, solver), range(24)))
@@ -124,7 +124,7 @@ def test_profile_detects_runtime_dll_replacement(tmp_path: Path) -> None:
     dll = _runtime_layout(runtime_root)
     solver = _solver(tmp_path / "trusted" / "TopOptSolver.exe")
     store = RuntimeProfileStore(
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver)}
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver)}
     )
     profile = store.verify(runtime_root, solver)
     dll.write_bytes(b"replacement")
@@ -175,7 +175,7 @@ def test_solver_is_staged_and_verified_before_execution(tmp_path: Path) -> None:
     _runtime_layout(runtime_root)
     source = _solver(tmp_path / "trusted" / "TopOptSolver.exe")
     store = RuntimeProfileStore(
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(source)}
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(source)}
     )
     profile = store.resolve(store.verify(runtime_root, source).profile_id)
 

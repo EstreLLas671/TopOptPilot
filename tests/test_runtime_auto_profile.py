@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
-from idesktop_v2.engineering.runtime_discovery import RuntimeInstallation
-from idesktop_v2.engineering.runtime_profiles import RuntimeProfileError, RuntimeProfileStore
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.engineering.runtime_discovery import RuntimeInstallation
+from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, RuntimeProfileStore
 
 def _runtime_layout(root: Path) -> None:
     dll = root / "runtime" / "win64" / "mclmcrrt24_2.dll"
@@ -55,7 +55,7 @@ def test_auto_profile_refuses_a_runtime_whose_release_does_not_match_solver(tmp_
 def test_runtime_installations_separates_installation_health_from_run_readiness(
     monkeypatch, tmp_path: Path
 ) -> None:
-    from idesktop_v2.engineering import router as engineering_router
+    from topoptpilot_desktop.engineering import router as engineering_router
 
     root = tmp_path / "MATLAB Runtime" / "R2025b"
     installation = RuntimeInstallation(

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from idesktop_v2.engineering.runtime_discovery import discover_installed_runtimes
+from topoptpilot_desktop.engineering.runtime_discovery import discover_installed_runtimes
 
 
 def test_standard_release_wrapper_resolves_the_single_complete_nested_runtime(tmp_path: Path) -> None:

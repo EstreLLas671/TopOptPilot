@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
-from idesktop_v2.engineering.runtime_discovery import RuntimeInstallation
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.engineering.runtime_discovery import RuntimeInstallation
 
 
 def test_engineering_health_initializes_runtime_inventory(monkeypatch) -> None:
-    from idesktop_v2.engineering import router as engineering_router
+    from topoptpilot_desktop.engineering import router as engineering_router
 
     calls = 0
 
@@ -25,7 +25,7 @@ def test_engineering_health_initializes_runtime_inventory(monkeypatch) -> None:
 
 
 def test_engineering_runtime_installations_returns_discovery_inventory(monkeypatch, tmp_path) -> None:
-    from idesktop_v2.engineering import router as engineering_router
+    from topoptpilot_desktop.engineering import router as engineering_router
 
     runtime_root = tmp_path / "MATLAB Runtime" / "R2025b"
     installation = RuntimeInstallation(

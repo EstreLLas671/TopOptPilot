@@ -65,6 +65,13 @@ class CacheClearRequest(BaseModel):
     confirm: bool = False
 
 
+class ResearchReportExportRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    outputDirectory: str = Field(min_length=1, max_length=4096)
+    formats: list[str] = Field(default_factory=lambda: ["markdown", "pdf"], min_length=1)
+    overwrite: bool = False
+
+
 class GuideRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     locale: str = "zh-CN"
@@ -470,3 +477,18 @@ def get_report_pdf(research_id: str):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path, media_type="application/pdf", filename=f"{research_id}_report.pdf")
+
+
+@app.post("/api/research/{research_id}/reports/export")
+def export_research_report(research_id: str, request: ResearchReportExportRequest):
+    try:
+        return service.export_report(
+            research_id, name=request.name, output_directory=request.outputDirectory,
+            formats=request.formats, overwrite=request.overwrite,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

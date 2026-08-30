@@ -13,16 +13,16 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from idesktop_v2 import __version__
-from idesktop_v2.engineering.report import write_report
-from idesktop_v2.engineering.runs import RunCreateRequest, manager
-from idesktop_v2.engineering.comparison_schemes import comparison_schemes
-from idesktop_v2.engineering.terminal import MAX_COMMAND_BYTES, manager as terminal_manager
-from idesktop_v2.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles
-from idesktop_v2.engineering.runtime_discovery import runtime_inventory
-from idesktop_v2.engineering.environment_discovery import matlab_inventory, discover_environment, invalidate_environment_cache
-from idesktop_v2.artifacts.models import RunStatus
-from idesktop_v2.engineering.matlab import (
+from topoptpilot_desktop import __version__
+from topoptpilot_desktop.engineering.report import write_report
+from topoptpilot_desktop.engineering.runs import RunCreateRequest, manager
+from topoptpilot_desktop.engineering.comparison_schemes import comparison_schemes
+from topoptpilot_desktop.engineering.terminal import MAX_COMMAND_BYTES, manager as terminal_manager
+from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles
+from topoptpilot_desktop.engineering.runtime_discovery import runtime_inventory
+from topoptpilot_desktop.engineering.environment_discovery import matlab_inventory, discover_environment, invalidate_environment_cache
+from topoptpilot_desktop.artifacts.models import RunStatus
+from topoptpilot_desktop.engineering.matlab import (
     MatlabInstallation,
     classify_runtime_root,
     probe_matlab_installation,

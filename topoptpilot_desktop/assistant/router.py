@@ -11,7 +11,7 @@ from urllib import request as urlrequest
 from fastapi import APIRouter, HTTPException
 
 from agent.llm.client import PiAgentClient
-from idesktop_v2.assistant.patches import (
+from topoptpilot_desktop.assistant.patches import (
     EngineeringChatRequest,
     EngineeringChatResponse,
     EngineeringPatchRequest,
@@ -19,7 +19,7 @@ from idesktop_v2.assistant.patches import (
     generate_engineering_chat,
     generate_patch_proposal,
 )
-from idesktop_v2.conversations import attachment_for_ai
+from topoptpilot_desktop.conversations import attachment_for_ai
 from topoptpilot.api.fastapi_app import service
 
 

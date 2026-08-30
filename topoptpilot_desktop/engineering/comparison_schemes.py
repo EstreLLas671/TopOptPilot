@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from idesktop_v2.artifacts.models import RunStatus
-from idesktop_v2.engineering.runs import _data_root, manager
+from topoptpilot_desktop.artifacts.models import RunStatus
+from topoptpilot_desktop.engineering.runs import _data_root, manager
 
 
 def _utc_now() -> str:

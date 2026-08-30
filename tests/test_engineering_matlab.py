@@ -5,8 +5,8 @@ import subprocess
 import threading
 from pathlib import Path
 
-from idesktop_v2.engineering import matlab as matlab_module
-from idesktop_v2.engineering.matlab import (
+from topoptpilot_desktop.engineering import matlab as matlab_module
+from topoptpilot_desktop.engineering.matlab import (
     MatlabInstallation,
     classify_runtime_root,
     discover_matlab_installations,
@@ -150,10 +150,10 @@ def test_default_probe_accepts_complete_stream_before_process_exit(monkeypatch) 
     class MarkerStream:
         def __init__(self) -> None:
             self.lines = iter([
-                "IDESKTOP_MATLAB_BEGIN\n",
+                "TOPOPTPILOT_MATLAB_BEGIN\n",
                 "5\n",
                 "VERSION=24.2.0.2712019 (R2024b)\n",
-                "IDESKTOP_MATLAB_END\n",
+                "TOPOPTPILOT_MATLAB_END\n",
             ])
 
         def __iter__(self):

@@ -215,7 +215,7 @@ fn digest(content: &[u8]) -> String {
 
 fn project_id_for_root(canonical: &Path) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"idesktop-v2-project-id-v1");
+    hasher.update(b"topoptpilot-project-id-v1");
     hash_field(&mut hasher, canonical.to_string_lossy().as_bytes());
     format!("{:x}", hasher.finalize())
 }
@@ -230,7 +230,7 @@ fn proposal_base_digest(files: &[PatchFile]) -> String {
         return files[0].before_digest.clone();
     }
     let mut hasher = Sha256::new();
-    hasher.update(b"idesktop-v2-patch-baseline-v1");
+    hasher.update(b"topoptpilot-patch-baseline-v1");
     hasher.update((files.len() as u64).to_be_bytes());
     for file in files {
         hash_field(&mut hasher, file.relative_path.as_bytes());
@@ -241,7 +241,7 @@ fn proposal_base_digest(files: &[PatchFile]) -> String {
 
 fn proposal_digest(canonical: &Path, proposal: &PatchProposal) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"idesktop-v2-patch-proposal-v1");
+    hasher.update(b"topoptpilot-patch-proposal-v1");
     hash_field(&mut hasher, canonical.to_string_lossy().as_bytes());
     hash_field(&mut hasher, proposal.project_id.as_bytes());
     hash_field(&mut hasher, proposal.base_digest.as_bytes());
@@ -873,7 +873,7 @@ mod tests {
     fn picked_project_is_cancel_safe_and_canonicalizes_only_directories() {
         assert_eq!(canonical_picked_project(None).unwrap(), None);
         let base =
-            std::env::temp_dir().join(format!("idesktop-v2-folder-picker-{}", std::process::id()));
+            std::env::temp_dir().join(format!("topoptpilot-folder-picker-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let selected = canonical_picked_project(Some(base.clone()))
@@ -889,7 +889,7 @@ mod tests {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!(
-            "idesktop-v2-approval-{name}-{}-{sequence}",
+            "topoptpilot-approval-{name}-{}-{sequence}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&base);
@@ -922,8 +922,8 @@ mod tests {
     #[test]
     fn computes_stable_sha256_for_patch_baselines() {
         assert_eq!(
-            digest(b"iDeskTop v2"),
-            "2cfe399ea73ab4accad7ac9628dff053550466bd3192469b46fbde381cea7922"
+            digest(b"TopOptPilot"),
+            "7d690ab22d57dac4664aa7c25966ff3ed1f59d45d8f26cda0fe117474550a57a"
         );
     }
 
@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn patch_preview_validates_digest_and_context_without_writing() {
-        let base = std::env::temp_dir().join(format!("idesktop-v2-preview-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("topoptpilot-preview-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let source = base.join("solver.m");
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn patch_apply_validates_all_files_before_writing() {
-        let base = std::env::temp_dir().join(format!("idesktop-v2-patch-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("topoptpilot-patch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let first = base.join("first.m");
@@ -1248,7 +1248,7 @@ mod tests {
     #[test]
     fn rollback_failure_reports_partial_apply_paths() {
         let base =
-            std::env::temp_dir().join(format!("idesktop-v2-partial-apply-{}", std::process::id()));
+            std::env::temp_dir().join(format!("topoptpilot-partial-apply-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         fs::write(base.join("first.m"), "one\n").unwrap();
@@ -1346,7 +1346,7 @@ mod tests {
 
     #[test]
     fn temporary_save_files_use_unique_random_names() {
-        let base = std::env::temp_dir().join(format!("idesktop-v2-temp-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("topoptpilot-temp-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let target = base.join("solver.m");
@@ -1364,7 +1364,7 @@ mod tests {
     #[test]
     fn project_save_atomically_replaces_an_existing_file() {
         let base =
-            std::env::temp_dir().join(format!("idesktop-v2-save-existing-{}", std::process::id()));
+            std::env::temp_dir().join(format!("topoptpilot-save-existing-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         let source = base.join("solver.m");
@@ -1386,7 +1386,7 @@ mod tests {
     #[test]
     fn project_save_keeps_cas_guard_alive_through_atomic_rename() {
         let base = std::env::temp_dir().join(format!(
-            "idesktop-v2-save-guard-lifetime-{}",
+            "topoptpilot-save-guard-lifetime-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&base);
@@ -1414,7 +1414,7 @@ mod tests {
     #[test]
     fn project_save_cleans_temp_files_after_write_and_sync_failures() {
         let base = std::env::temp_dir().join(format!(
-            "idesktop-v2-save-temp-cleanup-{}",
+            "topoptpilot-save-temp-cleanup-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&base);
@@ -1469,7 +1469,7 @@ mod tests {
     #[test]
     fn rejects_junctions_while_listing_project_trees() {
         let base =
-            std::env::temp_dir().join(format!("idesktop-v2-junction-{}", std::process::id()));
+            std::env::temp_dir().join(format!("topoptpilot-junction-{}", std::process::id()));
         let root = base.join("root");
         let outside = base.join("outside");
         let linked = root.join("linked");
@@ -1502,7 +1502,7 @@ mod tests {
 
     #[test]
     fn rejects_symlinked_parent_for_new_file() {
-        let base = std::env::temp_dir().join(format!("idesktop-v2-symlink-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("topoptpilot-symlink-{}", std::process::id()));
         let root = base.join("root");
         let outside = base.join("outside");
         let _ = fs::remove_dir_all(&base);

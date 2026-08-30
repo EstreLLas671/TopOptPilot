@@ -12,6 +12,7 @@ type Props = {
   config: OptimizationConfig;
   onError: (message: string) => void;
   requestedConversationId?: string;
+  conversationHistory?: Conversation[];
   onHistoryChange?: (items: Conversation[], currentId: string) => void;
   onApplySuggestedConfig?: (action: OptimizationConfigAction) => void;
 };
@@ -23,6 +24,17 @@ const configLabels: Record<string, string> = {
   volfrac: "体积分数", penal: "惩罚因子", rmin: "滤波半径", maxIterations: "最大迭代",
   minIterations: "最小迭代", filterStrategy: "滤波策略", material: "材料",
 };
+const EMPTY_CONVERSATIONS: Conversation[] = [];
+
+function sameConversationList(left: Conversation[], right: Conversation[]): boolean {
+  return left.length === right.length && left.every((item, index) => {
+    const other = right[index];
+    return Boolean(other)
+      && item.id === other.id
+      && item.title === other.title
+      && item.updatedAt === other.updatedAt;
+  });
+}
 
 function displayConfigValue(value: unknown): string {
   if (value && typeof value === "object") {
@@ -34,7 +46,7 @@ function displayConfigValue(value: unknown): string {
 type EngineeringChatDraft = { message: string; allowExternalSource: boolean; attachments: PendingAttachment[] };
 const engineeringChatDrafts = new Map<string, EngineeringChatDraft>();
 
-export default function EngineeringChatPanel({ projectId, selectedFile, run, config, onError, requestedConversationId = "", onHistoryChange, onApplySuggestedConfig }: Props) {
+export default function EngineeringChatPanel({ projectId, selectedFile, run, config, onError, requestedConversationId = "", conversationHistory: externalConversations = EMPTY_CONVERSATIONS, onHistoryChange, onApplySuggestedConfig }: Props) {
   const ownerId = projectId || "engineering-unbound";
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -50,6 +62,8 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   const messageEnd = useRef<HTMLDivElement>(null);
   const followMessages = useRef(true);
   const uploadingHashes = useRef(new Set<string>());
+  const conversationLoadGeneration = useRef(0);
+  const activeConversationRef = useRef("");
   const draftKey = `topoptpilot:engineering-draft:${ownerId}:${conversationId || "new"}`;
   const draftRef = useRef<EngineeringChatDraft>({ message: "", allowExternalSource: false, attachments: [] });
   const hydratedDraftKey = useRef("");
@@ -91,8 +105,12 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   }, [draftKey, message, allowExternalSource, attachments]);
 
   async function loadConversation(id: string, preserveDraft = false) {
+    const generation = ++conversationLoadGeneration.current;
+    activeConversationRef.current = id;
     setConversationId(id);
-    setMessages(await api.conversationMessages(id));
+    const loaded = await api.conversationMessages(id);
+    if (generation !== conversationLoadGeneration.current || activeConversationRef.current !== id) return;
+    setMessages(loaded);
     if (!preserveDraft) setAttachments([]);
     followMessages.current = true;
     window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
@@ -107,9 +125,11 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   }
 
   useEffect(() => {
+    const generation = ++conversationLoadGeneration.current;
+    activeConversationRef.current = "";
     let cancelled = false;
     void api.conversationList("engineering", ownerId).then(async items => {
-      if (cancelled) return;
+      if (cancelled || generation !== conversationLoadGeneration.current) return;
       setConversations(items);
       const id = items[0]?.id;
       if (!cancelled && id) await loadConversation(id);
@@ -118,21 +138,30 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     return () => { cancelled = true; };
   }, [ownerId]);
   useEffect(() => {
-    onHistoryChange?.(conversations, conversationId);
-  }, [conversationId, conversations, onHistoryChange]);
+    setConversations(current => sameConversationList(current, externalConversations) ? current : externalConversations);
+    if (conversationId && !externalConversations.some(item => item.id === conversationId)) {
+      const next = externalConversations[0]?.id || "";
+      if (next) void loadConversation(next);
+      else {
+        conversationLoadGeneration.current += 1;
+        activeConversationRef.current = "";
+        setConversationId("");
+        setMessages([]);
+      }
+    }
+  }, [externalConversations]);
+  useEffect(() => {
+    if (!sameConversationList(conversations, externalConversations)) {
+      onHistoryChange?.(conversations, conversationId);
+      return;
+    }
+    onHistoryChange?.(externalConversations, conversationId);
+  }, [conversationId, conversations, externalConversations, onHistoryChange]);
 
   useEffect(() => {
     if (!requestedConversationId || requestedConversationId === conversationId) return;
-    let cancelled = false;
-    void api.conversationList("engineering", ownerId).then(async items => {
-      if (cancelled) return;
-      setConversations(items);
-      if (items.some(item => item.id === requestedConversationId)) {
-        await loadConversation(requestedConversationId);
-      }
-    }).catch(reason => { if (!cancelled) onError(String(reason)); });
-    return () => { cancelled = true; };
-  }, [requestedConversationId, ownerId]);
+    void loadConversation(requestedConversationId).catch(reason => onError(String(reason)));
+  }, [requestedConversationId, ownerId, conversationId]);
 
   useEffect(() => {
     if (!followMessages.current) return;
@@ -217,10 +246,13 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
         role: "assistant", content: response.reply, source: response.source,
       });
       setMessages(items => [...items, assistant]);
-            setMessage("");
+      setMessage("");
       setAttachments([]);
       setSuggestedAction(response.actions.map(parseOptimizationConfigAction).find(Boolean) || null);
-      setConversations(await api.conversationList("engineering", ownerId));
+      const updatedAt = Date.now();
+      setConversations(items => items
+        .map(item => item.id === targetConversationId ? { ...item, updatedAt } : item)
+        .sort((a, b) => b.updatedAt - a.updatedAt));
     } catch (reason) {
       onError(String(reason));
     } finally {

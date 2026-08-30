@@ -5,8 +5,8 @@ import struct
 import numpy as np
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
-from idesktop_v2 import research_router
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop import research_router
 from topoptpilot.service import ResearchService
 
 

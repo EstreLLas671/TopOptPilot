@@ -11,11 +11,11 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from idesktop_v2.artifacts.models import RunStatus
-from idesktop_v2.assistant.router import _model_chat
-from idesktop_v2.engineering.comparison_schemes import comparison_schemes
-from idesktop_v2.engineering.runs import manager
-from idesktop_v2.research_artifacts import build_research_artifact_index
+from topoptpilot_desktop.artifacts.models import RunStatus
+from topoptpilot_desktop.assistant.router import _model_chat
+from topoptpilot_desktop.engineering.comparison_schemes import comparison_schemes
+from topoptpilot_desktop.engineering.runs import manager
+from topoptpilot_desktop.research_artifacts import build_research_artifact_index
 from topoptpilot.api.fastapi_app import service
 
 router = APIRouter(prefix="/api/research", tags=["research-artifacts"])

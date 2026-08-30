@@ -1,7 +1,7 @@
-# iDeskTop v2 开发版验证记录
+# TopOptPilot 开发版验证记录
 
 日期：2026-08-23
-目标分支：`iDeskTop-v2-融合`
+目标分支：`TopOptPilot-v2-融合`
 提交：`5efaa57 test: record v2 release audit status`
 
 ## 已通过
@@ -17,7 +17,7 @@
 | PyInstaller sidecar | 成功，`topoptpilot-backend.exe` 122,378,056 bytes |
 | sidecar 握手与鉴权健康检查 | 成功，`/api/engineering/health` 返回 `status=ok`、`version=2.0.0` |
 | 打包 sidecar Python FEM | 成功完成 1 次真实运行，生成 `result.json`、`density.csv`、`history.json`、快照和 SHA-256 |
-| Tauri release 壳 | 成功，`desktop/src-tauri/target/release/idesktop-v2.exe` 9,042,944 bytes；最小启动检查通过 |
+| Tauri release 壳 | 成功，`desktop/src-tauri/target/release/topoptpilot.exe` 9,042,944 bytes；最小启动检查通过 |
 
 ## 尚未达到正式发布门禁
 
@@ -37,7 +37,7 @@
 npm --prefix desktop test -- --run
 npm --prefix desktop run build
 D:\Tools\Cargo\bin\cargo.exe test --manifest-path desktop\src-tauri\Cargo.toml
-.venv\Scripts\python.exe -m compileall -q idesktop_v2 topoptpilot solver
+.venv\Scripts\python.exe -m compileall -q topoptpilot_desktop topoptpilot solver
 git diff --check
 $env:PATH = "D:\Tools\Cargo\bin;$env:PATH"
 npm --prefix desktop run tauri build -- --no-bundle
@@ -47,10 +47,10 @@ npm --prefix desktop run tauri build -- --no-bundle
 
 ```text
 build/desktop-sidecar/topoptpilot-backend.exe
-desktop/src-tauri/target/release/idesktop-v2.exe
+desktop/src-tauri/target/release/topoptpilot.exe
 ```
 
-本记录不改变旧版 `iDeskTop`、`TopOptPilot-main` 或 `topopt_pilot` 目录，也不宣称 v2 已具备独立安装能力。
+本记录不改变旧版 `TopOptPilot`、`TopOptPilot-main` 或 `topopt_pilot` 目录，也不宣称 v2 已具备独立安装能力。
 
 ## 追加验证（23:15 后）
 
@@ -60,7 +60,7 @@ desktop/src-tauri/target/release/idesktop-v2.exe
 - React/Vitest：`10 files / 35 tests passed`。
 - React/Vite 生产构建：成功，输出包含布局 CSS 与双工作区。
 - Rust：`27 passed`；`cargo fmt -- --check` 通过。
-- Tauri 无打包 release 壳：`idesktop-v2.exe` 成功构建。
+- Tauri 无打包 release 壳：`topoptpilot.exe` 成功构建。
 - 开发构建重新生成 `build/desktop-sidecar/topoptpilot-backend.exe`；PyInstaller 有已知 hidden import 警告但构建完成。
 - 离线 release audit：`offline_release_ready=false`；在线审计因 Pi RPC `get_state` 超时失败。
 
@@ -69,7 +69,7 @@ desktop/src-tauri/target/release/idesktop-v2.exe
 
 本轮已完成真正的 Tauri NSIS bundle，不再只是 `--no-bundle` 壳：
 
-- 安装包：`desktop/src-tauri/target/release/bundle/nsis/iDeskTop v2_2.0.0_x64-setup.exe`
+- 安装包：`desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.0_x64-setup.exe`
 - 大小：`168,293,346 bytes`
 - SHA-256：`93225D671827D5D64DEE580979B7E3CAB43BC98B469CC269D73CF74363903445`
 - 产品版本：`2.0.0`
@@ -98,7 +98,7 @@ desktop/src-tauri/target/release/idesktop-v2.exe
 使用 NSIS 标准静默参数将安装包部署到工作区内隔离目录 `.tmp-install-smoke`，结果如下：
 
 - 静默安装退出码：`0`。
-- 安装目录包含 `idesktop-v2.exe`、`uninstall.exe` 和完整 `resources/`。
+- 安装目录包含 `topoptpilot.exe`、`uninstall.exe` 和完整 `resources/`。
 - 已安装 Tauri 主进程、WebView2 和 PyInstaller sidecar 均可冷启动。
 - sidecar 实际回环端口对无令牌请求返回 `401`，说明令牌鉴权生效；Tauri 主进程保持响应。
 - 关闭 Tauri 后，主进程与两级 PyInstaller sidecar 进程树均退出，无残留进程。
@@ -113,7 +113,7 @@ desktop/src-tauri/target/release/idesktop-v2.exe
 ### Runtime 工程求解
 
 - MATLAB：`D:\Tools\matlab\MATLAB R2024b(64bit)`。
-- Compiler 重建退出码 `0`；`MCRSmoke.exe` 退出码 `0`，输出 `IDESKTOP_MCR_SMOKE_OK`。
+- Compiler 重建退出码 `0`；`MCRSmoke.exe` 退出码 `0`，输出 `TOPOPTPILOT_MCR_SMOKE_OK`。
 - `TopOptSolver.exe`：8×4×3、2 轮，退出码 `0`；`status.json` 为 `completed`。
 - 结果目录：`.tmp-runtime-e2e-fixed`；生成 `result.mat`、结果摘要/清单、最终密度/应力、2 轮快照和快照清单，共 13 个文件。
 - `solver.log` 扫描 `warning|error|fclose|错误使用`：无匹配。
@@ -126,7 +126,7 @@ desktop/src-tauri/target/release/idesktop-v2.exe
 
 ### 标准版 NSIS 与安装烟雾
 
-- 安装包：`dist/iDeskTop-v2-Setup-x64.exe`。
+- 安装包：`dist/TopOptPilot-v2-Setup-x64.exe`。
 - 大小：`168,944,010` bytes。
 - SHA-256：`8F742D46E7B51C8BEDE0D609C3AC423558FBBB56E15CB4CEE89F174C76CB4CFD`。
 - Authenticode：`NotSigned`。
@@ -147,8 +147,8 @@ cargo fmt -- --check: pass
 ### Runtime 工程求解
 
 - MATLAB：`D:\Tools\matlab\MATLAB R2024b(64bit)`。
-- Compiler 重建命令：`matlab.exe -wait -batch "cd('F:/Other/揭榜挂帅/iDeskTop v2/matlab/engineering'); build_solver"`，退出码 `0`。
-- `MCRSmoke.exe`：退出码 `0`，输出 `IDESKTOP_MCR_SMOKE_OK`。
+- Compiler 重建命令：`matlab.exe -wait -batch "cd('F:/Other/揭榜挂帅/TopOptPilot/matlab/engineering'); build_solver"`，退出码 `0`。
+- `MCRSmoke.exe`：退出码 `0`，输出 `TOPOPTPILOT_MCR_SMOKE_OK`。
 - `TopOptSolver.exe`：8×4×3、2 轮，退出码 `0`；`status.json` 为 `completed`。
 - 结果目录：`.tmp-runtime-e2e-fixed`；生成 `result.mat`、`result_summary.json`、`result_manifest.json`、最终密度/应力、2 轮快照和 `snapshots/manifest.json`，共 13 个文件。
 - `solver.log` 扫描 `warning|error|fclose|错误使用`：无匹配。
@@ -161,7 +161,7 @@ cargo fmt -- --check: pass
 
 ### 标准版 NSIS 与安装烟雾
 
-- 安装包：`dist/iDeskTop-v2-Setup-x64.exe`。
+- 安装包：`dist/TopOptPilot-v2-Setup-x64.exe`。
 - 大小：`168,944,010` bytes。
 - SHA-256：`8F742D46E7B51C8BEDE0D609C3AC423558FBBB56E15CB4CEE89F174C76CB4CFD`。
 - Authenticode：`NotSigned`。

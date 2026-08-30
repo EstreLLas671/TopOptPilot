@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
 from typing import Any, Callable
 
-from idesktop_v2.artifacts.models import ErrorEnvelope, ErrorSource
-from idesktop_v2.engineering.matlab_runner import _terminate_process_tree
+from topoptpilot_desktop.artifacts.models import ErrorEnvelope, ErrorSource
+from topoptpilot_desktop.engineering.matlab_runner import _terminate_process_tree
 
 
 _DISCOVERY_SOURCES = {"settings", "registry", "standard", "path", "where"}
@@ -318,7 +318,7 @@ async def probe_matlab_installation(
     marker_factory: Callable[[], tuple[str, str]] | None = None,
     timeout_seconds: float = 120.0,
 ) -> MatlabProbeResult:
-    begin, end = (marker_factory or (lambda: ("IDESKTOP_MATLAB_BEGIN", "IDESKTOP_MATLAB_END")))()
+    begin, end = (marker_factory or (lambda: ("TOPOPTPILOT_MATLAB_BEGIN", "TOPOPTPILOT_MATLAB_END")))()
     expression = (
         f"fprintf(1,'{begin}\\n'); fprintf(1,'%.0f\\n',2+3); "
         f"fprintf(1,'VERSION=%s\\n',version); fprintf(1,'{end}\\n');"

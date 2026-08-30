@@ -1,4 +1,4 @@
-from idesktop_v2.engineering.matlab import classify_runtime_root
+from topoptpilot_desktop.engineering.matlab import classify_runtime_root
 
 
 def test_nested_release_name_is_ready_when_runtime_dll_and_uninstaller_are_both_present() -> None:

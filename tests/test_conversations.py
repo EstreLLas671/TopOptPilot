@@ -3,8 +3,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
-from idesktop_v2.conversations import (
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.conversations import (
     ConversationCreate,
     MessageCreate,
     append_message,
@@ -21,7 +21,7 @@ PNG_1X1 = base64.b64encode(
 
 
 def test_project_conversation_and_attachment_round_trip(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     created = client.post(
         "/api/conversations",
@@ -51,7 +51,7 @@ def test_project_conversation_and_attachment_round_trip(monkeypatch, tmp_path: P
 
 
 def test_rejects_mismatched_image_content(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     conversation_id = client.post(
         "/api/conversations",
@@ -73,7 +73,7 @@ def test_document_attachments_are_extracted_for_ai_only_after_upload(monkeypatch
 
     import fitz
 
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     conversation_id = client.post(
         "/api/conversations",
@@ -115,7 +115,7 @@ def test_document_attachments_are_extracted_for_ai_only_after_upload(monkeypatch
 
 
 def test_cleanup_only_removes_empty_explicit_test_conversations_once(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     empty_test = create_conversation(ConversationCreate(scope="engineering", ownerId="P1", title="测试空白"))
     empty_demo = create_conversation(ConversationCreate(scope="research", ownerId="R1", title="demo empty"))
     populated_test = create_conversation(ConversationCreate(scope="research", ownerId="R1", title="测试但有消息"))

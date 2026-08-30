@@ -5,7 +5,7 @@ function render_iteration_frame(frame, config, dimension, outputPath)
 
 dimension = lower(char(string(dimension)));
 figureHandle = figure('Visible','off', 'Color','w', ...
-    'Name','iDeskTop live topology iteration', ...
+    'Name','TopOptPilot live topology iteration', ...
     'Position',[100 100 1280 620]);
 cleanup = onCleanup(@() close_if_valid(figureHandle)); %#ok<NASGU>
 
@@ -14,7 +14,7 @@ if strcmp(dimension, '3d')
 elseif strcmp(dimension, '2d')
     render_2d_frame(figureHandle, frame, config);
 else
-    error('iDeskTop:RenderDimension', ...
+    error('TopOptPilot:RenderDimension', ...
         '迭代图像仅支持 2d 或 3d：%s', dimension);
 end
 
@@ -23,11 +23,11 @@ tempPath = [outputPath, '.tmp.png'];
 if isfile(tempPath), delete(tempPath); end
 print(figureHandle, tempPath, '-dpng', '-r120');
 if ~isfile(tempPath)
-    error('iDeskTop:RenderFrame', 'MATLAB 未生成迭代图像：%s', tempPath);
+    error('TopOptPilot:RenderFrame', 'MATLAB 未生成迭代图像：%s', tempPath);
 end
 [moved, moveMessage] = movefile(tempPath, outputPath, 'f');
 if ~moved
-    error('iDeskTop:RenderFrame', '无法提交迭代图像：%s', moveMessage);
+    error('TopOptPilot:RenderFrame', '无法提交迭代图像：%s', moveMessage);
 end
 end
 

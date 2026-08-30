@@ -62,6 +62,17 @@ def build_result(*, task_spec: dict, status: str, compliance: float,
     gray = gray_ratio(xPhys)
     connected = connected_components(xPhys)
     u_max = max_displacement(U)
+    from solver.stress import compute_von_mises, stress_unit_metadata
+    unit_metadata = stress_unit_metadata(task_spec)
+    stress = None
+    stress_error = None
+    try:
+        stress = compute_von_mises(task_spec, np.asarray(xPhys, dtype=float), U, history)
+        if stress.shape != np.asarray(xPhys).shape or not np.isfinite(stress).all():
+            raise ValueError("应力场形状或有限性校验失败")
+    except Exception as exc:
+        stress = None
+        stress_error = str(exc)
 
     result = {
         "run_id": run_id,
@@ -75,6 +86,9 @@ def build_result(*, task_spec: dict, status: str, compliance: float,
             "gray_ratio": round(gray, 4),
             "connected_components": connected,
             "max_displacement_mm": round(u_max, 4),
+            "maximum_von_mises": (float(np.max(stress)) if stress is not None else None),
+            **unit_metadata,
+            "stress_unavailable_reason": stress_error,
         },
         "solver": {
             "backend": backend,
@@ -94,6 +108,7 @@ def build_result(*, task_spec: dict, status: str, compliance: float,
                                if density_design is not None else np.asarray(xPhys)),
             "history": history,
             "u_max": round(u_max, 6),
+            "stress": stress,
         },
         # 物理调试字段（供测试/演示读取，不进审计）
         "_physics": {

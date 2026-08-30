@@ -57,7 +57,7 @@ $PythonExe = Resolve-BuildPython -Requested $PythonExe
 if ($LASTEXITCODE -ne 0) { throw "Selected Python cannot import PyInstaller: $PythonExe" }
 
 # Resolve and validate every immutable build input before creating or deleting staging.
-$SidecarSource = Join-Path $ProjectRoot "idesktop_v2\api\desktop_sidecar.py"
+$SidecarSource = Join-Path $ProjectRoot "topoptpilot_desktop\api\desktop_sidecar.py"
 $MatlabSource = Join-Path $ProjectRoot "matlab"
 $McpSource = Join-Path $ProjectRoot "mcp"
 $SolverSource = Join-Path $ProjectRoot "求解器模块"
@@ -131,7 +131,7 @@ if (-not $SkipSidecar) {
     & $PythonExe -m PyInstaller --noconfirm --clean --onefile --name topoptpilot-backend `
         --distpath $BackendDist --workpath (Join-Path $ProjectRoot "build\pyinstaller") `
         --specpath (Join-Path $ProjectRoot "build") `
-        --paths $ProjectRoot --hidden-import idesktop_v2.api.app --hidden-import idesktop_v2.api.desktop_sidecar `
+        --paths $ProjectRoot --hidden-import topoptpilot_desktop.api.app --hidden-import topoptpilot_desktop.api.desktop_sidecar `
         --hidden-import solver.topopt_engine --hidden-import solver.topopt3d `
         --collect-submodules openai --collect-submodules websockets `
         $SidecarSource
@@ -175,7 +175,7 @@ try {
         Copy-Item -LiteralPath $RuntimeRootPath -Destination $RuntimeDestination -Recurse
         $RelativeDll = $RuntimeDll.FullName.Substring($RuntimeRootPath.Length).TrimStart("\", "/").Replace("\", "/")
         [ordered]@{
-            schemaVersion = 1; packageKind = "idesktop-v2-runtime"
+            schemaVersion = 1; packageKind = "topoptpilot-runtime"
             runtimeRoot = ("runtime/MATLAB Runtime/" + $RuntimeLeaf)
             runtimeDll = ("runtime/MATLAB Runtime/" + $RuntimeLeaf + "/" + $RelativeDll)
             solver = "runtime/solver/TopOptSolver.exe"

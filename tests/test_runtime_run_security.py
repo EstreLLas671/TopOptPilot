@@ -8,12 +8,12 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
-from idesktop_v2.artifacts.models import SolverLane
-from idesktop_v2.engineering import router as engineering_router
-from idesktop_v2.engineering import runs as engineering_runs
-from idesktop_v2.engineering.runs import RunCreateRequest, RunManager, _Run
-from idesktop_v2.engineering.runtime_profiles import RuntimeProfileStore
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.artifacts.models import SolverLane
+from topoptpilot_desktop.engineering import router as engineering_router
+from topoptpilot_desktop.engineering import runs as engineering_runs
+from topoptpilot_desktop.engineering.runs import RunCreateRequest, RunManager, _Run
+from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileStore
 
 
 def _runtime_layout(root: Path) -> None:
@@ -32,7 +32,7 @@ def _profile(tmp_path: Path):
     solver.parent.mkdir(parents=True)
     solver.write_bytes(b"compiled-solver")
     store = RuntimeProfileStore(
-        environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver)}
+        environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver)}
     )
     return store, store.verify(runtime_root, solver)
 
@@ -48,8 +48,8 @@ def _wait(record: _Run, timeout: float = 3.0) -> dict:
 
 
 def test_compiled_api_requires_profile_and_other_lanes_forbid_it(monkeypatch) -> None:
-    monkeypatch.delenv("IDESKTOP_RUNTIME_ROOT", raising=False)
-    monkeypatch.delenv("IDESKTOP_RUNTIME_SOLVER", raising=False)
+    monkeypatch.delenv("TOPOPTPILOT_RUNTIME_ROOT", raising=False)
+    monkeypatch.delenv("TOPOPTPILOT_RUNTIME_SOLVER", raising=False)
     client = TestClient(app)
 
     missing = client.post(
@@ -100,7 +100,7 @@ def test_local_matlab_run_uses_full_probe_timeout(monkeypatch, tmp_path: Path) -
         captured["timeout_seconds"] = timeout_seconds
         return SimpleNamespace(usable=True)
 
-    monkeypatch.setenv("IDESKTOP_MATLAB_PATH", installation.executable)
+    monkeypatch.setenv("TOPOPTPILOT_MATLAB_PATH", installation.executable)
     monkeypatch.setattr(engineering_runs, "engineering_matlab_source_root", lambda: tmp_path)
     monkeypatch.setattr(
         engineering_runs,
@@ -167,7 +167,7 @@ def test_external_matlab_progress_callback_updates_events_without_rewriting_snap
             "provenance": {"resultKind": "solver", "backend": "local-matlab"},
         }
 
-    monkeypatch.setenv("IDESKTOP_MATLAB_PATH", installation.executable)
+    monkeypatch.setenv("TOPOPTPILOT_MATLAB_PATH", installation.executable)
     monkeypatch.setattr(engineering_runs, "engineering_matlab_source_root", lambda: tmp_path)
     monkeypatch.setattr(engineering_runs, "discover_matlab_installations", lambda **_kwargs: [installation])
     monkeypatch.setattr(engineering_runs, "probe_matlab_installation", fake_probe)
@@ -194,15 +194,15 @@ def test_external_matlab_progress_callback_updates_events_without_rewriting_snap
 
 
 def test_invalid_profile_never_falls_back_and_has_unverified_provenance(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path / "data"))
     runtime_root = tmp_path / "runtime"
     _runtime_layout(runtime_root)
     solver = tmp_path / "trusted" / "TopOptSolver.exe"
     solver.parent.mkdir(parents=True)
     solver.write_bytes(b"solver")
-    monkeypatch.setenv("IDESKTOP_RUNTIME_ROOT", str(runtime_root))
-    monkeypatch.setenv("IDESKTOP_RUNTIME_SOLVER", str(solver))
-    monkeypatch.setenv("IDESKTOP_RUNTIME_SOLVER_ALLOWLIST", str(solver))
+    monkeypatch.setenv("TOPOPTPILOT_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("TOPOPTPILOT_RUNTIME_SOLVER", str(solver))
+    monkeypatch.setenv("TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST", str(solver))
 
     manager = RunManager()
     original_import = builtins.__import__

@@ -13,7 +13,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Callable, Mapping
 
-from idesktop_v2.engineering.matlab import classify_runtime_root
+from topoptpilot_desktop.engineering.matlab import classify_runtime_root
 
 
 class RuntimeProfileError(ValueError):
@@ -89,7 +89,7 @@ def _trusted_solver_entries(
             (resource_root / "bin" / "solver").resolve(),
             (resource_root / "runtime" / "solver").resolve(),
         })
-    for raw in environ.get("IDESKTOP_RUNTIME_SOLVER_ALLOWLIST", "").split(os.pathsep):
+    for raw in environ.get("TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST", "").split(os.pathsep):
         if not raw.strip():
             continue
         entry = Path(raw.strip()).expanduser().resolve()
@@ -306,7 +306,7 @@ class RuntimeProfileStore:
                 "Runtime bundle manifest 无法读取",
                 code="RUNTIME_BUNDLE_INVALID",
             ) from exc
-        if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 1 or manifest.get("packageKind") != "idesktop-v2-runtime":
+        if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 1 or manifest.get("packageKind") != "topoptpilot-runtime":
             raise RuntimeProfileError(
                 "Runtime bundle manifest 类型或版本无效",
                 code="RUNTIME_BUNDLE_INVALID",
@@ -347,11 +347,11 @@ class RuntimeProfileStore:
 
     def verify_environment(self) -> RuntimeProfile:
         environ = self._environment()
-        root = environ.get("IDESKTOP_RUNTIME_ROOT")
-        solver = environ.get("IDESKTOP_RUNTIME_SOLVER")
+        root = environ.get("TOPOPTPILOT_RUNTIME_ROOT")
+        solver = environ.get("TOPOPTPILOT_RUNTIME_SOLVER")
         if not root or not solver:
             raise RuntimeProfileError(
-                "compiled-runtime 需要已验证 runtimeProfileId，或同时配置 IDESKTOP_RUNTIME_ROOT 与 IDESKTOP_RUNTIME_SOLVER"
+                "compiled-runtime 需要已验证 runtimeProfileId，或同时配置 TOPOPTPILOT_RUNTIME_ROOT 与 TOPOPTPILOT_RUNTIME_SOLVER"
             )
         return self.verify(root, solver)
 

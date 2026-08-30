@@ -88,4 +88,21 @@ describe("EngineeringChatPanel", () => {
     expect(await screen.findByAltText("structure.png")).toBeTruthy();
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it("keeps the last selected conversation when an older request finishes late", async () => {
+    const conversation = (id: string) => ({ id, scope: "engineering" as const, ownerId: "project-1", title: id, createdAt: 1, updatedAt: 1 });
+    const resolvers = new Map<string, (value: unknown[]) => void>();
+    apiMocks.conversationList.mockResolvedValue([conversation("conversation-a"), conversation("conversation-b")]);
+    apiMocks.conversationMessages.mockImplementation((id: string) => new Promise(resolve => resolvers.set(id, resolve)));
+    const view = render(<EngineeringChatPanel projectId="project-1" selectedFile={selectedFile} run={null} config={DEFAULT_OPTIMIZATION_CONFIG} onError={() => undefined} requestedConversationId="conversation-a"/>);
+    await waitFor(() => expect(resolvers.has("conversation-a")).toBe(true));
+    view.rerender(<EngineeringChatPanel projectId="project-1" selectedFile={selectedFile} run={null} config={DEFAULT_OPTIMIZATION_CONFIG} onError={() => undefined} requestedConversationId="conversation-b"/>);
+    await waitFor(() => expect(resolvers.has("conversation-b")).toBe(true));
+    resolvers.get("conversation-b")?.([{ id: "message-b", seq: 1, role: "assistant", content: "最后选择的会话", attachmentIds: [], attachments: [], createdAt: 2 }]);
+    expect(await screen.findByText("最后选择的会话")).toBeTruthy();
+    resolvers.get("conversation-a")?.([{ id: "message-a", seq: 1, role: "assistant", content: "过期会话内容", attachmentIds: [], attachments: [], createdAt: 1 }]);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(screen.queryByText("过期会话内容")).toBeNull();
+    expect(screen.getByText("最后选择的会话")).toBeTruthy();
+  });
 });

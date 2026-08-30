@@ -63,6 +63,7 @@ export default function EngineeringWorkspace({
   const [viewTab, setViewTab] = useState<ViewTab>("chat");
   const [rightTab, setRightTab] = useState<"workspace" | "history">("workspace");
   const [conversationHistory, setConversationHistory] = useState<Conversation[]>([]);
+  const [conversationActionBusy, setConversationActionBusy] = useState("");
   const [clockNow, setClockNow] = useState(() => Date.now());
   useEffect(() => { const timer = window.setInterval(() => setClockNow(Date.now()), 30_000); return () => window.clearInterval(timer); }, []);
   const [activeConversationId, setActiveConversationId] = useState("");
@@ -130,7 +131,7 @@ export default function EngineeringWorkspace({
   useEffect(() => {
     let cancelled = false;
     try {
-      const raw = window.localStorage.getItem("idesktop:engineering-workspace-v2");
+      const raw = window.localStorage.getItem("topoptpilot:engineering-workspace-v2");
       if (raw) {
         const saved = JSON.parse(raw) as {
           projectRoot?: string; selectedPath?: string; viewTab?: ViewTab;
@@ -153,14 +154,14 @@ export default function EngineeringWorkspace({
           }).catch(() => undefined);
         }
       }
-    } catch { window.localStorage.removeItem("idesktop:engineering-workspace-v2"); }
+    } catch { window.localStorage.removeItem("topoptpilot:engineering-workspace-v2"); }
     engineeringWorkspaceRestoredRef.current = true;
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!engineeringWorkspaceRestoredRef.current) return;
-    window.localStorage.setItem("idesktop:engineering-workspace-v2", JSON.stringify({
+    window.localStorage.setItem("topoptpilot:engineering-workspace-v2", JSON.stringify({
       projectRoot, selectedPath: selectedFile?.relative_path || "", viewTab, lane, optimizationConfig,
     }));
   }, [projectRoot, selectedFile?.relative_path, viewTab, lane, optimizationConfig]);
@@ -257,13 +258,13 @@ export default function EngineeringWorkspace({
   }, [reportError]);
 
   useEffect(() => {
-    const savedRun = window.localStorage.getItem("idesktop:last-engineering-run");
+    const savedRun = window.localStorage.getItem("topoptpilot:last-engineering-run");
     if (!savedRun) return;
     void api.engineeringRunGet(savedRun).then(async value => {
       setRun(value);
       const history = await api.engineeringEvents(value.runId);
       setEvents(history.events.slice(-200));
-    }).catch(() => window.localStorage.removeItem("idesktop:last-engineering-run"));
+    }).catch(() => window.localStorage.removeItem("topoptpilot:last-engineering-run"));
   }, []);
   useEffect(() => {
     if (dirty) setPatchApproval(null);
@@ -455,22 +456,53 @@ export default function EngineeringWorkspace({
         setEvents(items => [...items, event].slice(-120));
       };
       const socket = api.engineeringStream(created.runId, acceptEvent);
+      let streamClosed = false;
+      const closeStream = () => {
+        if (streamClosed) return;
+        streamClosed = true;
+        socket.close();
+      };
+      let eventPollBusy = false;
       const eventPoller = window.setInterval(() => {
-        void api.engineeringEvents(created.runId).then(value => value.events.forEach(acceptEvent)).catch(() => undefined);
-      }, 500);
+        if (eventPollBusy) return;
+        eventPollBusy = true;
+        void api.engineeringEvents(created.runId)
+          .then(value => value.events.forEach(acceptEvent))
+          .catch(() => undefined)
+          .finally(() => { eventPollBusy = false; });
+      }, 1500);
       try {
+        let terminalRun: EngineeringRun | null = null;
         for (;;) {
-          await new Promise(resolve => window.setTimeout(resolve, 250));
+          await new Promise(resolve => window.setTimeout(resolve, 650));
           const current = await api.engineeringRunGet(created.runId);
           setRun(current);
           if (["completed", "failed", "cancelled"].includes(current.status)) {
             if (current.status === "completed") setCompletionSignal("engineering-completed-" + current.runId);
+            terminalRun = current;
             break;
+          }
+        }
+        // Hydrate terminal progress before the bounded artifact reconciliation.
+        // A completed solver may need several seconds to publish its final manifest,
+        // but the already persisted iteration evidence must remain immediately visible.
+        const terminalHistory = await api.engineeringEvents(created.runId);
+        terminalHistory.events.forEach(acceptEvent);
+        window.clearInterval(eventPoller);
+        closeStream();
+        if (terminalRun?.status === "completed") {
+          const hasResultIndex = (value: EngineeringRun) => value.files.some(file =>
+            file.relativePath === "result_manifest.json" || file.relativePath === "density.csv"
+          );
+          for (let attempt = 0; attempt < 6 && !hasResultIndex(terminalRun); attempt += 1) {
+            await new Promise(resolve => window.setTimeout(resolve, 300 * (attempt + 1)));
+            terminalRun = await api.engineeringRunGet(created.runId);
+            setRun(terminalRun);
           }
         }
         const history = await api.engineeringEvents(created.runId);
         setEvents(history.events.slice(-80));
-      } finally { window.clearInterval(eventPoller); socket.close(); }
+      } finally { window.clearInterval(eventPoller); closeStream(); }
     } catch (reason) { reportError(reason); }
     finally { setRunBusy(false); }
   }
@@ -524,30 +556,40 @@ export default function EngineeringWorkspace({
   }, []);
 
   async function createHistoryConversation() {
+    if (conversationActionBusy === "new") return;
+    setConversationActionBusy("new");
     try {
       const created = await api.conversationCreate("engineering", projectId || "engineering-unbound", "工程对话");
       setConversationHistory(items => [created, ...items]);
       setRequestedConversationId(created.id);
+      setViewTab("chat");
       setRightTab("history");
     } catch (reason) { reportError(reason); }
+    finally { setConversationActionBusy(""); }
   }
 
   async function deleteHistoryConversation(id: string) {
     if (!window.confirm("删除该历史对话？工程运行和制品不会被删除。")) return;
+    setConversationActionBusy(id);
     try {
       await api.conversationDelete(id);
-      const remaining = conversationHistory.filter(item => item.id !== id);
-      setConversationHistory(remaining);
-      if (activeConversationId === id) setRequestedConversationId(remaining[0]?.id || "");
+      setConversationHistory(items => {
+        const remaining = items.filter(item => item.id !== id);
+        if (activeConversationId === id) setRequestedConversationId(remaining[0]?.id || "");
+        return remaining;
+      });
     } catch (reason) { reportError(reason); }
+    finally { setConversationActionBusy(""); }
   }
   async function renameHistoryConversation(item: Conversation) {
     const title = window.prompt("新的对话名称", item.title)?.trim();
     if (!title || title === item.title) return;
+    setConversationActionBusy(item.id);
     try {
       const updated = await api.conversationRename(item.id, title);
       setConversationHistory(items => items.map(value => value.id === item.id ? updated : value));
     } catch (reason) { reportError(reason); }
+    finally { setConversationActionBusy(""); }
   }
   return <>
     <ParameterConfigurationDialog open={detailsOpen} config={optimizationConfig} lane={lane} busy={runBusy} matlabDiagnostic={matlabDiagnostic} runtimeDiagnostic={runtimeDiagnostic} onRefreshEnvironment={() => void scanEngineeringEnvironment()} onClose={() => setDetailsOpen(false)} onApply={(nextConfig, nextLane) => { setOptimizationConfig(nextConfig); setLane(nextLane); setDetailsOpen(false); }}/>
@@ -565,8 +607,8 @@ export default function EngineeringWorkspace({
         <div className="project-root-label" title={projectRoot}>{projectRoot || "未打开项目文件夹"}</div>
         <ProjectTree entries={visibleFiles} selected={selectedFile} disabled={patchApplyBusy} onOpen={entry => void openFile(entry)}/>
       </section> : <section className="engineering-history-panel" aria-label="历史对话">
-        <header><div><h4>历史对话</h4></div><button className="theme-icon-button" aria-label="新建历史对话" title="新建对话" onClick={() => void createHistoryConversation()}><Plus size={14}/></button></header>
-        <div className="engineering-history-list">{conversationHistory.map(item => <div className={"engineering-history-row " + (activeConversationId === item.id ? "active" : "")} key={item.id}><button onClick={() => { setRequestedConversationId(item.id); setViewTab("chat"); }}><MessageCircle size={13}/><span>{item.title}<small>{relativeConversationTime(item.updatedAt, clockNow)}</small></span></button><button aria-label={"重命名对话 " + item.title} title="重命名对话" onClick={() => void renameHistoryConversation(item)}><Pencil size={12}/></button><button aria-label={"删除对话 " + item.title} title="删除对话" onClick={() => void deleteHistoryConversation(item.id)}>×</button></div>)}</div>
+        <header><div><h4>历史对话</h4></div><button className="theme-icon-button" aria-label="新建历史对话" title="新建对话" disabled={conversationActionBusy === "new"} onClick={() => void createHistoryConversation()}><Plus size={14}/></button></header>
+        <div className="engineering-history-list">{conversationHistory.map(item => <div className={"engineering-history-row " + (activeConversationId === item.id ? "active" : "")} key={item.id}><button onClick={() => { setRequestedConversationId(item.id); setViewTab("chat"); }}><MessageCircle size={13}/><span>{item.title}<small>{relativeConversationTime(item.updatedAt, clockNow)}</small></span></button><button aria-label={"重命名对话 " + item.title} title="重命名对话" disabled={conversationActionBusy === item.id} onClick={() => void renameHistoryConversation(item)}><Pencil size={12}/></button><button aria-label={"删除对话 " + item.title} title="删除对话" disabled={conversationActionBusy === item.id} onClick={() => void deleteHistoryConversation(item.id)}>×</button></div>)}</div>
         {!conversationHistory.length ? <div className="v2-empty inspector-empty">暂无历史对话</div> : null}
       </section>}
     </>}
@@ -582,7 +624,7 @@ export default function EngineeringWorkspace({
         <div className="engineering-run-secondary-actions"><button aria-label="导出运行报告" title="生成运行报告" disabled={!run || runBusy} onClick={() => void exportReport()}><FileCode2 size={13}/></button><button aria-label="创建科研基线" title="创建科研基线" disabled={baselineBusy || !run || run.status !== "completed" || run.provenance.resultKind !== "solver" || !run.files.length} onClick={() => void createResearchBaseline()}><FlaskConical size={13}/></button></div>
       </nav>
       <div className={`engineering-view-content${viewTab === "chat" ? " chat-view-content" : ""}`} role="tabpanel">
-        {viewTab === "chat" ? <EngineeringChatPanel projectId={projectId} selectedFile={selectedFile} run={run} config={optimizationConfig} onError={reportError} requestedConversationId={requestedConversationId} onHistoryChange={receiveConversationHistory} onApplySuggestedConfig={action => updateConfig(action.config)}/> : null}
+        {viewTab === "chat" ? <EngineeringChatPanel projectId={projectId} selectedFile={selectedFile} run={run} config={optimizationConfig} onError={reportError} requestedConversationId={requestedConversationId} conversationHistory={conversationHistory} onHistoryChange={receiveConversationHistory} onApplySuggestedConfig={action => updateConfig(action.config)}/> : null}
         {viewTab === "code" ? <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}><MonacoEditor language={languageFor(selectedFile?.relative_path)} value={selectedFile?.content || "% 打开项目后选择 UTF-8 源文件"} onChange={value => { if (selectedFile && !patchApplyBusy) { setSelectedFile({ ...selectedFile, content: value || "" }); setDirty(true); } }} options={{ readOnly: !selectedFile || projectBusy || patchApplyBusy, minimap: { enabled: false }, fontSize: 13, lineHeight: 22, automaticLayout: true, scrollBeyondLastLine: false, wordWrap: "off" }} theme="vs"/></Suspense></div> : null}
         {viewTab === "results" ? <ResultViewer run={run} onError={reportError}/> : null}
         {viewTab === "iteration" ? <EngineeringIterationView run={run} events={events} maxIterations={optimizationConfig.maxIterations}/> : null}

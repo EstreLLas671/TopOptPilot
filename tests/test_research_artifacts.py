@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from fastapi.testclient import TestClient
-from idesktop_v2.api.app import app
-from idesktop_v2.research_artifacts import build_research_artifact_index
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.research_artifacts import build_research_artifact_index
 
 
 def test_research_artifact_index_returns_relative_verified_files(tmp_path: Path) -> None:

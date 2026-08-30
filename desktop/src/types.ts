@@ -9,6 +9,15 @@ export interface PatchProposal { projectId: string; baseDigest: string; files: A
 export interface PatchPreviewResult { approvalToken: string; proposal: PatchProposal }
 export interface PatchApproval extends PatchPreviewResult { root: string }
 export interface EventRecord { id: number; event_id?:string; type?:string; source?:string; kind: string; title: string; body: string; created_at: string; timestamp?:string; experiment_id?: string; payload?: Record<string, any> }
+export interface StressMetric {
+  maximum_von_mises?: number | null;
+  stress_unit?: "MPa" | "normalized" | null;
+  stress_unit_trusted?: boolean;
+  allowable_stress_mpa?: number;
+  passes_allowable_stress?: boolean;
+  stress_evidence_id?: string;
+  stress_unavailable_reason?: string | null;
+}
 export interface Experiment {
   id: string; status: string; fidelity: string; backend: string; progress: number;
   current_iteration: number; parameters: Record<string, unknown>; purpose: string; round_number?:number;
@@ -17,7 +26,7 @@ export interface Experiment {
   knowledge_ids?:string[]; subagent_task_ids?:string[]; solver_variant?:string; acceleration_mode?:string;
   solver_sha256?:string; task_hash?:string; review_verdict?:string; human_decision?:string;
   result?: { objective?: { compliance?: number }; constraints?: Record<string, number>;
-    quality?: { gray_ratio?: number; connected_components?: number };
+    quality?: { gray_ratio?: number; connected_components?: number } & StressMetric;
     evaluation?: Record<string, any>; solver?: Record<string, any>; artifacts?: { density?: unknown[]; history?: Array<Record<string, number>> } };
   error?: string;
 }

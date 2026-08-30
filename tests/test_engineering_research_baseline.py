@@ -4,8 +4,8 @@ import warnings
 from fastapi.testclient import TestClient
 from pydantic.warnings import UnsupportedFieldAttributeWarning
 
-from idesktop_v2.api.app import app
-from idesktop_v2.engineering.runs import manager
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.engineering.runs import manager
 
 
 def test_research_baseline_requires_a_completed_real_engineering_run() -> None:
@@ -16,7 +16,7 @@ def test_research_baseline_requires_a_completed_real_engineering_run() -> None:
 
 
 def test_research_baseline_does_not_submit_an_experiment(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     created = client.post("/api/engineering/runs", json={"lane": "python-fem", "ownerId": "baseline", "task": {"load_case": "cantilever", "geometry": {"nelx": 6, "nely": 3}, "params": {"max_iter": 1}}}).json()
     import time

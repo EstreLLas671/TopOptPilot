@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from idesktop_v2.artifacts.models import (
+from topoptpilot_desktop.artifacts.models import (
     ArtifactRef,
     ErrorEnvelope,
     ErrorSource,

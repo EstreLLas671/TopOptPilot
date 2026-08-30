@@ -83,7 +83,7 @@ def _desktop_gate() -> dict:
     release_dir = ROOT / "desktop/src-tauri/target/release"
     executable_candidates = (release_dir / "topoptpilot.exe",)
     installer_dir = release_dir / "bundle/nsis"
-    installer_candidates = (installer_dir / "TopOptPilot_2.0.2_x64-setup.exe",)
+    installer_candidates = (installer_dir / "TopOptPilot_2.0.3_x64-setup.exe",)
     executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
     installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
     resources = release_dir / "resources"
@@ -169,7 +169,7 @@ def _v6_source_gates() -> dict:
             '"F0": "python"', '"F1": "python"', '"F2": "python3d"',
             '"F3": "matlab"'))},
         "fact_grounded_reports": {"pass": all(value in report for value in (
-            "未计算", "evaluation", "artifact_lineage", "SHA256", "不得输出成功结论"))},
+            "未计算", "evaluation", "artifact_lineage", "SHA-256", "不得输出成功结论"))},
         "credential_not_in_sqlite": {"pass": "api_key" not in store.lower()
             and "/api/settings/agent-key" in api
             and "/api/settings/agent-credential" in api

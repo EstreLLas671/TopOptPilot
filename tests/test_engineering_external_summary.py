@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from idesktop_v2.artifacts.models import SolverLane
-from idesktop_v2.engineering.matlab_runner import MatlabInfrastructureError
-from idesktop_v2.engineering.runs import normalize_external_summary
+from topoptpilot_desktop.artifacts.models import SolverLane
+from topoptpilot_desktop.engineering.matlab_runner import MatlabInfrastructureError
+from topoptpilot_desktop.engineering.runs import normalize_external_summary
 
 
 def test_external_summary_preserves_only_measured_metrics() -> None:

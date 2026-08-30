@@ -86,9 +86,9 @@ class ResearchService:
     def __init__(self, data_dir: str | Path | None = None, max_workers: int = 2,
                  agent_client: PiAgentClient | None = None,
                  enable_agent_runtime: bool = True):
-        configured_data = data_dir or os.environ.get("TOPPILOT_DATA_DIR") or os.environ.get("IDESKTOP_V2_DATA_DIR")
+        configured_data = data_dir or os.environ.get("TOPOPTPILOT_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
         if not configured_data:
-            configured_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "iDeskTopV2"
+            configured_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "TopOptPilot"
         self.data_dir = Path(configured_data).resolve()
         self.project_root = Path(os.environ.get(
             "TOPPILOT_RESOURCE_ROOT", Path(__file__).resolve().parents[2])).resolve()
@@ -1112,6 +1112,9 @@ class ResearchService:
                             "volume_fraction": result.get("constraints", {}).get("volume_fraction"),
                             "gray_ratio": result.get("quality", {}).get("gray_ratio"),
                             "connected_components": result.get("quality", {}).get("connected_components"),
+                            "maximum_von_mises": result.get("quality", {}).get("maximum_von_mises"),
+                            "stress_unit": result.get("quality", {}).get("stress_unit"),
+                            "stress_unit_trusted": result.get("quality", {}).get("stress_unit_trusted"),
                         },
                         "reflection": analysis["analysis"],
                         "next_action": analysis["feedback"],
@@ -1307,6 +1310,9 @@ class ResearchService:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from matplotlib.font_manager import FontProperties
+        font_path = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "msyh.ttc"
+        chinese_font = FontProperties(fname=str(font_path)) if font_path.is_file() else None
         directory = self.data_dir / research_id / "artifacts" / experiment_id
         directory.mkdir(parents=True, exist_ok=True)
         artifacts = result.setdefault("artifacts", {})
@@ -1327,24 +1333,62 @@ class ResearchService:
         log_path.write_text(
             f"experiment={experiment_id}\nstatus={result.get('status')}\n"
             f"compliance={result.get('objective', {}).get('compliance')}\n"
-            f"gray_ratio={result.get('quality', {}).get('gray_ratio')}\n", encoding="utf-8")
+            f"gray_ratio={result.get('quality', {}).get('gray_ratio')}\n"
+            f"maximum_von_mises={result.get('quality', {}).get('maximum_von_mises')}\n"
+            f"stress_unit={result.get('quality', {}).get('stress_unit')}\n", encoding="utf-8")
         vtk_path = directory / "density.vtk"
         self._write_density_vtk(vtk_path, density)
         topology_path = directory / "topology.png"
-        projected = density if density.ndim == 2 else np.max(density, axis=2)
-        figure, axis = plt.subplots(figsize=(7.2, 2.8), dpi=150)
-        axis.imshow(projected, cmap="gray_r", vmin=0, vmax=1, interpolation="nearest", aspect="equal")
-        axis.set_title(f"{experiment_id} · MATLAB density")
-        axis.set_axis_off(); figure.tight_layout(); figure.savefig(topology_path, bbox_inches="tight")
+        if density.ndim == 3:
+            figure = plt.figure(figsize=(7.2, 5.2), dpi=170, facecolor="white")
+            axis = figure.add_subplot(111, projection="3d")
+            axis.voxels(density >= .5, facecolors="#b7b7b7", edgecolor="#252525",
+                        linewidth=.18, shade=True)
+            axis.view_init(elev=24, azim=-54)
+            axis.set_box_aspect(tuple(max(1, value) for value in density.shape))
+            axis.set_axis_off()
+        else:
+            figure, axis = plt.subplots(figsize=(7.2, 2.8), dpi=170, facecolor="white")
+            axis.imshow(density, cmap="gray_r", vmin=0, vmax=1,
+                        interpolation="nearest", aspect="equal")
+            axis.set_axis_off()
+        figure.tight_layout(); figure.savefig(topology_path, bbox_inches="tight",
+                                               facecolor="white")
         plt.close(figure)
+        stress_image_path = directory / "stress.png"
+        if stress_path.is_file():
+            stress = np.load(stress_path)
+            if stress.ndim == 3:
+                figure = plt.figure(figsize=(7.2, 5.2), dpi=170, facecolor="white")
+                axis = figure.add_subplot(111, projection="3d")
+                solid = density >= .5
+                span = max(float(np.max(stress) - np.min(stress)), 1e-12)
+                colors = plt.cm.gray(.25 + .65 * (stress - np.min(stress)) / span)
+                axis.voxels(solid, facecolors=colors, edgecolor="#333333",
+                            linewidth=.12, shade=True)
+                axis.view_init(elev=24, azim=-54)
+                axis.set_box_aspect(tuple(max(1, value) for value in density.shape))
+                axis.set_axis_off()
+            else:
+                figure, axis = plt.subplots(figsize=(7.2, 2.8), dpi=170, facecolor="white")
+                axis.imshow(stress, cmap="gray", interpolation="nearest", aspect="equal")
+                axis.set_axis_off()
+            figure.tight_layout(); figure.savefig(stress_image_path, bbox_inches="tight",
+                                                   facecolor="white")
+            plt.close(figure)
         convergence_path = directory / "convergence.png"
         history = list(artifacts.get("history") or [])
         figure, axis = plt.subplots(figsize=(7.2, 3.2), dpi=150)
         iterations = [item.get("iteration") for item in history if item.get("compliance") is not None]
         compliance = [item.get("compliance") for item in history if item.get("compliance") is not None]
         if compliance:
-            axis.plot(iterations, compliance, color="#24599a", linewidth=1.8)
-            axis.set_xlabel("Iteration"); axis.set_ylabel("Compliance"); axis.grid(alpha=.2)
+            axis.plot(iterations, compliance, color="#111111", linewidth=1.8)
+            if chinese_font:
+                axis.set_xlabel("迭代", fontproperties=chinese_font)
+                axis.set_ylabel("柔度", fontproperties=chinese_font)
+            else:
+                axis.set_xlabel("Iteration"); axis.set_ylabel("Compliance")
+            axis.grid(color="#b8b8b8", alpha=.45)
         else:
             axis.text(.5, .5, "Not calculated", ha="center", va="center", transform=axis.transAxes)
             axis.set_axis_off()
@@ -1361,7 +1405,9 @@ class ResearchService:
                                              ("CONVERGENCE_IMAGE", convergence_path)]
         if stress_path.is_file():
             stored_artifacts.append(("STRESS", stress_path))
+            stored_artifacts.append(("STRESS_IMAGE", stress_image_path))
             artifacts["stress_path"] = str(stress_path)
+            artifacts["stress_image"] = str(stress_image_path)
         for artifact_type, artifact_path in stored_artifacts:
             artifact_id = f"AR-{uuid.uuid4().hex[:12].upper()}"
             self.store.create_artifact({
@@ -1369,8 +1415,16 @@ class ResearchService:
                 "artifact_type": artifact_type, "path": str(artifact_path),
                 "sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
                 "parents": list(parent_ids),
-                "metadata": {"result_source": result.get("result_source", "LIVE_REAL_RUN")},
+                "metadata": {
+                    "result_source": result.get("result_source", "LIVE_REAL_RUN"),
+                    "shape": list(density.shape),
+                    "dimension": int(density.ndim),
+                    "stress_unit": result.get("quality", {}).get("stress_unit"),
+                    "stress_unit_trusted": result.get("quality", {}).get("stress_unit_trusted"),
+                },
             })
+            if artifact_type == "STRESS":
+                result.setdefault("quality", {})["stress_evidence_id"] = artifact_id
             parent_ids.append(artifact_id)
         artifacts["lineage_ids"] = parent_ids
         return result
@@ -1664,6 +1718,42 @@ class ResearchService:
             payload={key: str(value) for key, value in paths.items()},
             source="REPORT_WRITER", event_type="REPORT_READY")
         return paths["markdown"]
+
+    def export_report(self, research_id: str, *, name: str,
+                      output_directory: str | Path,
+                      formats: list[str], overwrite: bool = False) -> dict[str, Any]:
+        research = self.get_research(research_id)
+        paths = self.report_generator.export(
+            research, name=name, output_directory=output_directory,
+            formats=formats, overwrite=overwrite,
+        )
+        files = []
+        for key in ("markdown", "pdf"):
+            path = paths.get(key)
+            if path and path.is_file():
+                files.append({
+                    "path": str(path), "sizeBytes": path.stat().st_size,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                })
+        assets = paths["assets"]
+        for path in sorted(assets.rglob("*")):
+            if path.is_file():
+                files.append({
+                    "path": str(path), "sizeBytes": path.stat().st_size,
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                })
+        payload = {
+            "markdownPath": str(paths["markdown"]) if paths.get("markdown") else None,
+            "pdfPath": str(paths["pdf"]) if paths.get("pdf") else None,
+            "assetDirectory": str(assets),
+            "files": files,
+        }
+        self.store.append_event(
+            research_id, EventKind.SYSTEM.value, "REPORT EXPORTED",
+            f"科研报告已导出至 {Path(output_directory).resolve()}",
+            payload=payload, source="REPORT_WRITER", event_type="REPORT_READY",
+        )
+        return payload
 
     def generate_round_report(self, research_id: str, round_number: int) -> dict[str, str]:
         paths = self.report_generator.generate(self.get_research(research_id), round_number=round_number)

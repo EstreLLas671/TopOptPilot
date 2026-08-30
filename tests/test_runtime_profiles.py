@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from idesktop_v2.engineering.runtime_profiles import RuntimeProfileError, RuntimeProfileStore
+from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, RuntimeProfileStore
 
 
 def _runtime_layout(root: Path) -> Path:
@@ -25,7 +25,7 @@ def test_runtime_profile_binds_independent_solver_and_revalidates_identity(tmp_p
     solver = tmp_path / "application-resources" / "solver" / "TopOptSolver.exe"
     solver.parent.mkdir(parents=True)
     solver.write_bytes(b"compiled-solver-v1")
-    store = RuntimeProfileStore(environ={"IDESKTOP_RUNTIME_SOLVER_ALLOWLIST": str(solver)})
+    store = RuntimeProfileStore(environ={"TOPOPTPILOT_RUNTIME_SOLVER_ALLOWLIST": str(solver)})
 
     profile = store.verify(runtime_root, solver)
 
@@ -77,7 +77,7 @@ def _bundled_runtime_layout(resource_root: Path) -> tuple[Path, Path, Path]:
     solver.write_bytes(b"bundled-solver-v1")
     manifest = {
         "schemaVersion": 1,
-        "packageKind": "idesktop-v2-runtime",
+        "packageKind": "topoptpilot-runtime",
         "runtimeRoot": "runtime/MATLAB Runtime/R2024b",
         "runtimeDll": "runtime/MATLAB Runtime/R2024b/runtime/win64/mclmcrrt25_2.dll",
         "solver": "runtime/solver/TopOptSolver.exe",

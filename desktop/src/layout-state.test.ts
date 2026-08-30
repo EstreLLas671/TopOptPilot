@@ -12,7 +12,7 @@ import {
 } from "./layout-state";
 
 describe("workspace layout state", () => {
-  it("uses the compact iDeskTop defaults", () => {
+  it("uses the compact TopOptPilot defaults", () => {
     expect(DEFAULT_LAYOUT).toEqual({
       leftOpen: true,
       rightOpen: true,
@@ -82,7 +82,7 @@ describe("workspace layout state", () => {
     const research = { ...DEFAULT_LAYOUT, leftOpen: false, rightWidth: 505, bottomOpen: true };
     storage.setItem(LAYOUT_STORAGE_KEYS.research, JSON.stringify(research));
     expect(loadWorkspaceLayout("research", storage)).toEqual(research);
-    expect(LAYOUT_STORAGE_KEYS.research).toBe("idesktop-v2.layout.research.v3");
+    expect(LAYOUT_STORAGE_KEYS.research).toBe("topoptpilot.layout.research.v3");
   });
   it("ignores malformed or narrow-screen layouts and can reset to defaults", () => {
     const storage = new MemoryStorage();

@@ -22,7 +22,7 @@ describe("engineering workspace controller", () => {
     expect(buildEngineeringRunRequest("local-matlab", "project-123")).toMatchObject({
       lane: "local-matlab",
       ownerId: "project-123",
-      task: { task_id: "idesktop-v2-ui", load_case: "cantilever" },
+      task: { task_id: "topoptpilot-ui", load_case: "cantilever" },
     });
   });
 

@@ -295,7 +295,7 @@ describe("ResearchWorkspace stream lifecycle", () => {
     expect(screen.getByRole("button", { name: "运行自主研究" }).hasAttribute("disabled")).toBe(true);
   });
 
-  it("auto-opens a persisted final result only once across workspace remounts", async () => {
+  it("never auto-opens a persisted final result across workspace remounts", async () => {
     const socket = { onmessage: null, onerror: null, close: vi.fn() } as unknown as WebSocket;
     apiMocks.stream.mockResolvedValue(socket);
     const experiment = { id: "E-AUTO-ONCE", research_id: "R-AUTO-ONCE", purpose: "最终方案", fidelity: "F0",
@@ -311,8 +311,7 @@ describe("ResearchWorkspace stream lifecycle", () => {
       onSelect: async () => undefined, onSelectExperiment: () => undefined, setCommand: () => undefined,
     };
     const first = render(<ResearchWorkspace {...props}/>);
-    expect(await screen.findByRole("dialog", { name: "科研最终方案详情" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "关闭科研方案详情" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "科研最终方案详情" })).toBeNull());
     first.unmount();
     render(<ResearchWorkspace {...props}/>);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "科研最终方案详情" })).toBeNull());

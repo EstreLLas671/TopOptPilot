@@ -1,10 +1,10 @@
 function run_topopt_job(configPath, outputDir)
-%RUN_TOPOPT_JOB Deployment bridge for iDeskTop v2.
+%RUN_TOPOPT_JOB Deployment bridge for TopOptPilot.
 %   TopOptSolver.exe <job_config.json> <output_directory>
 if nargin < 2
     args = argv();
     if numel(args) < 2
-        error('iDeskTop:Arguments', '需要 job_config.json 和 output_directory。');
+        error('TopOptPilot:Arguments', '需要 job_config.json 和 output_directory。');
     end
     configPath = args{1};
     outputDir = args{2};
@@ -19,7 +19,7 @@ try
     config = make_config(inputConfig);
     dimension = lower(char(string(config.solver_dimension)));
     if ~ismember(dimension, {'2d','3d'})
-        error('iDeskTop:Dimension', 'solver_dimension 仅支持 2d 或 3d。');
+        error('TopOptPilot:Dimension', 'solver_dimension 仅支持 2d 或 3d。');
     end
     is2D = strcmp(dimension, '2d');
     write_status(statusPath, 'running', ...
@@ -41,7 +41,7 @@ try
     config.iteration_callback = @(frame) write_iteration_snapshot( ...
         frame, config, dimension, snapshotDir, manifestPath, statusPath);
     bridgePath = fileparts(mfilename('fullpath'));
-    configuredSolverPath = getenv('IDESKTOP_SOLVER_PATH');
+    configuredSolverPath = getenv('TOPOPTPILOT_SOLVER_PATH');
     if ~isempty(configuredSolverPath) && isfolder(configuredSolverPath)
         addpath(configuredSolverPath);
     end
@@ -137,17 +137,17 @@ function write_single_payload(path, values)
 tempPath = [path, '.tmp'];
 fid = fopen(tempPath, 'w', 'ieee-le');
 if fid < 0
-    error('iDeskTop:SnapshotWrite', '无法创建二进制制品：%s', tempPath);
+    error('TopOptPilot:SnapshotWrite', '无法创建二进制制品：%s', tempPath);
 end
 cleanup = onCleanup(@() fclose(fid));
 count = fwrite(fid, single(values), 'single');
 clear cleanup
 if count ~= numel(values)
-    error('iDeskTop:SnapshotWrite', '二进制制品写入不完整：%s', path);
+    error('TopOptPilot:SnapshotWrite', '二进制制品写入不完整：%s', path);
 end
 [moved, moveMessage] = movefile(tempPath, path, 'f');
 if ~moved
-    error('iDeskTop:SnapshotWrite', '无法提交二进制制品：%s', moveMessage);
+    error('TopOptPilot:SnapshotWrite', '无法提交二进制制品：%s', moveMessage);
 end
 end
 
@@ -166,7 +166,7 @@ for names = {'domain_mask', 'passive_void', 'passive_solid'}
     if isfield(inputConfig, pathField) && ~isempty(inputConfig.(pathField))
         values = load(inputConfig.(pathField));
         fields = fieldnames(values);
-        if isempty(fields), error('iDeskTop:Mask', '掩码 MAT 文件为空。'); end
+        if isempty(fields), error('TopOptPilot:Mask', '掩码 MAT 文件为空。'); end
         config.(field) = logical(values.(fields{1}));
     end
 end
@@ -202,12 +202,12 @@ function write_json_atomic(path, value)
 tempPath = [path, '.tmp'];
 fid = fopen(tempPath, 'w', 'n', 'UTF-8');
 if fid < 0
-    error('iDeskTop:JsonWrite', '无法创建 JSON 文件：%s', tempPath);
+    error('TopOptPilot:JsonWrite', '无法创建 JSON 文件：%s', tempPath);
 end
 fprintf(fid, '%s', jsonencode(value));
 fclose(fid);
 [moved, moveMessage] = movefile(tempPath, path, 'f');
 if ~moved
-    error('iDeskTop:JsonWrite', '无法提交 JSON 文件：%s', moveMessage);
+    error('TopOptPilot:JsonWrite', '无法提交 JSON 文件：%s', moveMessage);
 end
 end

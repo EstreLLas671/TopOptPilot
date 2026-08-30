@@ -14,6 +14,16 @@ def evaluate_result(result: dict[str, Any], constraints: dict[str, Any]) -> dict
     compliance = objective.get("compliance")
     target_volume = constraints.get("volume_fraction")
     actual_volume = result.get("constraints", {}).get("volume_fraction")
+    maximum_stress = quality.get("maximum_von_mises")
+    stress_unit_trusted = bool(quality.get("stress_unit_trusted"))
+    allowable_stress = next((constraints.get(key) for key in
+                             ("allowable_stress_mpa", "stress_limit_mpa", "max_stress_mpa")
+                             if constraints.get(key) is not None), None)
+    stress_ok = True
+    if allowable_stress is not None:
+        stress_ok = (stress_unit_trusted and maximum_stress is not None
+                     and math.isfinite(float(maximum_stress))
+                     and float(maximum_stress) <= float(allowable_stress))
     volume_error = (None if target_volume is None or actual_volume is None else
                     float(actual_volume) - float(target_volume))
     checks = {
@@ -21,6 +31,7 @@ def evaluate_result(result: dict[str, Any], constraints: dict[str, Any]) -> dict
         "connected": (components == 1) if needs_connected else True,
         "finite_compliance": compliance is not None and math.isfinite(float(compliance)),
         "volume": volume_error is None or abs(volume_error) <= float(constraints.get("volume_tolerance", .02)),
+        "stress": stress_ok,
     }
     success = all(checks.values()) and result.get("status") not in {"failed", "timeout"}
     if success:
@@ -37,4 +48,11 @@ def evaluate_result(result: dict[str, Any], constraints: dict[str, Any]) -> dict
         next_action = "RETRY_OR_REVISE"
     return {"success": success, "checks": checks, "summary": summary,
             "volume_error": volume_error,
+            "maximum_von_mises": maximum_stress,
+            "stress_unit": quality.get("stress_unit"),
+            "stress_unit_trusted": stress_unit_trusted,
+            "allowable_stress_mpa": allowable_stress,
+            "stress_margin": (None if allowable_stress is None or not stress_unit_trusted
+                              or maximum_stress is None else
+                              float(allowable_stress) - float(maximum_stress)),
             "next_action": next_action}

@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Callable
 
-from idesktop_v2.engineering.matlab import MatlabInstallation, discover_matlab_installations, probe_matlab_installation
-from idesktop_v2.engineering.runtime_discovery import RuntimeInstallation, runtime_inventory
+from topoptpilot_desktop.engineering.matlab import MatlabInstallation, discover_matlab_installations, probe_matlab_installation
+from topoptpilot_desktop.engineering.runtime_discovery import RuntimeInstallation, runtime_inventory
 
 
 def _discover_matlab() -> list[MatlabInstallation]:
-    configured = os.environ.get("IDESKTOP_MATLAB_PATH")
+    configured = os.environ.get("TOPOPTPILOT_MATLAB_PATH")
     if configured:
         return discover_matlab_installations(configured_path=configured)
     return discover_matlab_installations()
@@ -63,7 +63,7 @@ def _cache_path() -> Path:
     configured = os.environ.get("TOPPILOT_ENVIRONMENT_CACHE")
     if configured:
         return Path(configured).expanduser()
-    base = Path(os.environ.get("IDESKTOP_V2_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR") or (Path.home() / "AppData/Local/iDeskTopV2"))
+    base = Path(os.environ.get("TOPOPTPILOT_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR") or (Path.home() / "AppData/Local/TopOptPilot"))
     return base / "environment.json"
 
 

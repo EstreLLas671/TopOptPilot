@@ -37,7 +37,7 @@ def main() -> int:
     sock.listen(128)
     port = sock.getsockname()[1]
     print("TOPPILOT_SIDECAR=" + json.dumps({"port": port, "token": token}), flush=True)
-    config = uvicorn.Config("idesktop_v2.api.app:app", host="127.0.0.1", port=port, log_level="warning", access_log=False)
+    config = uvicorn.Config("topoptpilot_desktop.api.app:app", host="127.0.0.1", port=port, log_level="warning", access_log=False)
     uvicorn.Server(config).run(sockets=[sock])
     return 0
 

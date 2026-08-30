@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from idesktop_v2.artifacts.models import SolverLane
-from idesktop_v2.engineering.matlab_runner import MatlabInfrastructureError
+from topoptpilot_desktop.artifacts.models import SolverLane
+from topoptpilot_desktop.engineering.matlab_runner import MatlabInfrastructureError
 
 
 def _number(

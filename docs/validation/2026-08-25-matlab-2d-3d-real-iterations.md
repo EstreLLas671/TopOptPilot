@@ -1,4 +1,4 @@
-# iDeskTop v2：用户 2D/3D MATLAB 源码与真实迭代可视化验收
+# TopOptPilot：用户 2D/3D MATLAB 源码与真实迭代可视化验收
 
 日期：2026-08-25
 
@@ -71,7 +71,7 @@ MATLAB：D:\Tools\matlab\MATLAB R2024b(64bit)\bin\matlab.exe
 - git diff --check：通过
 ## 标准安装包
 
-- 文件：iDeskTop v2_2.0.0_x64-setup.exe
+- 文件：TopOptPilot_2.0.0_x64-setup.exe
 - 大小：188928067 bytes（180.18 MiB）
 - SHA-256：BE4D22AA3731B87F82742E05F6D1A4B6925ADACAE39C9CD2C270936815D959C5
 - 签名：NotSigned

@@ -97,7 +97,7 @@ export function buildEngineeringRunRequest(lane: EngineeringSolverLane, ownerId:
     ownerId: ownerId || "engineering-ui",
     ...(lane === "compiled-runtime" ? { runtimeProfileId } : {}),
     task: {
-      task_id: "idesktop-v2-ui",
+      task_id: "topoptpilot-ui",
       load_case: "cantilever",
       geometry: { nelx: 30, nely: 15, nelz: 4 },
       params: { volfrac: 0.4, penal: 3, rmin: 1.5, max_iter: 60, min_iter: 10, filter_strategy: "fixed", accuracy: "standard" },

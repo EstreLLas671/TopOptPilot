@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from idesktop_v2.engineering.runtime_discovery import (
+from topoptpilot_desktop.engineering.runtime_discovery import (
     RuntimeInventory,
     discover_installed_runtimes,
 )

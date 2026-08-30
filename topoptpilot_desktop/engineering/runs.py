@@ -18,17 +18,17 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from idesktop_v2.artifacts.models import ArtifactRef, ErrorEnvelope, ErrorSource, OwnerType, RunArtifact, RunStatus, SolverLane
-from idesktop_v2.engineering.artifact_index import discover_artifact_files, media_type_for
-from idesktop_v2.engineering.external_summary import normalize_external_summary
-from idesktop_v2.engineering.matlab import discover_matlab_installations, probe_matlab_installation
-from idesktop_v2.engineering.matlab_runner import MatlabInfrastructureError, build_runtime_command, run_matlab_batch, run_runtime_solver
-from idesktop_v2.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles, stage_runtime_solver
+from topoptpilot_desktop.artifacts.models import ArtifactRef, ErrorEnvelope, ErrorSource, OwnerType, RunArtifact, RunStatus, SolverLane
+from topoptpilot_desktop.engineering.artifact_index import discover_artifact_files, media_type_for
+from topoptpilot_desktop.engineering.external_summary import normalize_external_summary
+from topoptpilot_desktop.engineering.matlab import discover_matlab_installations, probe_matlab_installation
+from topoptpilot_desktop.engineering.matlab_runner import MatlabInfrastructureError, build_runtime_command, run_matlab_batch, run_runtime_solver
+from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles, stage_runtime_solver
 
 
 def _data_root() -> Path:
-    root = os.environ.get("IDESKTOP_V2_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
-    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "iDeskTopV2"
+    root = os.environ.get("TOPOPTPILOT_DATA_DIR") or os.environ.get("TOPPILOT_DATA_DIR")
+    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "TopOptPilot"
     return (Path(root).expanduser().resolve() if root else local) / "runs"
 
 
@@ -231,7 +231,7 @@ class RunManager:
         with self._lock:
             self._runs[run_id] = record
         self.persist(record)
-        threading.Thread(target=self._worker, args=(record, request.time_limit), daemon=True, name=f"idesktop-run-{run_id}").start()
+        threading.Thread(target=self._worker, args=(record, request.time_limit), daemon=True, name=f"topoptpilot-run-{run_id}").start()
         return record
 
     def submit_headless_runtime(self, request: RunCreateRequest) -> _Run:
@@ -472,7 +472,7 @@ class RunManager:
     def _run_external(self, record: _Run, time_limit: float | None, progress=None, console=None) -> dict[str, Any]:
         source_root = engineering_matlab_source_root()
         if record.lane is SolverLane.LOCAL_MATLAB:
-            configured = os.environ.get("IDESKTOP_MATLAB_PATH")
+            configured = os.environ.get("TOPOPTPILOT_MATLAB_PATH")
             installations = discover_matlab_installations(configured_path=configured, registry_roots=[], standard_roots=[], where_executables=[], path_value="") if configured else discover_matlab_installations()
             if not installations:
                 raise MatlabInfrastructureError("未发现可验证的本机 MATLAB 安装")

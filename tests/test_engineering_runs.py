@@ -5,7 +5,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
+from topoptpilot_desktop.api.app import app
 
 
 def _wait_for_terminal(client: TestClient, run_id: str, timeout: float = 20.0) -> dict:
@@ -21,7 +21,7 @@ def _wait_for_terminal(client: TestClient, run_id: str, timeout: float = 20.0) -
 
 
 def test_python_fem_run_produces_real_artifact_and_report(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     response = client.post(
         "/api/engineering/runs",
@@ -71,7 +71,7 @@ def test_python_fem_run_produces_real_artifact_and_report(monkeypatch, tmp_path)
 
 
 def test_run_can_be_cancelled_without_being_reported_as_completed(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     response = client.post(
         "/api/engineering/runs",
@@ -95,7 +95,7 @@ def test_run_can_be_cancelled_without_being_reported_as_completed(monkeypatch, t
 
 
 def test_run_stream_replays_progress_events(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     response = client.post(
         "/api/engineering/runs",
@@ -115,8 +115,8 @@ def test_run_stream_replays_progress_events(monkeypatch, tmp_path) -> None:
 
 
 def test_local_matlab_lane_fails_with_infrastructure_evidence_when_unavailable(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("IDESKTOP_MATLAB_PATH", str(tmp_path / "missing-matlab"))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_MATLAB_PATH", str(tmp_path / "missing-matlab"))
     client = TestClient(app)
     response = client.post("/api/engineering/runs", json={"lane": "local-matlab", "ownerId": "engineering-matlab", "task": {"load_case": "cantilever"}})
     assert response.status_code == 202
@@ -127,15 +127,15 @@ def test_local_matlab_lane_fails_with_infrastructure_evidence_when_unavailable(m
 
 
 def test_compiled_runtime_lane_does_not_fallback_to_python(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("IDESKTOP_RUNTIME_SOLVER", raising=False)
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("TOPOPTPILOT_RUNTIME_SOLVER", raising=False)
     client = TestClient(app)
     response = client.post("/api/engineering/runs", json={"lane": "compiled-runtime", "ownerId": "engineering-runtime", "task": {"load_case": "cantilever"}})
     assert response.status_code == 422
     assert "runtimeProfileId" in response.text
 
 def test_engineering_artifact_download_is_allowlisted(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     client = TestClient(app)
     created = client.post("/api/engineering/runs", json={"lane": "python-fem", "ownerId": "download-test", "task": {"load_case": "cantilever", "geometry": {"nelx": 6, "nely": 3}, "params": {"max_iter": 1}}}).json()
     payload = _wait_for_terminal(client, created["runId"])

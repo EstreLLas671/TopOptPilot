@@ -127,6 +127,19 @@ class MatlabMcpWorker:
             raise MatlabMcpError("MATLAB returned an invalid density field")
         if not math.isfinite(compliance):
             raise MatlabMcpError("MATLAB returned a non-finite compliance")
+        stress = None
+        stress_error = None
+        raw_stress = raw.get("von_mises")
+        if raw_stress is None:
+            stress_error = "MATLAB 未返回 Von Mises 应力场"
+        else:
+            candidate = np.asarray(raw_stress, dtype=float)
+            if candidate.shape != density.shape or candidate.size == 0 or not np.all(np.isfinite(candidate)):
+                stress_error = "MATLAB Von Mises 应力场形状或有限性校验失败"
+            else:
+                stress = candidate
+        from solver.stress import stress_unit_metadata
+        unit_metadata = stress_unit_metadata(task)
         objectives = np.asarray(raw.get("objective_history") or [], dtype=float).ravel().tolist()
         changes = np.asarray(raw.get("change_history") or [], dtype=float).ravel().tolist()
         history = [{"iteration": i + 1, "compliance": float(value),
@@ -142,7 +155,10 @@ class MatlabMcpWorker:
             "constraints": {"volume_fraction": float(raw.get("volume_fraction", density.mean()))},
             "quality": {"gray_ratio": round(float(gray_ratio(density)), 4),
                         "connected_components": int(connected_components(density)),
-                        "max_displacement_mm": None},
+                        "max_displacement_mm": None,
+                        "maximum_von_mises": (float(np.max(stress)) if stress is not None else None),
+                        **unit_metadata,
+                        "stress_unavailable_reason": stress_error},
             "solver": {"backend": f"matlab_mcp_{dimension}d", "matlab_version": raw.get("matlab_version"),
                        "mcp_version": self.gateway.health().get("server_version"),
                        "mcp_binary_sha256": self.gateway.health().get("binary_sha256"),
@@ -154,7 +170,7 @@ class MatlabMcpWorker:
                        "capabilities": raw.get("capabilities", self._capability_cache),
                        "iterations": int(raw.get("iterations", len(history))),
                        "relative_residual": None},
-            "artifacts": {"density": density, "density_design": density, "history": history,
+            "artifacts": {"density": density, "density_design": density, "stress": stress, "history": history,
                           "matlab_task": str(task_path), "matlab_raw_result": str(result_path)},
         }
 

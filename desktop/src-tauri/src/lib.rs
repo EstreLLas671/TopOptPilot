@@ -30,7 +30,7 @@ struct DesktopPaths {
 }
 
 fn resolve_desktop_paths(local_app_data: &Path, bootstrap_text: Option<&str>) -> DesktopPaths {
-    let default_root = local_app_data.join("iDeskTopV2");
+    let default_root = local_app_data.join("TopOptPilot");
     let bootstrap_path = default_root.join("desktop-bootstrap.json");
     let configured_root = bootstrap_text
         .and_then(|text| serde_json::from_str::<DesktopBootstrap>(text).ok())
@@ -170,7 +170,7 @@ fn spawn_backend(
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         command = Command::new("python");
         command
-            .args(["-m", "idesktop_v2.api.desktop_sidecar"])
+            .args(["-m", "topoptpilot_desktop.api.desktop_sidecar"])
             .current_dir(root);
     } else {
         let resources = app
@@ -202,7 +202,7 @@ fn spawn_backend(
             .env("TOPPILOT_PARENT_PID", std::process::id().to_string())
             .env("TOPPILOT_RESOURCE_ROOT", resources.join("resources"))
             .env("TOPPILOT_DATA_DIR", &data)
-            .env("IDESKTOP_V2_DATA_DIR", &data)
+            .env("TOPOPTPILOT_DATA_DIR", &data)
             .env("TOPPILOT_BOOTSTRAP_PATH", bootstrap_path)
             .env("TOPPILOT_NODE", resources.join("resources/node/node.exe"))
             .env(
@@ -269,12 +269,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_paths_use_localappdata_idesktop_v2_without_roaming_storage() {
+    fn default_paths_use_localappdata_topoptpilot_desktop_without_roaming_storage() {
         let local_app_data = PathBuf::from(r"C:\Users\test\AppData\Local");
 
         let paths = resolve_desktop_paths(&local_app_data, None);
 
-        let expected_root = local_app_data.join("iDeskTopV2");
+        let expected_root = local_app_data.join("TopOptPilot");
         assert_eq!(
             paths.bootstrap_path,
             expected_root.join("desktop-bootstrap.json")
@@ -292,7 +292,7 @@ mod tests {
         assert_eq!(
             paths.bootstrap_path,
             local_app_data
-                .join("iDeskTopV2")
+                .join("TopOptPilot")
                 .join("desktop-bootstrap.json")
         );
         assert_eq!(paths.data_root, PathBuf::from(r"D:\Topology Data"));
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn blank_or_invalid_bootstrap_keeps_the_local_default() {
         let local_app_data = PathBuf::from(r"C:\Users\test\AppData\Local");
-        let expected = local_app_data.join("iDeskTopV2");
+        let expected = local_app_data.join("TopOptPilot");
 
         assert_eq!(
             resolve_desktop_paths(&local_app_data, Some(r#"{"next_data_dir":"   "}"#)).data_root,
@@ -354,7 +354,8 @@ mod tests {
 
     #[test]
     fn dropped_image_reader_rejects_directories_oversize_files_and_disguised_extensions() {
-        let root = std::env::temp_dir().join(format!("idesktop-drop-test-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("topoptpilot-drop-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).expect("create test directory");
         let directory_error = read_dropped_image(&root).expect_err("directory must be rejected");
         assert!(!directory_error.contains(&root.to_string_lossy().to_string()));

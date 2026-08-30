@@ -6,12 +6,12 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from idesktop_v2.api.app import app
-from idesktop_v2.engineering.runs import RunCreateRequest, manager
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.engineering.runs import RunCreateRequest, manager
 
 
 def test_engineering_stream_requires_the_desktop_token(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("TOPPILOT_DESKTOP_TOKEN", "desktop-secret")
     record = manager.submit(
         RunCreateRequest.model_validate(

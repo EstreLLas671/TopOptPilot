@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+const artifactMocks = vi.hoisted(() => ({ text: vi.fn(), buffer: vi.fn() }));
+vi.mock("../../backend-text", () => ({ engineeringArtifactText: artifactMocks.text }));
+vi.mock("../../backend-artifact", () => ({ engineeringArtifactBuffer: artifactMocks.buffer }));
 import type { EngineeringRun } from "../../types";
 import ResultViewer, { ConvergenceChart } from "./ResultViewer";
 
@@ -33,5 +36,27 @@ describe("engineering results metrics and convergence", () => {
     render(<ResultViewer run={run} onError={() => undefined}/>);
     expect(screen.getByText("灰度率")).toBeTruthy();
     expect(screen.getByText("0.1875")).toBeTruthy();
+  });
+
+  it("reads one immutable result version once across parent rerenders", async () => {
+    artifactMocks.text.mockImplementation(async (_runId: string, path: string) => {
+      if (path === "result_manifest.json") return JSON.stringify({ shape: [2, 2], density_file: "density.bin" });
+      if (path === "density.csv") return "0.1,0.2\n0.3,0.4\n";
+      if (path === "history.json") return JSON.stringify([{ iteration: 1, compliance: 4 }]);
+      return "";
+    });
+    artifactMocks.buffer.mockResolvedValue(new Float32Array([.1, .2, .3, .4]).buffer);
+    const files = [
+      { relativePath: "result_manifest.json", mediaType: "application/json", sizeBytes: 10, sha256: "1".repeat(64) },
+      { relativePath: "density.csv", mediaType: "text/csv", sizeBytes: 10, sha256: "2".repeat(64) },
+      { relativePath: "history.json", mediaType: "application/json", sizeBytes: 10, sha256: "3".repeat(64) },
+    ];
+    const run = { runId: "run-cache-once", ownerType: "engineering_run", ownerId: "engineering", lane: "local-matlab", status: "completed", configDigest: "a".repeat(64), metrics: {}, snapshots: [], files, provenance: { resultKind: "solver" } } as EngineeringRun;
+    const view = render(<ResultViewer run={run} onError={() => undefined}/>);
+    await waitFor(() => expect(screen.queryByText("正在读取真实结果制品…")).toBeNull());
+    view.rerender(<ResultViewer run={{ ...run, files: [...files] }} onError={() => undefined}/>);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(artifactMocks.text).toHaveBeenCalledTimes(3);
+    expect(artifactMocks.buffer).toHaveBeenCalledTimes(1);
   });
 });

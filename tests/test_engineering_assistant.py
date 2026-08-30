@@ -5,10 +5,10 @@ import hashlib
 import pytest
 from fastapi.testclient import TestClient
 
-from idesktop_v2.api.app import app
-from idesktop_v2.assistant import router as assistant_router
+from topoptpilot_desktop.api.app import app
+from topoptpilot_desktop.assistant import router as assistant_router
 
-from idesktop_v2.assistant.patches import (
+from topoptpilot_desktop.assistant.patches import (
     EngineeringChatRequest,
     EngineeringPatchRequest,
     generate_engineering_chat,

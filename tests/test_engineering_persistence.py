@@ -4,14 +4,14 @@ import hashlib
 
 import pytest
 
-from idesktop_v2.artifacts.models import ArtifactRef, RunStatus, SolverLane
-from idesktop_v2.engineering import comparison_schemes as comparison_module
-from idesktop_v2.engineering.comparison_schemes import ComparisonSchemeStore
-from idesktop_v2.engineering.runs import RunManager, _Run, _data_root
+from topoptpilot_desktop.artifacts.models import ArtifactRef, RunStatus, SolverLane
+from topoptpilot_desktop.engineering import comparison_schemes as comparison_module
+from topoptpilot_desktop.engineering.comparison_schemes import ComparisonSchemeStore
+from topoptpilot_desktop.engineering.runs import RunManager, _Run, _data_root
 
 
 def _record(tmp_path, monkeypatch, suffix: str = "a", status: RunStatus = RunStatus.COMPLETED):
-    monkeypatch.setenv("IDESKTOP_V2_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
     run_id = "eng-" + suffix * 32
     run_dir = _data_root() / run_id
     run_dir.mkdir(parents=True)

@@ -34,9 +34,9 @@ describe("four-pane layout CSS contract", () => {
   });
 
   it("uses one typography scale and horizontal parameter actions", () => {
-    expect(enhancementCss).toContain("--idesktop-font-base: 14px");
-    expect(enhancementCss).toContain("--idesktop-font-control: 13px");
-    expect(enhancementCss).toMatch(/body, button, input, select, textarea\s*\{[^}]*font-family:\s*var\(--idesktop-font-sans\)/s);
+    expect(enhancementCss).toContain("--topoptpilot-font-base: 14px");
+    expect(enhancementCss).toContain("--topoptpilot-font-control: 13px");
+    expect(enhancementCss).toMatch(/body, button, input, select, textarea\s*\{[^}]*font-family:\s*var\(--topoptpilot-font-sans\)/s);
     expect(enhancementCss).toMatch(/\.parameter-dialog\s*>\s*footer button\s*\{[^}]*white-space:\s*nowrap[^}]*writing-mode:\s*horizontal-tb/s);
     expect(enhancementCss).toMatch(/\.engineering-center-shell\s*\{[^}]*grid-template-rows:\s*auto\s+minmax\(0,1fr\)/s);
     expect(enhancementCss).toMatch(/\.engineering-view-tabs\s*\{[^}]*height:\s*auto\s*!important/s);

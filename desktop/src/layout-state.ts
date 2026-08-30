@@ -27,11 +27,11 @@ export const LAYOUT_LIMITS = Object.freeze({
 });
 
 export const LAYOUT_STORAGE_KEYS: Record<WorkspaceMode, string> = Object.freeze({
-  engineering: "idesktop-v2.layout.engineering.v4",
-  research: "idesktop-v2.layout.research.v3",
+  engineering: "topoptpilot.layout.engineering.v4",
+  research: "topoptpilot.layout.research.v3",
 });
 
-export const LEGACY_ENGINEERING_LAYOUT_KEY = "idesktop-v2.layout.engineering.v3";
+export const LEGACY_ENGINEERING_LAYOUT_KEY = "topoptpilot.layout.engineering.v3";
 
 function numberOr(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 
-from idesktop_v2.api import desktop_sidecar
+from topoptpilot_desktop.api import desktop_sidecar
 
 
 def test_desktop_entrypoint_dispatches_frozen_workers_before_starting_server(monkeypatch) -> None:

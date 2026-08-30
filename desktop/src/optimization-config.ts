@@ -117,7 +117,7 @@ export function parseOptimizationConfigAction(value: unknown): OptimizationConfi
 
 export function engineeringTaskFromConfig(config: OptimizationConfig) {
   return {
-    task_id: "idesktop-v2-ui",
+    task_id: "topoptpilot-ui",
     dimension: config.dimension,
     load_case: config.bcType,
     geometry: { nelx: config.nelx, nely: config.nely, nelz: config.dimension === "2d" ? 1 : config.nelz },
