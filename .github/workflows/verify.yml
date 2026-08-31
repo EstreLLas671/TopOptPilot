@@ -1,0 +1,52 @@
+name: Verify TopOptPilot
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Windows desktop and headless checks
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and test Python service
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pytest -q
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install and test frontend
+        shell: pwsh
+        run: |
+          npm ci --prefix desktop --ignore-scripts --no-audit --fund=false
+          npm run build --prefix desktop
+          npm test --prefix desktop
+
+      - name: Format and test Tauri Rust commands
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
+          cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib

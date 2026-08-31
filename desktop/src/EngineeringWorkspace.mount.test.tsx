@@ -57,7 +57,7 @@ describe("EngineeringWorkspace mount", () => {
     });
     apiMocks.projectPickFolder.mockResolvedValue("D:/Projects/cantilever");
     apiMocks.projectOpen.mockResolvedValue({ root: "D:/Projects/cantilever", projectId: "project-1" });
-    apiMocks.projectList.mockResolvedValue([]);
+    apiMocks.projectList.mockResolvedValue({ entries: [], truncated: false, skippedDirectories: 0 });
     apiMocks.conversationList.mockResolvedValue([]);
     apiMocks.conversationCreate.mockResolvedValue({
       id: "conversation-1", scope: "engineering", ownerId: "engineering-unbound",
@@ -74,6 +74,16 @@ describe("EngineeringWorkspace mount", () => {
         onResearchBaseline={async () => undefined}
       />,
     )).not.toThrow();
+  });
+
+  it("explains when project discovery was bounded to keep the workspace responsive", async () => {
+    apiMocks.projectList.mockResolvedValue({ entries: [], truncated: true, skippedDirectories: 2 });
+    render(<EngineeringWorkspace health={null} onError={() => undefined} onResearchBaseline={async () => undefined}/>);
+
+    await userEvent.click(screen.getByRole("button", { name: "新建或打开研究项目" }));
+
+    expect(await screen.findByText(/已跳过 2 个依赖、构建或过深目录/)).toBeTruthy();
+    expect(screen.getByText(/文件树最多检索 2,000 个支持文件/)).toBeTruthy();
   });
 
   it("scans MATLAB and Runtime once and exposes explicit refresh in the parameter dialog", async () => {

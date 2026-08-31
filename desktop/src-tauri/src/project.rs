@@ -11,6 +11,30 @@ use std::{
 use tauri::State;
 
 const ALLOWED_EXTENSIONS: &[&str] = &["m", "json", "md", "txt", "log", "csv"];
+const IGNORED_PROJECT_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "bower_components",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    "target",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    ".cache",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+];
+const MAX_PROJECT_ENTRIES: usize = 2_000;
+const MAX_PROJECT_DEPTH: usize = 16;
+const MAX_PROJECT_DIRECTORY_ITEMS: usize = 4_096;
+const MAX_PROJECT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const PATCH_APPROVAL_TTL: Duration = Duration::from_secs(120);
 
 const MAX_PATCH_APPROVALS: usize = 256;
@@ -19,6 +43,19 @@ pub struct ProjectEntry {
     pub relative_path: String,
     pub kind: String,
     pub size_bytes: u64,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListing {
+    pub entries: Vec<ProjectEntry>,
+    pub truncated: bool,
+    pub skipped_directories: usize,
+}
+#[derive(Default)]
+struct ProjectListState {
+    entries: Vec<ProjectEntry>,
+    truncated: bool,
+    skipped_directories: usize,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FilePayload {
@@ -121,6 +158,16 @@ fn allowed(path: &Path) -> bool {
             ALLOWED_EXTENSIONS
                 .iter()
                 .any(|item| item.eq_ignore_ascii_case(ext))
+        })
+        .unwrap_or(false)
+}
+fn ignored_project_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            IGNORED_PROJECT_DIRECTORIES
+                .iter()
+                .any(|ignored| ignored.eq_ignore_ascii_case(name))
         })
         .unwrap_or(false)
 }
@@ -327,29 +374,78 @@ pub fn project_open(root: String) -> Result<serde_json::Value, String> {
 }
 #[tauri::command]
 pub fn project_list(root: String) -> Result<Vec<ProjectEntry>, String> {
-    let canonical = root_path(&root)?;
-    let mut entries = Vec::new();
-    list_dir(&canonical, &canonical, &mut entries)?;
-    Ok(entries)
+    Ok(project_listing(&root)?.entries)
 }
-fn list_dir(root: &Path, dir: &Path, entries: &mut Vec<ProjectEntry>) -> Result<(), String> {
-    for item in fs::read_dir(dir).map_err(|e| e.to_string())? {
-        let item = item.map_err(|e| e.to_string())?;
+#[tauri::command]
+pub fn project_list_summary(root: String) -> Result<ProjectListing, String> {
+    project_listing(&root)
+}
+fn project_listing(root: &str) -> Result<ProjectListing, String> {
+    let canonical = root_path(root)?;
+    let mut state = ProjectListState::default();
+    collect_project_entries(&canonical, &canonical, 0, &mut state)?;
+    state.entries.sort_by(|left, right| {
+        left.relative_path
+            .to_ascii_lowercase()
+            .cmp(&right.relative_path.to_ascii_lowercase())
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    Ok(ProjectListing {
+        entries: state.entries,
+        truncated: state.truncated,
+        skipped_directories: state.skipped_directories,
+    })
+}
+fn collect_project_entries(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    state: &mut ProjectListState,
+) -> Result<(), String> {
+    let mut items = Vec::new();
+    for item in fs::read_dir(dir).map_err(|error| error.to_string())? {
+        if items.len() >= MAX_PROJECT_DIRECTORY_ITEMS {
+            state.truncated = true;
+            break;
+        }
+        items.push(item.map_err(|error| error.to_string())?);
+    }
+    items.sort_by(|left, right| {
+        let left_name = left.file_name();
+        let right_name = right.file_name();
+        left_name
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .cmp(&right_name.to_string_lossy().to_ascii_lowercase())
+            .then_with(|| left_name.cmp(&right_name))
+    });
+    for item in items {
+        if state.entries.len() >= MAX_PROJECT_ENTRIES {
+            state.truncated = true;
+            break;
+        }
         let path = item.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
         if metadata.file_type().is_symlink() {
             return Err("symbolic links are not allowed in project trees".into());
         }
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
         if metadata.is_dir() {
-            list_dir(root, &path, entries)?;
+            if ignored_project_directory(&path) || depth >= MAX_PROJECT_DEPTH {
+                state.skipped_directories += 1;
+                if depth >= MAX_PROJECT_DEPTH {
+                    state.truncated = true;
+                }
+                continue;
+            }
+            collect_project_entries(root, &path, depth + 1, state)?;
         } else if allowed(&path) {
-            entries.push(ProjectEntry {
-                relative_path: rel,
+            let relative_path = path
+                .strip_prefix(root)
+                .map_err(|error| error.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            state.entries.push(ProjectEntry {
+                relative_path,
                 kind: "file".into(),
                 size_bytes: metadata.len(),
             });
@@ -361,6 +457,13 @@ fn list_dir(root: &Path, dir: &Path, entries: &mut Vec<ProjectEntry>) -> Result<
 pub fn project_read(root: String, relative_path: String) -> Result<FilePayload, String> {
     let canonical = root_path(&root)?;
     let path = safe_file(&canonical, &relative_path, false)?;
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_PROJECT_FILE_BYTES {
+        return Err(format!(
+            "file exceeds the editor size limit of {} bytes",
+            MAX_PROJECT_FILE_BYTES
+        ));
+    }
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     let content =
         String::from_utf8(bytes.clone()).map_err(|_| "file is not valid UTF-8".to_string())?;
@@ -530,15 +633,10 @@ pub fn project_rename(root: String, from: String, to: String) -> Result<(), Stri
 }
 #[tauri::command]
 pub fn project_search(root: String, query: String) -> Result<Vec<ProjectEntry>, String> {
-    let entries = project_list(root)?;
-    Ok(entries
+    let query = query.to_lowercase();
+    Ok(project_list(root)?
         .into_iter()
-        .filter(|entry| {
-            entry
-                .relative_path
-                .to_lowercase()
-                .contains(&query.to_lowercase())
-        })
+        .filter(|entry| entry.relative_path.to_lowercase().contains(&query))
         .collect())
 }
 
@@ -859,7 +957,8 @@ mod tests {
         apply_patch_transaction, apply_patch_transaction_with_save, apply_unified_diff,
         canonical_picked_project, clean_relative, create_unique_temp_file, digest,
         patch_apply_with_state, patch_preview_with_state, project_id_for_root,
-        proposal_base_digest, safe_file, PatchApprovalState, PatchFile, PatchProposal,
+        project_list_summary, project_read, proposal_base_digest, safe_file, PatchApprovalState,
+        PatchFile, PatchProposal,
     };
     use std::{
         fs,
@@ -884,6 +983,74 @@ mod tests {
         fs::write(&file, "x").unwrap();
         assert!(canonical_picked_project(Some(file)).is_err());
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn project_list_skips_generated_directories_and_has_a_bounded_result() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-list-limit-{}",
+            std::process::id()
+        ));
+        let source = base.join("src");
+        let generated = base.join("node_modules").join("dependency");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&generated).unwrap();
+        for index in 0..2_100 {
+            fs::write(source.join(format!("solver-{index:04}.m")), "x = 1;\n").unwrap();
+        }
+        fs::write(generated.join("generated.m"), "generated = true;\n").unwrap();
+
+        let root = fs::canonicalize(&base)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let result = project_list_summary(root);
+        let _ = fs::remove_dir_all(&base);
+        let listing = result.unwrap();
+
+        assert!(
+            listing.entries.len() <= 2_000,
+            "project list must be bounded"
+        );
+        assert!(listing.truncated, "the listing must report its entry cap");
+        assert_eq!(listing.skipped_directories, 1);
+        assert!(
+            listing
+                .entries
+                .iter()
+                .all(|entry| !entry.relative_path.starts_with("node_modules/")),
+            "generated dependency directories must not be listed"
+        );
+    }
+
+    #[test]
+    fn project_read_rejects_files_larger_than_the_editor_limit() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-file-size-limit-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let large_file = base.join("solver.log");
+        fs::File::create(&large_file)
+            .unwrap()
+            .set_len(2 * 1024 * 1024 + 1)
+            .unwrap();
+
+        let root = fs::canonicalize(&base)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let result = project_read(root, "solver.log".into());
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(
+            result
+                .unwrap_err()
+                .contains("file exceeds the editor size limit"),
+            "large files must be rejected before loading them into the editor"
+        );
     }
     fn patch_fixture(name: &str) -> (std::path::PathBuf, String, PatchProposal) {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1491,9 +1658,11 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let canonical_root = fs::canonicalize(&root).unwrap();
-        let mut entries = Vec::new();
-        let error = super::list_dir(&canonical_root, &canonical_root, &mut entries).unwrap_err();
+        let root_text = fs::canonicalize(&root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let error = super::project_list_summary(root_text).unwrap_err();
         assert_eq!(error, "symbolic links are not allowed in project trees");
 
         fs::remove_dir(&linked).unwrap();

@@ -848,3 +848,6 @@ html[data-theme=dark] .chat-attachment-preview figure { border-color: #405263; b
 .report-export-status{padding:9px 10px;border:1px solid var(--theme-border,#ccd8e5);border-radius:6px;background:var(--theme-surface-muted,#f5f8fb);color:var(--theme-text,#344960);font-size:10px;line-height:1.5;overflow-wrap:anywhere;white-space:pre-wrap;max-height:180px;overflow:auto}
 .result-loading,.result-load-error{display:flex;align-items:center;gap:8px;margin:10px 12px;padding:9px 10px;border:1px solid var(--theme-border,#d7e0eb);border-radius:6px;background:var(--theme-surface-muted,#f6f8fb);color:var(--theme-text-muted,#6d7d90);font-size:10px}
 .result-load-error{justify-content:space-between;color:var(--theme-danger,#a84444)}.result-load-error .outline-button{width:auto;flex:0 0 auto}
+
+/* Bounded project discovery keeps broad folders responsive without hiding why. */
+.project-listing-notice{margin:0 10px 3px;padding:5px 7px;border:1px solid var(--theme-border,#d7e0eb);border-radius:5px;background:var(--theme-surface-muted,#f6f8fb);color:var(--theme-muted-text,#6d7d90);font-size:10px;line-height:1.4;overflow-wrap:anywhere}
