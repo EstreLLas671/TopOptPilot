@@ -71,6 +71,7 @@ try
         'shape',double(size(result.x)), ...
         'density_file','final_density.bin','stress_file',stressFile);
     write_json_atomic(fullfile(outputDir, 'result_manifest.json'), resultManifest);
+    visualization = write_result_visualizations(result, config, dimension, outputDir);
     summary = make_summary(result);
     summary.solver_dimension = dimension;
     if is2D
@@ -80,6 +81,7 @@ try
     end
     summary.result_manifest = 'result_manifest.json';
     summary.snapshot_manifest = 'snapshots/manifest.json';
+    summary.visualization = visualization;
     summary.material = struct( ...
         'preset', config.material_preset, ...
         'name', config.material_name, ...

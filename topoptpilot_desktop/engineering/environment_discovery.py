@@ -11,11 +11,12 @@ from pathlib import Path
 from collections.abc import Callable
 
 from topoptpilot_desktop.engineering.matlab import MatlabInstallation, discover_matlab_installations, probe_matlab_installation
+from topoptpilot_desktop.engineering.configuration import configured_matlab_path
 from topoptpilot_desktop.engineering.runtime_discovery import RuntimeInstallation, runtime_inventory
 
 
 def _discover_matlab() -> list[MatlabInstallation]:
-    configured = os.environ.get("TOPOPTPILOT_MATLAB_PATH")
+    configured = configured_matlab_path()
     if configured:
         return discover_matlab_installations(configured_path=configured)
     return discover_matlab_installations()

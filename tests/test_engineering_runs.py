@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 
@@ -56,6 +57,15 @@ def test_python_fem_run_produces_real_artifact_and_report(monkeypatch, tmp_path)
     report = client.post(f"/api/engineering/runs/{run_id}/report")
     assert report.status_code == 200
     assert report.json()["relativePath"].endswith(".md")
+    repeated_report = client.post(f"/api/engineering/runs/{run_id}/report")
+    assert repeated_report.status_code == 200
+    report_path = tmp_path / "runs" / run_id / "report.md"
+    assert repeated_report.json()["sha256"] == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    run_after_report = client.get(f"/api/engineering/runs/{run_id}").json()
+    report_refs = [item for item in run_after_report["files"] if item["relativePath"] == "report.md"]
+    assert len(report_refs) == 1
+    assert report_refs[0]["sha256"] == repeated_report.json()["sha256"]
+    assert "report.md" not in report_path.read_text(encoding="utf-8")
 
     export_directory = tmp_path / "reports"
     export_directory.mkdir()

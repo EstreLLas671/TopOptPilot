@@ -8,6 +8,7 @@ from topoptpilot_desktop import __version__
 from topoptpilot_desktop.assistant.router import router as engineering_assistant_router
 from topoptpilot_desktop.conversations import cleanup_empty_test_conversations_once, router as conversation_router
 from topoptpilot_desktop.engineering.router import router as engineering_router
+from topoptpilot_desktop.headless_router import router as headless_router
 from topoptpilot_desktop.research_router import router as research_artifact_router, settings_router as research_settings_router
 from topoptpilot_desktop.engineering.environment_discovery import initialize_engineering_discovery
 
@@ -33,3 +34,4 @@ app.include_router(engineering_assistant_router)
 app.include_router(conversation_router)
 app.include_router(research_artifact_router)
 app.include_router(research_settings_router)
+app.include_router(headless_router)

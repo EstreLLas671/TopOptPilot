@@ -8,6 +8,7 @@ from pathlib import Path
 def write_report(record, name: str = "report") -> Path:
     safe_name = "".join(character for character in name.strip() if character not in '<>:"/\\|?*').strip(" .") or "report"
     path = record.run_dir / f"{safe_name}.md"
+    report_relative_path = path.relative_to(record.run_dir).as_posix()
     metrics = record.metrics
     lines = [
         f"# TopOptPilot 工程运行报告",
@@ -27,6 +28,11 @@ def write_report(record, name: str = "report") -> Path:
         lines.extend(["", "## 错误", "", f"- `{record.error.code}`：{record.error.message}"])
     lines.extend(["", "## 制品", ""])
     for ref in record.files:
+        # Reports are derived views of immutable solver evidence. Including a
+        # report's own digest, or another regenerable report, makes hashes
+        # recursive or stale on a subsequent write.
+        if ref.relative_path == report_relative_path or ref.media_type == "text/markdown":
+            continue
         lines.append(f"- `{ref.relative_path}` ({ref.size_bytes} bytes, SHA-256 `{ref.sha256}`)")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
