@@ -118,3 +118,28 @@ def test_bundled_runtime_endpoint_reports_standard_package_without_prompting(mon
         "profileId": None,
         "diagnostic": "当前为标准版，未捆绑 MATLAB Runtime",
     }
+
+
+def test_engineering_run_validation_is_side_effect_free_and_uses_submission_schema(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TOPOPTPILOT_DATA_DIR", str(tmp_path))
+    client = TestClient(app)
+    response = client.post(
+        "/api/engineering/runs/validate",
+        json={
+            "lane": "local-matlab",
+            "ownerId": "validate-only",
+            "timeLimit": 300,
+            "task": {
+                "dimension": "2d",
+                "load_case": "cantilever",
+                "geometry": {"nelx": 20, "nely": 10},
+                "params": {"volfrac": 0.4, "penal": 3, "rmin": 1.5, "min_iter": 1, "max_iter": 2},
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["valid"] is True
+    assert payload["sideEffect"] == "none"
+    assert payload["request"]["lane"] == "local-matlab"
+    assert not (tmp_path / "runs").exists()

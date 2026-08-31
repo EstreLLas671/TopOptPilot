@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -168,6 +169,53 @@ def test_silent_runtime_process_observes_timeout_without_blocking_on_stdout(tmp_
             parent_env=os.environ,
         )
     assert time.monotonic() - started < 0.8
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object protection is Windows-specific")
+def test_runtime_timeout_terminates_descendant_process_tree(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    _runtime_layout(runtime_root)
+    child_pid_file = tmp_path / "child-pid.txt"
+    parent_code = (
+        "import pathlib, subprocess, sys, time; "
+        "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8'); "
+        "time.sleep(10)"
+    )
+    child_pid: int | None = None
+    try:
+        with pytest.raises(MatlabInfrastructureError, match="超时"):
+            run_runtime_solver(
+                [sys.executable, "-c", parent_code, str(child_pid_file)],
+                {},
+                tmp_path / "run-with-child",
+                runtime_root=runtime_root,
+                timeout_seconds=0.5,
+                parent_env=os.environ,
+            )
+        assert child_pid_file.is_file()
+        child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            output = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {child_pid}", "/NH"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            ).stdout
+            if str(child_pid) not in output:
+                break
+            time.sleep(0.02)
+        assert str(child_pid) not in output
+    finally:
+        if child_pid is not None:
+            subprocess.run(
+                ["taskkill", "/PID", str(child_pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
 
 
 def test_solver_is_staged_and_verified_before_execution(tmp_path: Path) -> None:

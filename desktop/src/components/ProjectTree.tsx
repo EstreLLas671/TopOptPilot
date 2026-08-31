@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, FileCode2, Folder, FolderOpen } from "lucide-react";
 import type { ProjectEntry, ProjectFile } from "../types";
 import { buildProjectTree, type ProjectTreeNode } from "../project-tree";
@@ -10,20 +10,9 @@ type Props = {
   onOpen: (entry: ProjectEntry) => void;
 };
 
-function directoryPaths(nodes: ProjectTreeNode[]): string[] {
-  return nodes.flatMap(node => node.kind === "directory"
-    ? [node.path, ...directoryPaths(node.children || [])]
-    : []);
-}
-
 export default function ProjectTree({ entries, selected, disabled = false, onOpen }: Props) {
   const tree = useMemo(() => buildProjectTree(entries), [entries]);
-  const paths = useMemo(() => directoryPaths(tree), [tree]);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(paths));
-
-  useEffect(() => {
-    setExpanded(previous => new Set([...previous, ...paths]));
-  }, [paths]);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const toggle = (path: string) => setExpanded(previous => {
     const next = new Set(previous);

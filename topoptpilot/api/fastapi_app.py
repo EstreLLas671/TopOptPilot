@@ -205,7 +205,7 @@ async def stream_research(websocket: WebSocket, research_id: str):
 def invoke_tool(request: ToolRequest):
     try:
         return {"ok": True, "result": service.tools.invoke(request.research_id, request.tool,
-                                                              request.arguments)}
+                                                              request.arguments, source=request.source)}
     except (KeyError, ValueError, PermissionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

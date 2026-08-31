@@ -61,7 +61,7 @@ export const api = {
   projectPickFolder: () => invoke<string | null>("project_pick_folder"),
   readDroppedImages: (paths: string[]) => invoke<import("./types").DroppedImageData[]>("read_dropped_images", { paths }),
   projectOpen: (root: string) => invoke<import("./types").ProjectOpen>("project_open", { root }),
-  projectList: (root: string) => invoke<import("./types").ProjectEntry[]>("project_list", { root }),
+  projectList: (root: string) => invoke<import("./types").ProjectListing>("project_list_summary", { root }),
   projectRead: (root: string, relativePath: string) => invoke<import("./types").ProjectFile>("project_read", { root, relativePath }),
   projectSave: (root: string, relativePath: string, content: string, expectedSha256?: string) => invoke<import("./types").ProjectFile>("project_save", { root, relativePath, content, expectedSha256 }),
   projectCreate: (root: string, relativePath: string, content = "") => invoke<import("./types").ProjectFile>("project_create", { root, relativePath, content }),

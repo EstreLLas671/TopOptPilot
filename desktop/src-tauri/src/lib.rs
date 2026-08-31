@@ -252,6 +252,7 @@ pub fn run() {
             project::project_pick_folder,
             project::project_open,
             project::project_list,
+            project::project_list_summary,
             project::project_read,
             project::project_save,
             project::project_create,

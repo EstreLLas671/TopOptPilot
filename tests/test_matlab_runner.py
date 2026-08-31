@@ -60,6 +60,17 @@ def test_build_matlab_config_routes_explicit_2d_and_3d_sources() -> None:
     assert three_d["nelz"] == 5
 
 
+def test_matlab_bridge_declares_real_final_visualizations() -> None:
+    bridge = Path("matlab/engineering/run_topopt_job.m").read_text(encoding="utf-8")
+    renderer = Path("matlab/engineering/write_result_visualizations.m").read_text(encoding="utf-8")
+
+    assert "write_result_visualizations(result, config, dimension, outputDir)" in bridge
+    assert "summary.visualization = visualization" in bridge
+    assert "result.objective_history" in renderer
+    assert "render_iteration_frame(frame, config, dimension, outputPath)" in renderer
+    assert "convergence.png" in renderer and "density.png" in renderer
+
+
 def test_manifest_progress_includes_only_committed_real_snapshot_files(tmp_path: Path) -> None:
     snapshots = tmp_path / "snapshots"
     snapshots.mkdir()

@@ -21,7 +21,7 @@ from topoptpilot_desktop.engineering.terminal import MAX_COMMAND_BYTES, manager 
 from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles
 from topoptpilot_desktop.engineering.runtime_discovery import runtime_inventory
 from topoptpilot_desktop.engineering.environment_discovery import matlab_inventory, discover_environment, invalidate_environment_cache
-from topoptpilot_desktop.artifacts.models import RunStatus
+from topoptpilot_desktop.artifacts.models import RunStatus, SolverLane
 from topoptpilot_desktop.engineering.matlab import (
     MatlabInstallation,
     classify_runtime_root,
@@ -119,7 +119,11 @@ def bundled_runtime_probe() -> dict[str, object]:
 
 
 @router.get("/runtime/installations")
-def runtime_installations(refresh: bool = False) -> dict[str, object]:
+def runtime_installations(refresh: bool = True) -> dict[str, object]:
+    # A caller asking for the installation inventory expects current discovery,
+    # not whichever machine state an earlier health check happened to cache.
+    # Discovery is read-only and never launches a Runtime executable. Clients
+    # that intentionally need the last snapshot may opt into refresh=false.
     installations = runtime_inventory.refresh() if refresh else runtime_inventory.snapshot()
     payloads: list[dict[str, object]] = []
     for installation in installations:
@@ -163,6 +167,35 @@ def engineering_run_create(request: RunCreateRequest) -> dict[str, object]:
         return manager.submit(request).public()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/runs/validate")
+def engineering_run_validate(request: RunCreateRequest) -> dict[str, object]:
+    """Validate a data-only run request without creating a run or starting MATLAB.
+
+    This is intentionally positioned ahead of the ``/runs/{run_id}`` routes
+    and reuses the same Pydantic model as submission.  Headless clients can
+    therefore show the exact normalized plan and require a separate explicit
+    confirmation before the state-changing POST to ``/runs``.
+    """
+    if request.lane is SolverLane.MATLAB_MCP:
+        raise HTTPException(
+            status_code=422,
+            detail="matlab-mcp 只能通过 ResearchService、Policy、审批和 MATLAB MCP 启动",
+        )
+    if request.lane is SolverLane.COMPILED_RUNTIME and not request.runtime_profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "RUNTIME_PROFILE_REQUIRED",
+                "message": "compiled-runtime API 请求必须携带已验证 runtimeProfileId",
+            },
+        )
+    return {
+        "valid": True,
+        "request": request.model_dump(by_alias=True, mode="json", exclude_none=True),
+        "sideEffect": "none",
+    }
 
 
 @router.get("/runs")
@@ -245,11 +278,17 @@ def engineering_run_report(run_id: str, request: EngineeringReportRequest | None
     record = _record_or_404(run_id)
     if record.status not in {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}:
         raise HTTPException(status_code=409, detail="run is not terminal")
-    path = write_report(record, request.name)
-    ref = manager._ref(record.run_dir, path, "text/markdown")
-    if not any(item.relative_path == ref.relative_path for item in record.files):
+    # Generate and index under the run lock. A report is overwriteable derived
+    # evidence, so an existing ref must be replaced rather than retaining a
+    # stale hash from a previous report generation.
+    with record.lock:
+        path = write_report(record, request.name)
+        ref = manager._ref(record.run_dir, path, "text/markdown")
+        record.files = [
+            item for item in record.files if item.relative_path != ref.relative_path
+        ]
         record.files.append(ref)
-    manager.persist(record)
+        manager.persist(record)
     response = ref.model_dump(by_alias=True, mode="json")
     if request.outputDirectory:
         output_directory = Path(request.outputDirectory).expanduser().resolve()

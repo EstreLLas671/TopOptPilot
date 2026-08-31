@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 
+_PROCESS_JOB_ATTRIBUTE = "_topoptpilot_windows_job_handle"
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+
+
 class MatlabInfrastructureError(RuntimeError):
     """Raised when MATLAB/Runtime infrastructure cannot execute a job."""
 
@@ -259,6 +264,7 @@ def run_matlab_batch(
     command = [str(executable), "-wait", "-batch", f"addpath('{_matlab_quote(source_root)}'); {expression}"]
     started = time.monotonic()
     process = subprocess.Popen(command, cwd=output_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    _attach_windows_process_job(process)
     output_queue: queue.Queue[str | None] = queue.Queue()
     reader = threading.Thread(target=_read_process_output, args=(process, output_queue), daemon=True)
     reader.start()
@@ -308,6 +314,7 @@ def run_matlab_batch(
     finally:
         if process.poll() is None:
             _terminate_process_tree(process)
+        _close_windows_process_job(process)
 
 
 def _read_process_output(process: subprocess.Popen[str], output: queue.Queue[str | None]) -> None:
@@ -339,17 +346,149 @@ def _drain_process_output(
         log.flush()
 
 
+def _attach_windows_process_job(process: subprocess.Popen[Any]) -> None:
+    """Attach a controlled child to a kill-on-close Windows Job Object.
+
+    TerminateJobObject ends the root process and every descendant much faster
+    than spawning taskkill. Assignment can be refused when the host itself is
+    running under a restrictive job, so this routine is best-effort and leaves
+    the existing taskkill fallback available.
+    """
+    if os.name != "nt":
+        return
+    process_handle = getattr(process, "_handle", None)
+    if not isinstance(process_handle, int) or process_handle <= 0:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimitInformation),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+        ]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        limits = _ExtendedLimitInformation()
+        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        configured = kernel32.SetInformationJobObject(
+            job,
+            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        )
+        assigned = configured and kernel32.AssignProcessToJobObject(
+            job,
+            wintypes.HANDLE(process_handle),
+        )
+        if not assigned:
+            kernel32.CloseHandle(job)
+            return
+        setattr(process, _PROCESS_JOB_ATTRIBUTE, int(job))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return
+
+
+def _close_windows_process_job(process: subprocess.Popen[Any]) -> None:
+    if os.name != "nt":
+        return
+    handle = getattr(process, _PROCESS_JOB_ATTRIBUTE, None)
+    if not isinstance(handle, int) or handle <= 0:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+    finally:
+        try:
+            delattr(process, _PROCESS_JOB_ATTRIBUTE)
+        except AttributeError:
+            pass
+
+
+def _terminate_windows_process_job(process: subprocess.Popen[Any]) -> bool:
+    """Terminate and release an already assigned Job Object, if present."""
+    if os.name != "nt":
+        return False
+    handle = getattr(process, _PROCESS_JOB_ATTRIBUTE, None)
+    if not isinstance(handle, int) or handle <= 0:
+        return False
+    terminated = False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        terminated = bool(kernel32.TerminateJobObject(wintypes.HANDLE(handle), 1))
+    except (AttributeError, OSError, TypeError, ValueError):
+        terminated = False
+    finally:
+        _close_windows_process_job(process)
+    return terminated
+
+
 def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
     if process.poll() is not None:
         return
-    if os.name == "nt":
+    terminated_by_job = _terminate_windows_process_job(process)
+    if os.name == "nt" and not terminated_by_job:
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
         )
-    else:
+    elif os.name != "nt":
         process.terminate()
     try:
         process.wait(timeout=5)
@@ -376,6 +515,7 @@ def run_runtime_solver(
     matlab_config = build_engineering_matlab_config(task)
     config_path.write_text(json.dumps(matlab_config, ensure_ascii=False, indent=2), encoding="utf-8")
     process = subprocess.Popen([*command], cwd=output_dir, env=build_runtime_environment(runtime_root, parent_env), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    _attach_windows_process_job(process)
     output_queue: queue.Queue[str | None] = queue.Queue()
     reader = threading.Thread(target=_read_process_output, args=(process, output_queue), daemon=True)
     reader.start()
@@ -415,3 +555,4 @@ def run_runtime_solver(
     finally:
         if process.poll() is None:
             _terminate_process_tree(process)
+        _close_windows_process_job(process)

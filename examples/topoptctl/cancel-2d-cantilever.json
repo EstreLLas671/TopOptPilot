@@ -1,0 +1,21 @@
+{
+  "dimension": "2d",
+  "load_case": "cantilever",
+  "geometry": {
+    "nelx": 60,
+    "nely": 30
+  },
+  "params": {
+    "volfrac": 0.4,
+    "penal": 3.0,
+    "rmin": 1.5,
+    "min_iter": 1,
+    "max_iter": 100,
+    "filter_strategy": "fixed",
+    "accuracy": "standard"
+  },
+  "material": {
+    "preset": "normalized",
+    "name": "归一化参考材料"
+  }
+}

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ChevronRight, FileCode2, FlaskConical, FolderOpen, Gauge, MessageCircle, Pencil, Plus, Save, Search, Send, Settings2 } from "lucide-react";
 import { api } from "../../api";
-import type { Conversation, EngineeringRun, PatchApproval, PatchProposal, ProjectEntry, ProjectFile, Research } from "../../types";
+import type { Conversation, EngineeringRun, PatchApproval, PatchProposal, ProjectEntry, ProjectFile, ProjectListing, Research } from "../../types";
 import { solverLaneLabel } from "../../workspace";
 import { acceptGeneratedPatch, acceptPatchApply, acceptPatchPreview, advancePatchPreviewContext, approvalTokenFor, assistantConsentAfterAttempt, buildEngineeringAssistantRequest, buildEngineeringRunRequest , claimPatchApplyFlight , type EngineeringSolverLane, type MatlabInstallation, type PatchPreviewContext, type RuntimeInstallation } from "../../engineering-workspace";
 import { mergeTerminalResults } from "./artifact-viewer";
@@ -57,6 +57,11 @@ export default function EngineeringWorkspace({
   const [projectRoot, setProjectRoot] = useState("");
   const [projectId, setProjectId] = useState("");
   const [files, setFiles] = useState<ProjectEntry[]>([]);
+  const [projectListing, setProjectListing] = useState<ProjectListing | null>(null);
+  const applyProjectListing = useCallback((listing: ProjectListing) => {
+    setFiles(listing.entries);
+    setProjectListing(listing);
+  }, []);
   const [selectedFile, setSelectedFile] = useState<ProjectFile | null>(null);
   const [dirty, setDirty] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
@@ -144,9 +149,9 @@ export default function EngineeringWorkspace({
         if (saved.optimizationConfig && !validateOptimizationConfig(saved.optimizationConfig).length) setOptimizationConfig(saved.optimizationConfig);
         if (saved.projectRoot) {
           void api.projectOpen(saved.projectRoot).then(async opened => {
-            const entries = await api.projectList(opened.root);
+            const listing = await api.projectList(opened.root);
             if (cancelled) return;
-            setProjectRoot(opened.root); setProjectId(opened.projectId); setFiles(entries);
+            setProjectRoot(opened.root); setProjectId(opened.projectId); applyProjectListing(listing);
             if (saved.selectedPath) {
               const file = await api.projectRead(opened.root, saved.selectedPath).catch(() => null);
               if (!cancelled && file) setSelectedFile(file);
@@ -157,7 +162,7 @@ export default function EngineeringWorkspace({
     } catch { window.localStorage.removeItem("topoptpilot:engineering-workspace-v2"); }
     engineeringWorkspaceRestoredRef.current = true;
     return () => { cancelled = true; };
-  }, []);
+  }, [applyProjectListing]);
 
   useEffect(() => {
     if (!engineeringWorkspaceRestoredRef.current) return;
@@ -290,13 +295,20 @@ export default function EngineeringWorkspace({
   }, [terminalSession]);
 
   const visibleFiles = useMemo(() => query ? files.filter(file => file.relative_path.toLowerCase().includes(query.toLowerCase())) : files, [files, query]);
+  const projectListingNotice = projectListing && (projectListing.truncated || projectListing.skippedDirectories > 0 || projectListing.skippedLinks > 0)
+    ? [
+      projectListing.skippedDirectories > 0 ? `已跳过 ${projectListing.skippedDirectories} 个依赖、构建或过深目录。` : "",
+      projectListing.skippedLinks > 0 ? `为保证安全，已跳过 ${projectListing.skippedLinks} 个符号链接或 Windows 重解析点。` : "",
+      projectListing.truncated ? "为避免卡顿，文件树最多显示 2,000 个支持文件，并对扫描目录项设置资源预算；请打开更具体的项目文件夹。" : "",
+    ].filter(Boolean).join(" ")
+    : "";
 
   async function refreshProject(root = projectRoot) {
     if (!root) return;
     setProjectBusy(true);
     try {
-      const [opened, entries] = await Promise.all([api.projectOpen(root), api.projectList(root)]);
-      setProjectId(opened.projectId); setFiles(entries); setProjectRoot(root);
+      const [opened, listing] = await Promise.all([api.projectOpen(root), api.projectList(root)]);
+      setProjectId(opened.projectId); applyProjectListing(listing); setProjectRoot(root);
     } catch (reason) { reportError(reason); }
     finally { setProjectBusy(false); }
   }
@@ -312,9 +324,9 @@ export default function EngineeringWorkspace({
     } catch (reason) {
       reportError(reason);
     }
-  }  async function searchProject() {
-    if (!projectRoot || !query.trim()) return refreshProject();
-    try { setFiles(await api.projectSearch(projectRoot, query.trim())); } catch (reason) { reportError(reason); }
+  }  function searchProject() {
+    if (!projectRoot || query.trim()) return;
+    void refreshProject();
   }
   async function openFile(entry: ProjectEntry) {
     if (patchApplyBusy) return;
@@ -603,9 +615,10 @@ export default function EngineeringWorkspace({
       {rightTab === "workspace" ? <section className="engineering-left-workspace" aria-label="工作区与项目文件">
         {!projectRoot ? <button className="primary-button workspace-open-project workspace-open-project-top" aria-label="新建或打开研究项目" onClick={() => void openProject()}><FolderOpen size={14}/>打开项目文件夹</button> : null}
         <div className="sidebar-section-heading"><span>项目文件</span><div className="pane-actions"><button title="刷新项目" aria-label="刷新项目" disabled={!projectRoot || projectBusy || patchApplyBusy} onClick={() => void refreshProject()}><Activity size={14}/></button><button title="新建文件" aria-label="新建文件" disabled={patchApplyBusy} onClick={() => void createFile()}><FileCode2 size={14}/></button></div></div>
-        <label className="v2-search"><Search size={14}/><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void searchProject(); }} placeholder="搜索文件与文本"/></label>
+        <label className="v2-search"><Search size={14}/><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Enter") searchProject(); }} placeholder="筛选已加载的文件"/></label>
         <div className="project-root-label" title={projectRoot}>{projectRoot || "未打开项目文件夹"}</div>
-        <ProjectTree entries={visibleFiles} selected={selectedFile} disabled={patchApplyBusy} onOpen={entry => void openFile(entry)}/>
+        {projectListingNotice ? <p className="project-listing-notice" role="status">{projectListingNotice}</p> : null}
+        <ProjectTree key={projectRoot || "empty-project"} entries={visibleFiles} selected={selectedFile} disabled={patchApplyBusy} onOpen={entry => void openFile(entry)}/>
       </section> : <section className="engineering-history-panel" aria-label="历史对话">
         <header><div><h4>历史对话</h4></div><button className="theme-icon-button" aria-label="新建历史对话" title="新建对话" disabled={conversationActionBusy === "new"} onClick={() => void createHistoryConversation()}><Plus size={14}/></button></header>
         <div className="engineering-history-list">{conversationHistory.map(item => <div className={"engineering-history-row " + (activeConversationId === item.id ? "active" : "")} key={item.id}><button onClick={() => { setRequestedConversationId(item.id); setViewTab("chat"); }}><MessageCircle size={13}/><span>{item.title}<small>{relativeConversationTime(item.updatedAt, clockNow)}</small></span></button><button aria-label={"重命名对话 " + item.title} title="重命名对话" disabled={conversationActionBusy === item.id} onClick={() => void renameHistoryConversation(item)}><Pencil size={12}/></button><button aria-label={"删除对话 " + item.title} title="删除对话" disabled={conversationActionBusy === item.id} onClick={() => void deleteHistoryConversation(item.id)}>×</button></div>)}</div>

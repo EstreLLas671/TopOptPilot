@@ -22,6 +22,7 @@ from topoptpilot_desktop.artifacts.models import ArtifactRef, ErrorEnvelope, Err
 from topoptpilot_desktop.engineering.artifact_index import discover_artifact_files, media_type_for
 from topoptpilot_desktop.engineering.external_summary import normalize_external_summary
 from topoptpilot_desktop.engineering.matlab import discover_matlab_installations, probe_matlab_installation
+from topoptpilot_desktop.engineering.configuration import configured_matlab_path
 from topoptpilot_desktop.engineering.matlab_runner import MatlabInfrastructureError, build_runtime_command, run_matlab_batch, run_runtime_solver
 from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles, stage_runtime_solver
 
@@ -472,7 +473,7 @@ class RunManager:
     def _run_external(self, record: _Run, time_limit: float | None, progress=None, console=None) -> dict[str, Any]:
         source_root = engineering_matlab_source_root()
         if record.lane is SolverLane.LOCAL_MATLAB:
-            configured = os.environ.get("TOPOPTPILOT_MATLAB_PATH")
+            configured = configured_matlab_path()
             installations = discover_matlab_installations(configured_path=configured, registry_roots=[], standard_roots=[], where_executables=[], path_value="") if configured else discover_matlab_installations()
             if not installations:
                 raise MatlabInfrastructureError("未发现可验证的本机 MATLAB 安装")

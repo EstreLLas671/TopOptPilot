@@ -11,14 +11,113 @@ use std::{
 use tauri::State;
 
 const ALLOWED_EXTENSIONS: &[&str] = &["m", "json", "md", "txt", "log", "csv"];
+const IGNORED_PROJECT_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    "bower_components",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    "target",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    ".cache",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+];
+const MAX_PROJECT_ENTRIES: usize = 2_000;
+const MAX_PROJECT_DEPTH: usize = 16;
+const MAX_PROJECT_DIRECTORY_ITEMS: usize = 4_096;
+// This counts every directory item examined, including unsupported file types.
+// It prevents a repository with millions of generated binaries from defeating the
+// supported-file output cap simply because none of those binaries are displayed.
+const MAX_PROJECT_SCANNED_ITEMS: usize = 10_000;
+// An explicit DFS stack keeps native directory iterators open only along the active
+// path. The bound is independent from the number of files in a project.
+const MAX_PROJECT_OPEN_DIRECTORY_ENUMERATORS: usize = MAX_PROJECT_DEPTH + 1;
+const MAX_PROJECT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const PATCH_APPROVAL_TTL: Duration = Duration::from_secs(120);
 
 const MAX_PATCH_APPROVALS: usize = 256;
+// Tauri commands can be invoked from more than one window or webview. Keep the
+// traversal budget global so separate requests cannot multiply disk I/O.
+static PROJECT_TRAVERSAL_GATE: Mutex<()> = Mutex::new(());
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectEntry {
     pub relative_path: String,
     pub kind: String,
     pub size_bytes: u64,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListing {
+    pub entries: Vec<ProjectEntry>,
+    pub truncated: bool,
+    pub skipped_directories: usize,
+    pub skipped_links: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProjectTraversalLimits {
+    max_entries: usize,
+    max_depth: usize,
+    max_items_per_directory: usize,
+    max_scanned_items: usize,
+    max_open_directory_enumerators: usize,
+}
+
+impl ProjectTraversalLimits {
+    const DEFAULT: Self = Self {
+        max_entries: MAX_PROJECT_ENTRIES,
+        max_depth: MAX_PROJECT_DEPTH,
+        max_items_per_directory: MAX_PROJECT_DIRECTORY_ITEMS,
+        max_scanned_items: MAX_PROJECT_SCANNED_ITEMS,
+        max_open_directory_enumerators: MAX_PROJECT_OPEN_DIRECTORY_ENUMERATORS,
+    };
+}
+
+/// One lazy native directory enumerator in the explicit depth-first stack.
+///
+/// `std::fs::ReadDir` maps to the platform directory-enumeration API. Keeping it
+/// in this frame avoids materialising all directory entries before pruning can
+/// stop traversal.
+struct ProjectDirectoryFrame {
+    depth: usize,
+    entries: fs::ReadDir,
+    items_seen: usize,
+}
+
+impl ProjectDirectoryFrame {
+    fn open(directory: PathBuf, depth: usize) -> std::io::Result<Self> {
+        let entries = fs::read_dir(directory)?;
+        Ok(Self {
+            depth,
+            entries,
+            items_seen: 0,
+        })
+    }
+}
+
+enum ProjectDirectoryPoll {
+    Entry(fs::DirEntry),
+    Exhausted,
+    Pruned,
+}
+
+#[derive(Default)]
+struct ProjectListState {
+    entries: Vec<ProjectEntry>,
+    truncated: bool,
+    skipped_directories: usize,
+    skipped_links: usize,
+    scanned_items: usize,
+    peak_open_directory_enumerators: usize,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FilePayload {
@@ -124,6 +223,34 @@ fn allowed(path: &Path) -> bool {
         })
         .unwrap_or(false)
 }
+fn ignored_project_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            IGNORED_PROJECT_DIRECTORIES
+                .iter()
+                .any(|ignored| ignored.eq_ignore_ascii_case(name))
+        })
+        .unwrap_or(false)
+}
+
+fn is_non_followable_project_entry(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+
+    #[cfg(not(windows))]
+    false
+}
+
 fn clean_relative(relative: &str) -> Result<PathBuf, String> {
     let path = Path::new(relative);
     if path.is_absolute() || relative.contains('\\') {
@@ -146,7 +273,17 @@ fn clean_relative(relative: &str) -> Result<PathBuf, String> {
 }
 fn root_path(root: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(root);
-    if !path.is_dir() {
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err("project root does not exist".into());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    if is_non_followable_project_entry(&metadata) {
+        return Err("project root cannot be a symbolic link or Windows reparse point".into());
+    }
+    if !metadata.is_dir() {
         return Err("project root does not exist".into());
     }
     fs::canonicalize(path).map_err(|error| format!("project root unavailable: {error}"))
@@ -162,8 +299,11 @@ fn reject_symlink_components(root: &Path, candidate: &Path) -> Result<(), String
         };
         current.push(name);
         match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err("symbolic links are not allowed in project paths".into());
+            Ok(metadata) if is_non_followable_project_entry(&metadata) => {
+                return Err(
+                    "symbolic links and Windows reparse points are not allowed in project paths"
+                        .into(),
+                );
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
@@ -179,8 +319,10 @@ fn safe_file(root: &Path, relative: &str, allow_missing: bool) -> Result<PathBuf
     reject_symlink_components(root, &candidate)?;
     if candidate.exists() {
         let metadata = fs::symlink_metadata(&candidate).map_err(|error| error.to_string())?;
-        if metadata.file_type().is_symlink() {
-            return Err("symbolic links are not allowed in project paths".into());
+        if is_non_followable_project_entry(&metadata) {
+            return Err(
+                "symbolic links and Windows reparse points are not allowed in project paths".into(),
+            );
         }
         let canonical = fs::canonicalize(&candidate).map_err(|error| error.to_string())?;
         if !canonical.starts_with(root) {
@@ -327,40 +469,172 @@ pub fn project_open(root: String) -> Result<serde_json::Value, String> {
 }
 #[tauri::command]
 pub fn project_list(root: String) -> Result<Vec<ProjectEntry>, String> {
-    let canonical = root_path(&root)?;
-    let mut entries = Vec::new();
-    list_dir(&canonical, &canonical, &mut entries)?;
-    Ok(entries)
+    Ok(project_listing(&root)?.entries)
 }
-fn list_dir(root: &Path, dir: &Path, entries: &mut Vec<ProjectEntry>) -> Result<(), String> {
-    for item in fs::read_dir(dir).map_err(|e| e.to_string())? {
-        let item = item.map_err(|e| e.to_string())?;
-        let path = item.path();
-        let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        if metadata.file_type().is_symlink() {
-            return Err("symbolic links are not allowed in project trees".into());
+#[tauri::command]
+pub fn project_list_summary(root: String) -> Result<ProjectListing, String> {
+    project_listing(&root)
+}
+fn project_listing(root: &str) -> Result<ProjectListing, String> {
+    // A poisoned gate only means an earlier caller panicked; the lock is still
+    // usable and retaining the single-permit invariant is safer than bypassing it.
+    let _traversal_permit = match PROJECT_TRAVERSAL_GATE.lock() {
+        Ok(permit) => permit,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let canonical = root_path(root)?;
+    project_listing_with_limits(&canonical, ProjectTraversalLimits::DEFAULT)
+}
+
+fn project_listing_with_limits(
+    root: &Path,
+    limits: ProjectTraversalLimits,
+) -> Result<ProjectListing, String> {
+    if limits.max_entries == 0
+        || limits.max_items_per_directory == 0
+        || limits.max_scanned_items == 0
+        || limits.max_open_directory_enumerators == 0
+    {
+        return Err("project traversal limits must be positive".into());
+    }
+
+    let mut state = ProjectListState::default();
+    let mut stack =
+        vec![ProjectDirectoryFrame::open(root.to_path_buf(), 0)
+            .map_err(|error| error.to_string())?];
+    state.peak_open_directory_enumerators = stack.len();
+
+    // Explicit DFS keeps the current native ReadDir handles bounded to one path.
+    // It reads only the next item needed to make each pruning decision.
+    while let Some(frame) = stack.last_mut() {
+        if state.scanned_items >= limits.max_scanned_items {
+            state.truncated = true;
+            break;
         }
-        let rel = path
-            .strip_prefix(root)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if metadata.is_dir() {
-            list_dir(root, &path, entries)?;
-        } else if allowed(&path) {
-            entries.push(ProjectEntry {
-                relative_path: rel,
-                kind: "file".into(),
-                size_bytes: metadata.len(),
-            });
+        let current_depth = frame.depth;
+        let polled =
+            poll_project_directory(frame, &mut state, limits).map_err(|error| error.to_string())?;
+
+        match polled {
+            ProjectDirectoryPoll::Exhausted => {
+                stack.pop();
+            }
+            ProjectDirectoryPoll::Pruned => {
+                state.truncated = true;
+                stack.pop();
+            }
+            ProjectDirectoryPoll::Entry(item) => {
+                if state.entries.len() >= limits.max_entries {
+                    state.truncated = true;
+                    break;
+                }
+
+                let path = item.path();
+                let metadata = match fs::symlink_metadata(&path) {
+                    Ok(metadata) => metadata,
+                    Err(error) if is_prunable_directory_error(&error) => {
+                        state.truncated = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error.to_string()),
+                };
+                if is_non_followable_project_entry(&metadata) {
+                    state.skipped_links += 1;
+                    continue;
+                }
+
+                if metadata.is_dir() {
+                    if ignored_project_directory(&path) || current_depth >= limits.max_depth {
+                        state.skipped_directories += 1;
+                        if current_depth >= limits.max_depth {
+                            state.truncated = true;
+                        }
+                        continue;
+                    }
+                    if stack.len() >= limits.max_open_directory_enumerators {
+                        state.skipped_directories += 1;
+                        state.truncated = true;
+                        continue;
+                    }
+
+                    match ProjectDirectoryFrame::open(path, current_depth + 1) {
+                        Ok(child) => {
+                            stack.push(child);
+                            state.peak_open_directory_enumerators =
+                                state.peak_open_directory_enumerators.max(stack.len());
+                        }
+                        Err(error) if is_prunable_directory_error(&error) => {
+                            state.skipped_directories += 1;
+                            state.truncated = true;
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                } else if allowed(&path) {
+                    let relative_path = path
+                        .strip_prefix(root)
+                        .map_err(|error| error.to_string())?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    state.entries.push(ProjectEntry {
+                        relative_path,
+                        kind: "file".into(),
+                        size_bytes: metadata.len(),
+                    });
+                }
+            }
         }
     }
-    Ok(())
+    debug_assert!(state.peak_open_directory_enumerators <= limits.max_open_directory_enumerators);
+
+    state.entries.sort_by(|left, right| {
+        left.relative_path
+            .to_ascii_lowercase()
+            .cmp(&right.relative_path.to_ascii_lowercase())
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    Ok(ProjectListing {
+        entries: state.entries,
+        truncated: state.truncated,
+        skipped_directories: state.skipped_directories,
+        skipped_links: state.skipped_links,
+    })
+}
+
+fn poll_project_directory(
+    frame: &mut ProjectDirectoryFrame,
+    state: &mut ProjectListState,
+    limits: ProjectTraversalLimits,
+) -> std::io::Result<ProjectDirectoryPoll> {
+    let entry = frame.entries.next().transpose()?;
+    let Some(entry) = entry else {
+        return Ok(ProjectDirectoryPoll::Exhausted);
+    };
+
+    frame.items_seen += 1;
+    state.scanned_items += 1;
+    if frame.items_seen > limits.max_items_per_directory {
+        return Ok(ProjectDirectoryPoll::Pruned);
+    }
+    Ok(ProjectDirectoryPoll::Entry(entry))
+}
+
+fn is_prunable_directory_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+    )
 }
 #[tauri::command]
 pub fn project_read(root: String, relative_path: String) -> Result<FilePayload, String> {
     let canonical = root_path(&root)?;
     let path = safe_file(&canonical, &relative_path, false)?;
+    let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
+    if metadata.len() > MAX_PROJECT_FILE_BYTES {
+        return Err(format!(
+            "file exceeds the editor size limit of {} bytes",
+            MAX_PROJECT_FILE_BYTES
+        ));
+    }
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     let content =
         String::from_utf8(bytes.clone()).map_err(|_| "file is not valid UTF-8".to_string())?;
@@ -530,15 +804,10 @@ pub fn project_rename(root: String, from: String, to: String) -> Result<(), Stri
 }
 #[tauri::command]
 pub fn project_search(root: String, query: String) -> Result<Vec<ProjectEntry>, String> {
-    let entries = project_list(root)?;
-    Ok(entries
+    let query = query.to_lowercase();
+    Ok(project_list(root)?
         .into_iter()
-        .filter(|entry| {
-            entry
-                .relative_path
-                .to_lowercase()
-                .contains(&query.to_lowercase())
-        })
+        .filter(|entry| entry.relative_path.to_lowercase().contains(&query))
         .collect())
 }
 
@@ -859,7 +1128,8 @@ mod tests {
         apply_patch_transaction, apply_patch_transaction_with_save, apply_unified_diff,
         canonical_picked_project, clean_relative, create_unique_temp_file, digest,
         patch_apply_with_state, patch_preview_with_state, project_id_for_root,
-        proposal_base_digest, safe_file, PatchApprovalState, PatchFile, PatchProposal,
+        project_list_summary, project_listing_with_limits, project_read, proposal_base_digest,
+        safe_file, PatchApprovalState, PatchFile, PatchProposal, ProjectTraversalLimits,
     };
     use std::{
         fs,
@@ -884,6 +1154,209 @@ mod tests {
         fs::write(&file, "x").unwrap();
         assert!(canonical_picked_project(Some(file)).is_err());
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn project_list_skips_generated_directories_and_has_a_bounded_result() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-list-limit-{}",
+            std::process::id()
+        ));
+        let source = base.join("src");
+        let generated = base.join("node_modules").join("dependency");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&generated).unwrap();
+        for index in 0..2_100 {
+            fs::write(source.join(format!("solver-{index:04}.m")), "x = 1;\n").unwrap();
+        }
+        fs::write(generated.join("generated.m"), "generated = true;\n").unwrap();
+
+        let root = fs::canonicalize(&base)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let result = project_list_summary(root);
+        let _ = fs::remove_dir_all(&base);
+        let listing = result.unwrap();
+
+        assert!(
+            listing.entries.len() <= 2_000,
+            "project list must be bounded"
+        );
+        assert!(listing.truncated, "the listing must report its entry cap");
+        assert_eq!(listing.skipped_directories, 1);
+        assert!(
+            listing
+                .entries
+                .iter()
+                .all(|entry| !entry.relative_path.starts_with("node_modules/")),
+            "generated dependency directories must not be listed"
+        );
+    }
+
+    #[test]
+    fn project_listing_prunes_overdeep_directories() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-list-pruning-{}",
+            std::process::id()
+        ));
+        let source = base.join("source");
+        let deeper = source.join("deeper");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&deeper).unwrap();
+        fs::write(source.join("kept.m"), "kept = true;\n").unwrap();
+        fs::write(deeper.join("hidden.m"), "hidden = true;\n").unwrap();
+
+        let root = fs::canonicalize(&base).unwrap();
+        let listing = project_listing_with_limits(
+            &root,
+            ProjectTraversalLimits {
+                max_entries: 8,
+                max_depth: 1,
+                max_items_per_directory: 8,
+                max_scanned_items: 8,
+                max_open_directory_enumerators: 2,
+            },
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(listing.truncated, "depth pruning must be disclosed");
+        assert_eq!(listing.skipped_directories, 1);
+        assert!(listing
+            .entries
+            .iter()
+            .any(|entry| entry.relative_path == "source/kept.m"));
+        assert!(listing
+            .entries
+            .iter()
+            .all(|entry| entry.relative_path != "source/deeper/hidden.m"));
+    }
+
+    #[test]
+    fn project_listing_respects_the_open_enumerator_bound() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-list-enumerator-bound-{}",
+            std::process::id()
+        ));
+        let source = base.join("source");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("solver.m"), "x = 1;\n").unwrap();
+
+        let root = fs::canonicalize(&base).unwrap();
+        let listing = project_listing_with_limits(
+            &root,
+            ProjectTraversalLimits {
+                max_entries: 8,
+                max_depth: 8,
+                max_items_per_directory: 8,
+                max_scanned_items: 8,
+                max_open_directory_enumerators: 1,
+            },
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(listing.truncated, "the resource cap must be disclosed");
+        assert_eq!(listing.skipped_directories, 1);
+        assert!(listing.entries.is_empty());
+    }
+
+    #[test]
+    fn project_listing_caps_unsupported_directory_items() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-list-scanned-items-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        for index in 0..3 {
+            fs::write(base.join(format!("binary-{index}.bin")), [0_u8, 1, 2]).unwrap();
+        }
+
+        let root = fs::canonicalize(&base).unwrap();
+        let listing = project_listing_with_limits(
+            &root,
+            ProjectTraversalLimits {
+                max_entries: 8,
+                max_depth: 8,
+                max_items_per_directory: 8,
+                max_scanned_items: 2,
+                max_open_directory_enumerators: 9,
+            },
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(
+            listing.truncated,
+            "unsupported files must not bypass the total scan budget"
+        );
+        assert!(listing.entries.is_empty());
+    }
+
+    #[test]
+    fn project_listing_prunes_an_overfull_directory_before_collecting_it() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-list-directory-items-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        for index in 0..3 {
+            fs::write(base.join(format!("solver-{index}.m")), "x = 1;\n").unwrap();
+        }
+
+        let root = fs::canonicalize(&base).unwrap();
+        let listing = project_listing_with_limits(
+            &root,
+            ProjectTraversalLimits {
+                max_entries: 8,
+                max_depth: 8,
+                max_items_per_directory: 2,
+                max_scanned_items: 8,
+                max_open_directory_enumerators: 9,
+            },
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(
+            listing.truncated,
+            "the per-directory limit must be disclosed"
+        );
+        assert!(listing.entries.len() <= 2);
+    }
+
+    #[test]
+    fn project_read_rejects_files_larger_than_the_editor_limit() {
+        let base = std::env::temp_dir().join(format!(
+            "topoptpilot-project-file-size-limit-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let large_file = base.join("solver.log");
+        fs::File::create(&large_file)
+            .unwrap()
+            .set_len(2 * 1024 * 1024 + 1)
+            .unwrap();
+
+        let root = fs::canonicalize(&base)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let result = project_read(root, "solver.log".into());
+        let _ = fs::remove_dir_all(&base);
+
+        assert!(
+            result
+                .unwrap_err()
+                .contains("file exceeds the editor size limit"),
+            "large files must be rejected before loading them into the editor"
+        );
     }
     fn patch_fixture(name: &str) -> (std::path::PathBuf, String, PatchProposal) {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1467,12 +1940,13 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn rejects_junctions_while_listing_project_trees() {
+    fn skips_child_junctions_and_rejects_junction_roots() {
         let base =
             std::env::temp_dir().join(format!("topoptpilot-junction-{}", std::process::id()));
         let root = base.join("root");
         let outside = base.join("outside");
         let linked = root.join("linked");
+        let root_alias = base.join("root-alias");
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&outside).unwrap();
@@ -1491,12 +1965,35 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let canonical_root = fs::canonicalize(&root).unwrap();
-        let mut entries = Vec::new();
-        let error = super::list_dir(&canonical_root, &canonical_root, &mut entries).unwrap_err();
-        assert_eq!(error, "symbolic links are not allowed in project trees");
+        let root_text = fs::canonicalize(&root)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let listing = super::project_list_summary(root_text).unwrap();
+        assert_eq!(listing.skipped_links, 1);
+        assert!(listing.entries.is_empty());
+
+        let alias_output = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(&root_alias)
+            .arg(&root)
+            .output()
+            .unwrap();
+        assert!(
+            alias_output.status.success(),
+            "failed to create root junction: stdout={} stderr={}",
+            String::from_utf8_lossy(&alias_output.stdout),
+            String::from_utf8_lossy(&alias_output.stderr)
+        );
+        let root_error =
+            super::project_list_summary(root_alias.to_string_lossy().into_owned()).unwrap_err();
+        assert_eq!(
+            root_error,
+            "project root cannot be a symbolic link or Windows reparse point"
+        );
 
         fs::remove_dir(&linked).unwrap();
+        fs::remove_dir(&root_alias).unwrap();
         fs::remove_dir_all(&base).unwrap();
     }
 

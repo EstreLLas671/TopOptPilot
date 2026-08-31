@@ -113,6 +113,30 @@ TopOptPilot_2.0.3_x64-setup.exe
 
 切换“工程开发”和“AI 科研”只切换界面，不会取消正在运行的 MATLAB 任务，也不会重复探测环境。
 
+### 3.5 无界面 / Agent 使用（无需打开桌面客户端）
+
+仓库同时提供受 Policy 约束的 `topoptctl`。Codex、Pi、CI 或其他能够执行本地命令的 Agent 可以通过它完成 MATLAB 设置、Qwen 连接、工程基线的计划/真实运行/取消/导出，以及受控的 Research 流程；不需要启动 Tauri 或 Streamlit 窗口。
+
+首次从源码仓库使用时，在仓库根目录执行下面的引导器：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_headless.ps1
+```
+
+它只会在仓库内创建或复用 `.venv`、安装 Python 依赖，并在 Pi 运行时缺失时以 `npm ci --ignore-scripts` 安装锁定依赖。它**不会**保存或读取 API Key、启动 Sidecar、启动 MATLAB、运行工程任务或提交 Research。已有 `node_modules` 不会被默认覆盖；若人工检查后确实需要重装，才显式加入 `-ReinstallPiRuntime`。
+
+然后为当前无界面会话选择独立状态目录，并启动受认证、仅监听 `127.0.0.1` 的 Sidecar：
+
+```powershell
+$state = Join-Path $env:LOCALAPPDATA "TopOptPilot\headless"
+.\topoptctl.cmd --data-dir $state daemon start
+.\topoptctl.cmd --data-dir $state doctor
+```
+
+Agent 必须先执行 `engineering plan`，只有用户明确授权真实计算时才可附加 `--confirm` 执行 `engineering run start`；不能把自然语言“开始”或任务 JSON 当作确认。外部 Agent 也不得绕过 `topoptctl` 调用任意 MATLAB、Shell、数据库或未白名单的 Policy 工具。
+
+完整命令、严格 JSON 任务格式、Qwen 凭据的安全输入方式、真实 2D 闭环、取消、哈希导出以及 Agent 调用规则见 [无界面命令手册](docs/topoptctl.md)；架构决策和已完成的实机验证分别见 [ADR-0004](docs/decisions/ADR-0004-headless-topoptctl.md) 与 [验证记录](docs/validation/2026-08-30-topoptctl-headless-e2e.md)。
+
 ## 4. 设置中心
 
 点击窗口右上角“设置”进入设置中心。

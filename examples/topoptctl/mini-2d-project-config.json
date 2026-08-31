@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "dimension": "2d",
+  "bcType": "cantilever",
+  "accuracy": "standard",
+  "nelx": 20,
+  "nely": 10,
+  "nelz": 1,
+  "volfrac": 0.4,
+  "penal": 3.0,
+  "rmin": 1.5,
+  "maxIterations": 4,
+  "minIterations": 1,
+  "filterStrategy": "fixed",
+  "material": {
+    "preset": "normalized",
+    "name": "归一化参考材料",
+    "youngsModulusGPa": 1.0,
+    "poissonRatio": 0.3,
+    "densityKgM3": 1.0,
+    "yieldStrengthMPa": 1.0
+  }
+}

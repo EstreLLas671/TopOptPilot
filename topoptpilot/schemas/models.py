@@ -351,6 +351,9 @@ class ToolRequest(BaseModel):
     research_id: str
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    # The public API caller may identify the two supported local clients for
+    # audit provenance, but cannot impersonate an internal Pi process.
+    source: Literal["API", "TOPoptctl"] = "API"
 
 
 class SubagentDispatchRequest(BaseModel):
