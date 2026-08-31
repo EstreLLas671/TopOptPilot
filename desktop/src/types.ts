@@ -3,7 +3,7 @@ import type { OptimizationConfig } from "./optimization-config";
 export type Locale = "zh-CN" | "en-US";
 export interface BackendInfo { port: number; token: string }
 export interface ProjectEntry { relative_path: string; kind: string; size_bytes: number }
-export interface ProjectListing { entries: ProjectEntry[]; truncated: boolean; skippedDirectories: number }
+export interface ProjectListing { entries: ProjectEntry[]; truncated: boolean; skippedDirectories: number; skippedLinks: number }
 export interface ProjectFile { relative_path: string; content: string; sha256: string }
 export interface ProjectOpen { root: string; projectId: string }
 export interface PatchProposal { projectId: string; baseDigest: string; files: Array<{ relativePath: string; beforeDigest: string; unifiedDiff: string }> }

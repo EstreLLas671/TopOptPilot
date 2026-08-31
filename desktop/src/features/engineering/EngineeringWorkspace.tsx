@@ -295,10 +295,11 @@ export default function EngineeringWorkspace({
   }, [terminalSession]);
 
   const visibleFiles = useMemo(() => query ? files.filter(file => file.relative_path.toLowerCase().includes(query.toLowerCase())) : files, [files, query]);
-  const projectListingNotice = projectListing && (projectListing.truncated || projectListing.skippedDirectories > 0)
+  const projectListingNotice = projectListing && (projectListing.truncated || projectListing.skippedDirectories > 0 || projectListing.skippedLinks > 0)
     ? [
       projectListing.skippedDirectories > 0 ? `已跳过 ${projectListing.skippedDirectories} 个依赖、构建或过深目录。` : "",
-      projectListing.truncated ? "为避免卡顿，文件树最多检索 2,000 个支持文件；请打开更具体的项目文件夹。" : "",
+      projectListing.skippedLinks > 0 ? `为保证安全，已跳过 ${projectListing.skippedLinks} 个符号链接或 Windows 重解析点。` : "",
+      projectListing.truncated ? "为避免卡顿，文件树最多显示 2,000 个支持文件，并对扫描目录项设置资源预算；请打开更具体的项目文件夹。" : "",
     ].filter(Boolean).join(" ")
     : "";
 
