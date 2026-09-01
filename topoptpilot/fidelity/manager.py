@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 
 
 class FidelityManager:
-    LEVELS = ("F0 — MATLAB 2D Coarse", "F1 — MATLAB 2D Fine",
-              "F2 — MATLAB 3D Coarse", "F3 — MATLAB 3D Fine")
+    LEVELS = ("F0 — Python 2D Coarse", "F1 — Python 2D Fine",
+              "F2 — Python 3D Target", "F3 — MATLAB 3D Formal")
 
     def promote(self, current: str) -> str:
         try:

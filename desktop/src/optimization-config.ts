@@ -38,6 +38,9 @@ export type OptimizationConfig = {
   dimension: SolverDimension;
   bcType: BuiltInCase;
   accuracy: Accuracy;
+  dimensions: [number, number, number];
+  unit: string;
+  cellSizeMeters: number;
   nelx: number;
   nely: number;
   nelz: number;
@@ -50,6 +53,15 @@ export type OptimizationConfig = {
   material: MaterialConfig;
 };
 
+export const DEFAULT_CELL_SIZE_METERS = 0.25;
+const UNIT_TO_METERS: Record<string, number> = { m: 1, mm: 1e-3, cm: 1e-2, um: 1e-6 };
+
+export function dimensionsToGrid(dimensions: readonly number[], dimension: SolverDimension, unit = "m", cellSizeMeters = DEFAULT_CELL_SIZE_METERS): [number, number, number] {
+  const scale = UNIT_TO_METERS[unit.trim().toLowerCase()] ?? 1;
+  const safeCell = Number.isFinite(cellSizeMeters) && cellSizeMeters > 0 ? cellSizeMeters : DEFAULT_CELL_SIZE_METERS;
+  const values = dimensions.slice(0, dimension === "2d" ? 2 : 3).map(value => Math.max(1, Math.ceil((Number(value) * scale) / safeCell)));
+  return [values[0] || 1, values[1] || 1, dimension === "2d" ? 1 : (values[2] || 1)];
+}
 export type OptimizationConfigAction = {
   type: "apply_optimization_config";
   config: OptimizationConfig;
@@ -61,6 +73,10 @@ export const DEFAULT_OPTIMIZATION_CONFIG: OptimizationConfig = {
   dimension: "3d",
   bcType: "cantilever",
   accuracy: "standard",
+  dimensions: [6, 2, 1.5],
+  unit: "m",
+  cellSizeMeters: DEFAULT_CELL_SIZE_METERS,
+
   nelx: 24,
   nely: 8,
   nelz: 6,
@@ -73,12 +89,26 @@ export const DEFAULT_OPTIMIZATION_CONFIG: OptimizationConfig = {
   filterStrategy: "fixed",
 };
 
+export function normalizeOptimizationConfig(value: Partial<OptimizationConfig> | null | undefined): OptimizationConfig {
+  const source = value || {};
+  const dimension = source.dimension === "2d" ? "2d" : "3d";
+  const dimensions = (Array.isArray(source.dimensions) && source.dimensions.length >= 2
+    ? [Number(source.dimensions[0]), Number(source.dimensions[1]), Number(source.dimensions[2] ?? DEFAULT_OPTIMIZATION_CONFIG.dimensions[2])]
+    : [Number(source.nelx ?? DEFAULT_OPTIMIZATION_CONFIG.nelx) * DEFAULT_CELL_SIZE_METERS, Number(source.nely ?? DEFAULT_OPTIMIZATION_CONFIG.nely) * DEFAULT_CELL_SIZE_METERS, Number(source.nelz ?? DEFAULT_OPTIMIZATION_CONFIG.nelz) * DEFAULT_CELL_SIZE_METERS]) as [number, number, number];
+  const normalized = { ...DEFAULT_OPTIMIZATION_CONFIG, ...source, dimension, dimensions, unit: source.unit || "m", cellSizeMeters: Number(source.cellSizeMeters) > 0 ? Number(source.cellSizeMeters) : DEFAULT_CELL_SIZE_METERS, material: { ...DEFAULT_OPTIMIZATION_CONFIG.material, ...(source.material || {}) } } as OptimizationConfig;
+  const [nelx, nely, nelz] = dimensionsToGrid(normalized.dimensions, normalized.dimension, normalized.unit, normalized.cellSizeMeters);
+  return { ...normalized, nelx, nely, nelz };
+}
 export function validateOptimizationConfig(config: OptimizationConfig): string[] {
   const errors: string[] = [];
   if (!["2d", "3d"].includes(config.dimension)) errors.push("求解维度仅支持 2D 或 3D");
   if (!["cantilever", "MBB", "simply_supported", "L-bracket"].includes(config.bcType)) errors.push("工况不是受支持的内置类型");
   if (!["standard", "high"].includes(config.accuracy)) errors.push("精度仅支持标准或高精度");
   if (!["fixed", "adaptive"].includes(config.filterStrategy)) errors.push("滤波策略仅支持固定或自适应半径");
+  if (!Array.isArray(config.dimensions) || config.dimensions.length < 2 || (config.dimension === "3d" && config.dimensions.length < 3)) errors.push("几何尺寸必须包含有效的长、宽及高（3D）");
+  else config.dimensions.slice(0, config.dimension === "2d" ? 2 : 3).forEach((value, index) => { if (!(Number.isFinite(value) && value > 0)) errors.push(["长(X)", "宽(Y)", "高(Z)"][index] + "必须为正数"); });
+  if (!["m", "mm", "cm", "um"].includes(String(config.unit || "").trim().toLowerCase())) errors.push("尺寸单位仅支持 m、mm、cm 或 um");
+  if (!(Number.isFinite(config.cellSizeMeters) && config.cellSizeMeters > 0)) errors.push("单元网格尺寸必须为正数");
   for (const key of ["nelx", "nely", "nelz"] as const) {
     if (!Number.isInteger(config[key]) || config[key] <= 0) errors.push(`${key} 必须是正整数`);
   }
@@ -116,11 +146,13 @@ export function parseOptimizationConfigAction(value: unknown): OptimizationConfi
 }
 
 export function engineeringTaskFromConfig(config: OptimizationConfig) {
+  const grid = dimensionsToGrid(config.dimensions, config.dimension, config.unit, config.cellSizeMeters);
+  const cellSizeMeters = [0, 1, 2].map(index => config.dimension === "2d" && index === 2 ? 0 : (index < 3 && grid[index] > 0 ? Number(config.dimensions[index]) * (UNIT_TO_METERS[config.unit] ?? 1) / grid[index] : 0)) as [number, number, number];
   return {
     task_id: "topoptpilot-ui",
     dimension: config.dimension,
     load_case: config.bcType,
-    geometry: { nelx: config.nelx, nely: config.nely, nelz: config.dimension === "2d" ? 1 : config.nelz },
+    geometry: { nelx: grid[0], nely: grid[1], nelz: grid[2], dimensions: config.dimensions.slice(0, config.dimension === "2d" ? 2 : 3), unit: config.unit, cellSizeMeters, cell_size_m: config.cellSizeMeters },
     material: {
       preset: config.material.preset,
       name: config.material.name.trim(),
@@ -140,6 +172,7 @@ export function engineeringTaskFromConfig(config: OptimizationConfig) {
       accuracy: config.accuracy,
       E: config.material.youngsModulusGPa,
       nu: config.material.poissonRatio,
+      grid3d: config.dimension === "3d" ? grid : undefined,
     },
   };
 }

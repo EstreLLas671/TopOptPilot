@@ -6,7 +6,7 @@
 
 **生成时间**：【生成时间】
 
-**智能体版本**：TopOptPilot 2.0.3
+**智能体版本**：TopOptPilot 2.0.4
 
 **对应任务 ID**：【Research ID】
 

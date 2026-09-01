@@ -25,6 +25,37 @@ from topoptpilot_desktop.engineering.matlab import discover_matlab_installations
 from topoptpilot_desktop.engineering.configuration import configured_matlab_path
 from topoptpilot_desktop.engineering.matlab_runner import MatlabInfrastructureError, build_runtime_command, run_matlab_batch, run_runtime_solver
 from topoptpilot_desktop.engineering.runtime_profiles import RuntimeProfileError, runtime_profiles, stage_runtime_solver
+_UNIT_TO_METERS = {"m": 1.0, "mm": 1e-3, "cm": 1e-2, "um": 1e-6}
+_DEFAULT_CELL_SIZE_M = 0.25
+
+
+def _map_physical_geometry(task: dict[str, Any]) -> dict[str, Any]:
+    """Derive solver cell counts from physical dimensions when supplied."""
+    geometry = dict(task.get("geometry") or {})
+    dimensions = geometry.get("dimensions")
+    if not isinstance(dimensions, (list, tuple)) or len(dimensions) < 2:
+        return task
+    dimension = str(task.get("dimension") or "3d").lower()
+    unit = str(geometry.get("unit") or "m").strip().lower()
+    scale = _UNIT_TO_METERS.get(unit)
+    if scale is None:
+        raise ValueError("geometry.unit 仅支持 m、mm、cm 或 um")
+    count = 2 if dimension == "2d" else 3
+    values = [float(dimensions[i]) for i in range(count)]
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("geometry.dimensions 必须为有限正数")
+    cell = geometry.get("cell_size_m", _DEFAULT_CELL_SIZE_M)
+    if isinstance(cell, bool) or not isinstance(cell, (int, float)) or not math.isfinite(float(cell)) or float(cell) <= 0:
+        raise ValueError("geometry.cell_size_m 必须为正数")
+    grid = [max(1, int(math.ceil(value * scale / float(cell)))) for value in values]
+    geometry.update({"nelx": grid[0], "nely": grid[1], "nelz": 1 if dimension == "2d" else grid[2], "unit": unit})
+    geometry["cellSizeMeters"] = [value * scale / grid[index] for index, value in enumerate(values)] + ([0.0] if count == 2 else [])
+    task = dict(task)
+    task["geometry"] = geometry
+    params = dict(task.get("params") or {})
+    if dimension == "3d": params["grid3d"] = [grid[0], grid[1], grid[2]]
+    task["params"] = params
+    return task
 
 
 def _data_root() -> Path:
@@ -72,6 +103,8 @@ class RunCreateRequest(BaseModel):
         dimension = str(task.get("dimension") or "3d").lower()
         if dimension not in {"2d", "3d"}:
             raise ValueError("task.dimension 仅支持 2d 或 3d")
+        task = _map_physical_geometry(task)
+        self.task = task
         geometry = task.get("geometry") or {}
         params = task.get("params") or {}
         material = task.get("material") or {}

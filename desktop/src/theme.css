@@ -557,3 +557,33 @@ html[data-theme="dark"] .v2-error {
   color: var(--theme-danger) !important;
   border-color: color-mix(in srgb, var(--theme-danger) 55%, var(--theme-border)) !important;
 }
+
+/* Ensure native settings controls remain readable in the dark theme. */
+html[data-theme="dark"] .settings-field,
+html[data-theme="dark"] .settings-check,
+html[data-theme="dark"] .theme-contrast {
+  color: var(--theme-muted-text) !important;
+}
+html[data-theme="dark"] .settings-field input,
+html[data-theme="dark"] .settings-field select {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .settings-field select {
+  color-scheme: dark;
+}
+html[data-theme="dark"] .settings-field select option,
+html[data-theme="dark"] .settings-field select optgroup {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+}
+html[data-theme="dark"] .settings-content button:not(.approve) {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .settings-content button:not(.approve):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--theme-accent) 16%, var(--theme-elevated)) !important;
+  color: var(--theme-accent) !important;
+}

@@ -152,6 +152,52 @@ ocOptions.passive_solid = passiveSolid;
 ocOptions.volume_mask = domainMask;
 
 KE = lk_3d(config.E, config.nu);
+
+% F3 精读模式：固定使用 F2 最终密度，仅执行 MATLAB FEM/应力复算。
+if isfield(config, 'verification_mode') && strcmpi(char(string(config.verification_mode)), 'fixed_density')
+    if ~isfield(config, 'initial_density') || isempty(config.initial_density)
+        error('topopt3d_main:MissingInitialDensity', 'fixed_density 模式需要 initial_density。');
+    end
+    fixedDensity = double(config.initial_density);
+    if ~isequal(size(fixedDensity), gridSize) || ~all(isfinite(fixedDensity(:)))
+        error('topopt3d_main:InvalidInitialDensity', 'initial_density shape 或有限性不匹配。');
+    end
+    fixedDensity = min(max(fixedDensity, 0), 1);
+    fixedDensity(~domainMask) = config.xmin;
+    fixedDensity(passiveSolid) = 1.0;
+    [Ufixed, Kfixed] = FE_solver_3d(nelx, nely, nelz, fixedDensity, config.penal, bcConfig);
+    [fixedObjective, ~] = compliance_and_sensitivity_3d( ...
+        nelx, nely, nelz, fixedDensity, config.penal, config.Emin, Ufixed, KE);
+    [vonMisesFixed, stressFixed] = compute_von_mises_3d( ...
+        nelx, nely, nelz, fixedDensity, config.penal, config.Emin, Ufixed, ...
+        config.stress_measure, config.E, config.nu);
+    result = struct();
+    result.x = fixedDensity;
+    result.raw_x = fixedDensity;
+    result.domain_mask = domainMask;
+    result.iterations = 1;
+    result.objective = fixedObjective;
+    result.volume_fraction = mean(fixedDensity(domainMask));
+    result.projected_volume_fraction = result.volume_fraction;
+    result.objective_history = fixedObjective;
+    result.change_history = 0;
+    result.radius_history = config.rmin;
+    result.move_history = 0;
+    result.volume_error_history = result.volume_fraction - config.volfrac;
+    result.penal_history = config.penal;
+    result.relative_objective_history = 0;
+    result.final_penal = config.penal;
+    result.U = Ufixed;
+    result.K = Kfixed;
+    result.von_mises = vonMisesFixed;
+    result.stress = stressFixed;
+    result.config = config;
+    if config.display
+        show_result_3d(result);
+    end
+    return;
+end
+
 objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);

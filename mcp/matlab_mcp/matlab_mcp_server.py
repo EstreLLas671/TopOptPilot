@@ -85,6 +85,8 @@ class MatlabMcpWorker:
             "bc_config": dict(task.get("bc_config") or {}),
             "geometry": task.get("geometry") or {},
             "E": float(params.get("E", 1.0)),
+            "verification_mode": str(params.get("verification_mode", "")),
+            "initial_density": params.get("initial_density"),
             "nu": float(params.get("nu", 0.3)),
             "beta": float(params.get("beta", 1.0)),
             "solver_variant": str(task.get("solver_variant", "auto")),
@@ -95,8 +97,13 @@ class MatlabMcpWorker:
         if isinstance(geometry, dict) and geometry.get("mask") is not None:
             config["domain_mask"] = geometry["mask"]
         if dimension == 3:
-            grid = params.get("grid3d") or ([12, 4, 3] if task.get("mesh_level") == "coarse3d"
-                                             else [18, 6, 4])
+            grid = params.get("grid3d")
+            if str(params.get("verification_mode", "")) == "fixed_density" and not (isinstance(grid, (list, tuple)) and len(grid) == 3):
+                raise MatlabMcpError("F3 fixed-density verification requires an explicit grid3d")
+            grid = grid or ([12, 4, 3] if task.get("mesh_level") == "coarse3d"
+                            else [18, 6, 4])
+            if not isinstance(grid, (list, tuple)) or len(grid) != 3 or any(int(value) < 1 for value in grid):
+                raise MatlabMcpError("grid3d must contain three positive integers")
             config.update({"nelx": int(grid[0]), "nely": int(grid[1]), "nelz": int(grid[2]),
                            "accuracy": "standard" if task.get("mesh_level") == "coarse3d" else "high",
                            "penal_start": 1.0, "auto_boundary_solid": False})

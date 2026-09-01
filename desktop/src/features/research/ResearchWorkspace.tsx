@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArchiveRestore, Bot, CheckCircle2, ChevronRight, FileJson2, FlaskConical, FolderOpen, ImagePlus, LoaderCircle, MessageCircle, Play, Plus, Send, Settings2, ShieldCheck, Trash2, X } from "lucide-react";
 import { api } from "../../api";
 import type { ConversationAttachment, ConversationMessage, EngineeringComparisonScheme, Experiment, Research, ResearchStateAction, ResearchWorkflowProgress } from "../../types";
-import { DEFAULT_OPTIMIZATION_CONFIG, type OptimizationConfig } from "../../optimization-config";
+import { DEFAULT_OPTIMIZATION_CONFIG, normalizeOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 import type { EngineeringSolverLane } from "../../engineering-workspace";
 import { solverLaneLabel } from "../../workspace";
 import { ConvergenceChart, ScalarMap } from "../engineering/ResultViewer";
+import InteractiveVolumeView, { type ViewState } from "../engineering/InteractiveVolumeView";
+import { asFortranVolume, readFloat32LittleEndian, type MatlabVolume } from "../engineering/matlab-artifact";
 import { normalizeResearchField, normalizeResearchHistory } from "./research-result";
 import ParameterConfigurationDialog from "../engineering/ParameterConfigurationDialog";
 import ResizableWorkspaceLayout from "../../components/ResizableWorkspaceLayout";
@@ -70,6 +72,11 @@ export default function ResearchWorkspace(props: Props) {
   const [reportOverwrite, setReportOverwrite] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportStatus, setReportStatus] = useState("");
+  const [visualizationManifest, setVisualizationManifest] = useState<import("../../types").ResearchVisualizationManifest | null>(null);
+  const [densityVolume, setDensityVolume] = useState<MatlabVolume | null>(null);
+  const [stressVolume, setStressVolume] = useState<MatlabVolume | null>(null);
+  const [resultField, setResultField] = useState<"density" | "stress">("density");
+  const [volumeViewState, setVolumeViewState] = useState<ViewState | undefined>(undefined);
   const fileInput = useRef<HTMLInputElement>(null);
   const dropZone = useRef<HTMLDivElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
@@ -121,7 +128,7 @@ export default function ResearchWorkspace(props: Props) {
     ]).then(async ([artifacts, config, conversations]) => {
       if (cancelled || generation !== selectedLoadGeneration.current) return;
       setArtifactIndex(artifacts);
-      setResearchConfig(config);
+      setResearchConfig(normalizeOptimizationConfig(config));
       const id = conversations[0]?.id || "";
       if (cancelled || generation !== selectedLoadGeneration.current) return;
       setConversationId(id);
@@ -134,6 +141,30 @@ export default function ResearchWorkspace(props: Props) {
     return () => { cancelled = true; };
   }, [selected?.id, selected?.goal, onError]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setVisualizationManifest(null);
+    setDensityVolume(null);
+    setStressVolume(null);
+    setResultField("density");
+    if (!selected || !active) return;
+    void api.researchVisualization(selected.id, active.id).then(async manifest => {
+      if (cancelled) return;
+      setVisualizationManifest(manifest);
+      if (manifest.dimension !== "3d") return;
+      const density = asFortranVolume(readFloat32LittleEndian(await api.researchVisualizationField(selected.id, active.id, "density")), manifest.shape);
+      if (cancelled) return;
+      setDensityVolume(density);
+      if (manifest.hasStress) {
+        try {
+          const stress = asFortranVolume(readFloat32LittleEndian(await api.researchVisualizationField(selected.id, active.id, "stress")), manifest.shape);
+          if (!cancelled) setStressVolume(stress);
+        } catch { if (!cancelled) setStressVolume(null); }
+      }
+    }).catch(() => { if (!cancelled) setVisualizationManifest(null); });
+    return () => { cancelled = true; };
+  }, [selected?.id, active?.id]);
+  
   useEffect(() => {
     if (centerTab !== "chat" || !followMessages.current) return;
     window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
@@ -471,7 +502,7 @@ export default function ResearchWorkspace(props: Props) {
   const leftPane = <><div className="v2-pane-title"><span>{trashOpen ? "回收站" : "Research"}</span><span className="count">{trashOpen ? archived.length : researches.length}</span><div className="research-list-actions"><button aria-label={trashOpen ? "返回 Research 列表" : "打开 Research 回收站"} title={trashOpen ? "返回 Research 列表" : "回收站"} onClick={() => void toggleTrash()}>{trashOpen ? <ChevronRight size={13}/> : <Trash2 size={13}/>}</button>{!trashOpen ? <button className="primary-button compact" onClick={onCreateResearch}><FlaskConical size={13}/>新建</button> : null}</div></div>
     <div className="research-list">{(trashOpen ? archived : researches).map(item => <div className={"research-row-shell " + (selected?.id === item.id && !trashOpen ? "active" : "")} key={item.id}><button className="research-row research-select" disabled={trashOpen} onClick={() => void onSelect(item.id)}><FlaskConical size={15}/><span><b>{item.name}</b><small>{item.status} · {item.id}</small></span><ChevronRight size={14}/></button><button className="research-row-action" disabled={researchActionBusy === item.id} aria-label={(trashOpen ? "恢复" : "删除") + item.name} title={trashOpen ? "恢复 Research" : "移入回收站"} onClick={() => void (trashOpen ? restore(item) : archive(item))}>{researchActionBusy === item.id ? <LoaderCircle className="spin" size={14}/> : trashOpen ? <ArchiveRestore size={14}/> : <Trash2 size={14}/>}</button></div>)}</div>
     {!((trashOpen ? archived : researches).length) ? <div className="research-list-empty">{trashOpen ? "回收站为空" : "尚无 Research"}</div> : null}
-    <div className="research-evidence"><h4>证据索引</h4><p>Research State 是唯一权威来源。移入回收站不会删除实验、审批、报告或制品。</p><div className="budget-line"><span>预算</span><b>{selected?.budget_used ?? 0}/{selected?.budget_total ?? 0}</b></div><button className="primary-button research-final-result-button" disabled={!selected?.best_experiment} title={selected?.best_experiment ? "查看最终方案" : "尚无真实最终方案"} onClick={() => setResultExperiment(selected?.best_experiment || null)}>查看最终方案</button></div></>;
+    <div className="research-evidence"><h4>证据索引</h4><p>Research State 是唯一权威来源。移入回收站不会删除实验、审批、报告或制品。</p><div className="budget-line"><span>预算</span><b>{selected?.budget_used ?? 0}/{selected?.budget_total ?? 0}</b></div></div></>;
   const runningExperiment = experiments.find(item => ["RUNNING", "WAITING", "QUEUED"].includes(String(item.status).toUpperCase()));
   const pendingDecision = selected?.decisions?.find(decision => decision.status === "PENDING");
   const stage = runningExperiment ? progressText : pendingDecision ? "等待 Policy / F0-F3 审批" : streamText ? "正在分析结果并生成回复" : autonomousBusy ? "正在制定实验方案" : "等待下一条科研指令";
@@ -487,13 +518,13 @@ export default function ResearchWorkspace(props: Props) {
       leftRail={<div className="left-rail-icons"><button aria-label="研究项目" title="研究项目"><FlaskConical size={15}/></button><button aria-label="科研对话" title="科研对话" onClick={() => setCenterTab("chat")}><MessageCircle size={15}/></button><button aria-label="科研审批" title="科研审批" onClick={() => setCenterTab("audit")}><ShieldCheck size={15}/></button></div>}
       left={leftPane}
       center={<section className="v2-center research-center research-chat-workspace">
-        <div className="research-header"><div><span className="eyebrow">AI SCIENTIST WORKSPACE</span><h1>{selected?.name || "选择一个 Research"}</h1></div><div className="research-header-actions"><span className={"agent-mode " + (safeMode ? "safe" : "online")}>{safeMode ? "规则 Safe Mode" : "Pi / Qwen"}</span><button className="primary-button" disabled={!selected || autonomousBusy || Boolean(runningExperiment) || String(selected?.status || "").toUpperCase() === "RUNNING"} onClick={() => void autonomous()}>{autonomousBusy ? <LoaderCircle className="spin"/> : <Play size={14}/>}运行自主研究</button></div></div>
+        <div className="research-header"><div><h1>{selected?.name || "选择一个 Research"}</h1></div><div className="research-header-actions"><button className="primary-button" disabled={!selected || autonomousBusy || Boolean(runningExperiment) || String(selected?.status || "").toUpperCase() === "RUNNING"} onClick={() => void autonomous()}>{autonomousBusy ? <LoaderCircle className="spin"/> : <Play size={14}/>}运行自主研究</button></div></div>
         <nav className="v2-tabs research-center-tabs" role="tablist"><button role="tab" aria-selected={centerTab === "chat"} className={"tab" + (centerTab === "chat" ? " active" : "")} onClick={() => setCenterTab("chat")}><MessageCircle size={14}/>科研对话</button><button role="tab" aria-selected={centerTab === "audit"} className={"tab" + (centerTab === "audit" ? " active" : "")} onClick={() => setCenterTab("audit")}><ShieldCheck size={14}/>过程 / 审计</button></nav>
         <div className="research-stage-strip"><span className="connection-dot"/><b>{stage}</b><small>{agentEvent}</small></div>
         {workflowProgress && workflowProgress.stage !== "idle" ? <section className="research-workflow-progress" aria-label="自主研究阶段进度"><header><b>第 {workflowProgress.round} 轮</b><span>{workflowProgress.percent}%</span></header><div className="research-workflow-track"><i style={{ width: `${workflowProgress.percent}%` }}/></div><small>{workflowProgress.steps.find(item => item.status === "active")?.label || (workflowProgress.percent === 100 ? "本轮已完成" : "等待下一阶段")}</small></section> : null}
         {centerTab === "chat" ? <div ref={dropZone} className={"research-chat-main chat-drop-zone" + (dragActive ? " drag-active" : "")} {...dropHandlers}>
           {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
-          <div ref={messageList} className="chat-message-list research-message-list" onScroll={() => { const node = messageList.current; if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State，提案仍需通过 Policy 与 F0-F3 审批。</span></div> : null}{active ? <section className="research-result-panel"><header><span>真实实验结果 · {active.id}</span><small>{active.fidelity} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4>密度场</h4><ScalarMap values={resultView.density} mode="density"/></section><section><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}<div ref={messageEnd} className="chat-message-end" aria-hidden="true"/></div>
+          <div ref={messageList} className="chat-message-list research-message-list" onScroll={() => { const node = messageList.current; if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State，提案仍需通过 Policy 与 F0-F3 审批。</span></div> : null}{active ? <section className="research-result-panel"><header><span>真实实验结果 · {active.id}</span><small>{active.fidelity} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4 className="field-heading"><span>{visualizationManifest?.dimension === "3d" ? "真实三维结果" : "密度场"}</span>{visualizationManifest?.dimension === "3d" ? <span className="field-switch"><button className={resultField === "density" ? "active" : ""} onClick={() => setResultField("density")}>密度</button><button className={resultField === "stress" ? "active" : ""} disabled={!stressVolume} onClick={() => setResultField("stress")}>应力</button></span> : null}</h4>{visualizationManifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={resultField === "stress" && stressVolume ? stressVolume : densityVolume} mode={resultField} viewState={volumeViewState} onViewStateChange={setVolumeViewState}/> : <ScalarMap values={resultView.density} mode="density"/>}</section><section><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}<div ref={messageEnd} className="chat-message-end" aria-hidden="true"/></div>
           {suggestedAction ? <div className="suggestion-dialog-backdrop" role="presentation"><ResearchSuggestionCard action={suggestedAction} currentGoal={selected?.goal || ""} currentHypothesis={selected?.hypothesis || ""} currentConfig={researchConfig} onApply={() => void applySuggestion()} onCancel={() => setSuggestedAction(null)} /></div> : null}
           <footer className="chat-composer research-chat-composer">{attachments.length ? <div className="chat-attachment-preview">{attachments.map(item => <figure key={item.id}>{item.preview ? <img src={item.preview} alt={item.fileName || "待发送附件"}/> : <span className="attachment-file-name">{item.fileName || "附件"}</span>}<button aria-label="移除附件" onClick={() => setAttachments(values => values.filter(value => value.id !== item.id))}><X size={12}/></button></figure>)}</div> : null}<div><button type="button" className="chat-composer-action scheme-import-button" aria-label="导入工程方案" title="导入工程方案" onClick={() => void openSchemePicker()} disabled={!selected || sending || schemeImportBusy}><Plus size={15}/></button><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf,.docx,.xlsx,.txt,.md,.csv" multiple onChange={event => void uploadFiles(event.target.files)}/><button type="button" className="chat-composer-action" aria-label="上传科研附件" title="上传附件" onClick={() => fileInput.current?.click()} disabled={sending}><ImagePlus size={15}/></button><textarea value={command} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendResearchMessage(); } }} placeholder="描述目标、询问证据或提出下一项实验…"/><button className="chat-composer-action" aria-label="发送科研消息" title="发送" onClick={() => void sendResearchMessage()} disabled={(!command.trim() && !attachments.length) || sending || busy}>{sending || busy ? <LoaderCircle className="spin" size={15}/> : <Send size={15}/>}</button></div></footer>
         </div> : <div className="research-audit-main">{selected?.events?.slice(-30).map(event => <article className="timeline-item" key={event.id}><span className="timeline-icon"><CheckCircle2 size={14}/></span><div><small>{event.kind} · {new Date(event.created_at).toLocaleTimeString()}</small><h3>{event.title}</h3><p>{event.body}</p></div></article>)}{selected?.decisions?.filter(decision => decision.status === "PENDING").map(decision => <article className="decision-card" key={decision.id}><header><ShieldCheck size={14}/>Policy 审批 <span>{decision.risk}</span></header><h3>{decision.proposal?.fidelity || "实验提案"}</h3><p>{decision.reason}</p><div><button className="approve" onClick={() => onDecision(decision.id, "approve")}>批准并提交</button><button onClick={() => onDecision(decision.id, "reject")}>拒绝</button></div></article>)}</div>}
@@ -512,9 +543,17 @@ export default function ResearchWorkspace(props: Props) {
             <textarea aria-label="研究假设" placeholder="填写待验证的机制、趋势或因果假设" value={hypothesisDraft} onChange={event => setHypothesisDraft(event.target.value)} maxLength={4000}/>
             <button className="primary-button" disabled={hypothesisBusy || !hypothesisDraft.trim() || hypothesisDraft.trim() === (selected.hypothesis || "")} onClick={() => void saveHypothesis()}>{hypothesisBusy ? "保存中…" : "保存假设"}</button>
           </section>
-          <section className="inspector-card research-config-card">
-            <header className="inspector-card-heading"><h4>参数配置</h4><button aria-label="打开科研详细参数" onClick={() => setConfigOpen(true)}><Settings2 size={14}/></button></header>
-            <div className="configuration-summary"><code>{researchConfig.dimension.toUpperCase()} · {researchConfig.nelx}×{researchConfig.nely}×{researchConfig.dimension === "2d" ? 1 : researchConfig.nelz}</code><code>{researchConfig.bcType} · volfrac {researchConfig.volfrac}</code><code>{researchConfig.material.name}</code><code>{solverLaneLabel(researchLane)}</code></div>
+          <section className="engineering-settings-card parameter-summary-card research-config-card" aria-label="参数配置">
+            <header><div><span className="settings-card-kicker">OPTIMIZATION</span><h4>参数配置</h4></div><button aria-label="打开参数配置" title="打开完整参数配置" onClick={() => setConfigOpen(true)}><Settings2 size={15}/></button></header>
+            <dl>
+              <div><dt>求解维度</dt><dd>{researchConfig.dimension.toUpperCase()}</dd></div>
+              <div><dt>网格</dt><dd>{researchConfig.nelx} × {researchConfig.nely}{researchConfig.dimension === "3d" ? " × " + researchConfig.nelz : ""}</dd></div>
+              <div><dt>工况</dt><dd>{researchConfig.bcType}</dd></div>
+              <div><dt>体积分数</dt><dd>{researchConfig.volfrac}</dd></div>
+              <div><dt>材料</dt><dd>{researchConfig.material.name}</dd></div>
+              <div><dt>求解链路</dt><dd>{solverLaneLabel(researchLane)}</dd></div>
+            </dl>
+            <button className="primary-button open-parameter-dialog" onClick={() => setConfigOpen(true)}><Settings2 size={14}/>打开详细参数</button>
           </section>
           <section className="inspector-card research-results-card">
             <h4>结果呈现</h4>
@@ -522,6 +561,7 @@ export default function ResearchWorkspace(props: Props) {
             <div className="research-plan-flow" aria-label="三方案科研流程"><span className="active">1 · 三方案</span><span>2 · 真实实验比较</span><span>3 · 优选路线</span><span>4 · 问题诊断</span><span>5 · 下一轮建议</span></div>
             <div className="research-artifact-list">{artifactIndex.experiments.slice(-5).map(item => <div className="artifact-row" key={item.experimentId}><span><FileJson2 size={12}/>{item.experimentId} · {item.backend}</span><small>{item.files.length} 个文件 · {item.provenance.resultKind || "unknown"}</small></div>)}</div>
             {experiments.length ? <div className="research-result-experiments"><h5>实验</h5>{experiments.slice(-8).map(experiment => <div className="experiment-row-shell" key={experiment.id}><button className={"experiment-row " + (active?.id === experiment.id ? "active" : "")} onClick={() => onSelectExperiment(experiment)}><span className="experiment-status"/><span>{experiment.id}<small>{solverLaneLabel(experiment.backend === "matlab" ? "matlab-mcp" : "python-fem")} · {experiment.fidelity}</small></span></button></div>)}</div> : null}
+            <button className="primary-button research-final-result-button" disabled={!selected?.best_experiment} title={selected?.best_experiment ? "查看最终方案" : "尚无真实最终方案"} onClick={() => setResultExperiment(selected?.best_experiment || null)}>查看最终方案</button>
             <div className="inspector-actions artifact-actions"><button className="outline-button" onClick={() => void pareto()}>查看 Pareto</button><button className="outline-button" disabled={experiments.length < 2} onClick={() => void compare()}>比较实验</button><button className="outline-button" onClick={openReportExport}>生成报告</button><button className="outline-button" onClick={() => void createResearchArtifact("/export")}>复现包</button></div>
           </section>
         </> : <div className="inspector-empty"><FlaskConical size={24}/><span>选择或新建 Research</span></div>}

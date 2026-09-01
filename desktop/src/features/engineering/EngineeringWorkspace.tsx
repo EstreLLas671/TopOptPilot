@@ -13,7 +13,7 @@ import EngineeringComparisonWorkspace from "./EngineeringComparisonWorkspace";
 import EngineeringBottomPanel, { EngineeringRunButton } from "./EngineeringBottomPanel";
 import EngineeringChatPanel from "./EngineeringChatPanel";
 import ParameterConfigurationDialog from "./ParameterConfigurationDialog";
-import { DEFAULT_OPTIMIZATION_CONFIG, engineeringTaskFromConfig, validateOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
+import { DEFAULT_OPTIMIZATION_CONFIG, engineeringTaskFromConfig, normalizeOptimizationConfig, validateOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 
 const MonacoEditor = lazy(() => import("../../components/MonacoCodeEditor"));
 function relativeConversationTime(value: number, now: number): string {
@@ -146,7 +146,7 @@ export default function EngineeringWorkspace({
         if (saved.lane && ["local-matlab", "compiled-runtime", "python-fem"].includes(saved.lane)) {
           setLane(saved.lane === "compiled-runtime" ? "local-matlab" : saved.lane);
         }
-        if (saved.optimizationConfig && !validateOptimizationConfig(saved.optimizationConfig).length) setOptimizationConfig(saved.optimizationConfig);
+        if (saved.optimizationConfig) { const normalized = normalizeOptimizationConfig(saved.optimizationConfig); if (!validateOptimizationConfig(normalized).length) setOptimizationConfig(normalized); }
         if (saved.projectRoot) {
           void api.projectOpen(saved.projectRoot).then(async opened => {
             const listing = await api.projectList(opened.root);
@@ -189,8 +189,6 @@ export default function EngineeringWorkspace({
     setMatlabInstallation(matlab.path ? { executable: matlab.path, release: matlab.release, version: matlab.version, source: "environment-cache", probeState: matlab.probeState, diagnostic: matlab.diagnostic } : null);
     setMatlabProbeState(matlab.probeState === "ready" ? "ready" : matlab.probeState === "failed" ? "failed" : "not-detected");
     setMatlabDiagnostic(matlab.diagnostic || (matlab.probeState === "ready" ? "MATLAB 已就绪" : "未检测到可启动的 MATLAB。"));
-    setRuntimeState(value.runtime.state === "ready" ? "ready" : value.runtime.state === "optional" ? "not-detected" : "failed");
-    setRuntimeDiagnostic(value.runtime.state === "ready" ? "Runtime 已就绪" : "Runtime 为可选链路");
     setEnvironmentScanBusy(false);
   }, []);
 
@@ -202,11 +200,9 @@ export default function EngineeringWorkspace({
     setEnvironmentScanBusy(true);
     void (async () => {
       try {
-        const [matlabPayload, runtimePayload, bundled] = await Promise.all([api.engineeringInstallations(), api.engineeringRuntimeInstallations(), api.engineeringBundledRuntime()]);
+        const matlabPayload = await api.engineeringInstallations();
         if (cancelled) return;
         const candidate = matlabPayload.installations.find(item => item.executable) || null;
-        setRuntimeState(runtimePayload.runReady || bundled.usable ? "ready" : "not-detected");
-        setRuntimeDiagnostic(bundled.usable ? bundled.diagnostic : "Runtime 为可选链路");
         if (!candidate?.executable) { setMatlabProbeState("not-detected"); setMatlabDiagnostic("未检测到可启动的 MATLAB。"); return; }
         setMatlabDiagnostic(`正在验证 ${candidate.release || "MATLAB"}…`);
         const probe = await api.engineeringProbe(candidate.executable, candidate.release || "");
@@ -225,9 +221,7 @@ export default function EngineeringWorkspace({
     setEnvironmentScanBusy(true);
     try {
       if (onRefreshEnvironment) { applyEnvironment(await onRefreshEnvironment()); return; }
-      const [matlabPayload, runtimePayload, bundled] = await Promise.all([api.engineeringInstallations(), api.engineeringRuntimeInstallations(), api.engineeringBundledRuntime()]);
-      setRuntimeState(runtimePayload.runReady || bundled.usable ? "ready" : "not-detected");
-      setRuntimeDiagnostic(bundled.usable ? bundled.diagnostic : "Runtime 为可选链路");
+      const matlabPayload = await api.engineeringInstallations();
       const candidate = matlabPayload.installations.find(item => item.executable);
       if (!candidate?.executable) { setMatlabProbeState("not-detected"); setMatlabDiagnostic("未检测到可启动的 MATLAB。"); return; }
       const probe = await api.engineeringProbe(candidate.executable, candidate.release || "");
@@ -688,9 +682,7 @@ export default function EngineeringWorkspace({
           </div>
           {lane === "local-matlab" ? <><div className="environment-summary-row"><span><i className={`environment-state ${matlabProbeState}`}/><b>本机 MATLAB</b></span><strong>{matlabProbeState === "ready" ? matlabInstallation?.release || matlabInstallation?.version || "可用" : matlabProbeState === "scanning" ? "检测中" : "不可用"}</strong></div>
           <small className="environment-path" title={matlabExecutable || matlabDiagnostic}>{matlabExecutable || matlabDiagnostic}</small>
-          {matlabProbeState !== "ready" ? <button className="outline-button environment-manual-path" disabled={environmentScanBusy} onClick={() => void selectMatlabDirectory()}><FolderOpen size={13}/>手动选择 MATLAB 目录</button> : null}
-          <div className="environment-summary-row optional"><span><i className={`environment-state ${runtimeState}`}/><b>MATLAB Runtime</b></span><strong>{runtimeState === "ready" ? runtimeInstallation?.release || "可选可用" : "可选"}</strong></div>
-          <small className="environment-path" title={runtimeInstallation?.path || runtimeDiagnostic}>{runtimeInstallation?.path || runtimeDiagnostic}</small></> : <div className="environment-summary-row"><span><i className="environment-state ready"/><b>内置 Python</b></span><strong>可用</strong></div>}
+          {matlabProbeState !== "ready" ? <button className="outline-button environment-manual-path" disabled={environmentScanBusy} onClick={() => void selectMatlabDirectory()}><FolderOpen size={13}/>手动选择 MATLAB 目录</button> : null}</> : <div className="environment-summary-row"><span><i className="environment-state ready"/><b>内置 Python</b></span><strong>可用</strong></div>}
         </section>
         <section className="engineering-settings-card parameter-summary-card" aria-label="参数配置">
           <header><div><span className="settings-card-kicker">OPTIMIZATION</span><h3>参数配置</h3></div><button aria-label="打开参数配置" title="打开完整参数配置" onClick={() => setDetailsOpen(true)}><Settings2 size={15}/></button></header>

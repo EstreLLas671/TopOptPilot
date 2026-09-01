@@ -159,7 +159,7 @@ html[data-theme=dark] .material-fieldset input[readonly],html[data-theme=dark] .
 .research-progress-events > div { display: grid; grid-template-columns: 130px 1fr; gap: 8px; font-size: 11px; }
 .research-progress-events small { color: var(--muted); }
 .research-goal-card textarea { width: 100%; min-height: 92px; resize: vertical; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
-.research-goal-card .primary-button { width: 100%; justify-content: center; margin-top: 7px; }
+.research-goal-card .primary-button, .research-hypothesis-card .primary-button { width: 100%; justify-content: center; margin-top: 7px; }
 .research-config-card .configuration-summary { display: grid; gap: 4px; margin: 8px 0; }
 .chat-message.streaming { opacity: .92; }
 .chat-message.streaming p::after { content: "▋"; margin-left: 2px; animation: blink 1s steps(1) infinite; }
@@ -179,7 +179,7 @@ html[data-theme=dark] .material-fieldset input[readonly],html[data-theme=dark] .
 .engineering-right-settings { min-height: 0; padding: 10px; display: grid; align-content: start; gap: 10px; overflow: auto; }
 .engineering-settings-card { padding: 12px; border: 1px solid #d9e2ec; border-radius: 9px; background: #fff; box-shadow: 0 1px 3px rgba(43,62,82,.04); }
 .engineering-settings-card > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 11px; }
-.engineering-settings-card > header h3 { margin: 2px 0 0; color: #40566d; font-size: 14px; }
+.engineering-settings-card > header h3, .engineering-settings-card > header h4 { margin: 2px 0 0; color: #40566d; font-size: 14px; }
 .settings-card-kicker { color: #7891aa; font-size: 10px; font-weight: 700; letter-spacing: .8px; }
 .engineering-settings-card > header button { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid #d5e0ea; border-radius: 7px; background: #f8fafc; color: #557491; cursor: pointer; }
 .engineering-settings-card > header button:hover, .engineering-settings-card > header button:focus-visible { border-color: #9dbbda; background: #edf4fb; color: #2765a4; outline: none; }
@@ -290,7 +290,7 @@ html[data-theme=dark] .chat-drop-overlay { border-color: #679ed4 !important; bac
 .v2-brand small { font-size: 11px; }
 .research-chat-workspace .research-header h1, .chat-panel-header h2 { font-size: 20px; }
 .research-header h1 { font-size: 24px; }
-.engineering-settings-card > header h3 { font-size: 16px; }
+.engineering-settings-card > header h3, .engineering-settings-card > header h4 { font-size: 16px; }
 .settings-card-kicker { font-size: 12px; }
 .environment-summary-row { font-size: 14px; }
 .environment-summary-row strong, .engineering-settings-card p,
@@ -351,7 +351,7 @@ body, button, input, select, textarea { font-family: var(--topoptpilot-font-sans
 .v2-brand small { font-size: 10px; }
 .research-chat-workspace .research-header h1, .chat-panel-header h2 { font-size: 19px; }
 .research-header h1 { font-size: 23px; }
-.engineering-settings-card > header h3 { font-size: 15px; }
+.engineering-settings-card > header h3, .engineering-settings-card > header h4 { font-size: 15px; }
 .settings-card-kicker { font-size: 11px; }
 .environment-summary-row { font-size: 13px; }
 .environment-summary-row strong, .engineering-settings-card p,
@@ -839,7 +839,6 @@ html[data-theme=dark] .chat-attachment-preview figure { border-color: #405263; b
 .research-result-loading{display:grid;flex:1;place-content:center;justify-items:center;gap:8px}
 @media(max-width:920px){.research-result-dialog-body{grid-template-columns:210px minmax(0,1fr)}.research-result-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.research-result-visualization{min-height:280px}}
 
-.research-evidence .research-final-result-button{width:100%;margin-top:10px}
 .research-report-dialog{width:min(620px,calc(100vw - 32px))}
 .research-report-dialog>label{display:grid;gap:6px;margin:12px 0;color:var(--theme-text-muted,#6d7d90);font-size:11px}
 .research-report-dialog input{min-width:0;height:36px;padding:0 10px;border:1px solid var(--theme-border,#cbd7e4);border-radius:6px;background:var(--theme-surface,#fff);color:var(--theme-text,#27384e)}
@@ -851,3 +850,33 @@ html[data-theme=dark] .chat-attachment-preview figure { border-color: #405263; b
 
 /* Bounded project discovery keeps broad folders responsive without hiding why. */
 .project-listing-notice{margin:0 10px 3px;padding:5px 7px;border:1px solid var(--theme-border,#d7e0eb);border-radius:5px;background:var(--theme-surface-muted,#f6f8fb);color:var(--theme-muted-text,#6d7d90);font-size:10px;line-height:1.4;overflow-wrap:anywhere}
+
+/* Shared center top bar geometry across Engineering and Research. */
+:root { --center-topbar-height: 46px; }
+.engineering-center-shell {
+  grid-template-rows: var(--center-topbar-height) minmax(0,1fr) !important;
+}
+.engineering-center-shell.has-compact-assistant {
+  grid-template-rows: var(--center-topbar-height) minmax(0,1fr) auto !important;
+}
+.engineering-center-shell > .engineering-view-tabs,
+.research-chat-workspace > .research-header {
+  box-sizing: border-box;
+  flex: 0 0 var(--center-topbar-height) !important;
+  height: var(--center-topbar-height) !important;
+  min-height: var(--center-topbar-height) !important;
+  max-height: var(--center-topbar-height) !important;
+}
+@media (max-width: 760px) {
+  :root { --center-topbar-height: 52px; }
+}
+
+/* Keep the top navigation stable while the window is resized or zoomed. */
+.v2-titlebar{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);min-width:0;overflow:hidden}
+.v2-brand,.v2-workspaces,.v2-actions{min-width:0}
+.v2-brand>div,.v2-workspaces{overflow:hidden}
+.v2-brand b,.v2-brand small,.v2-workspaces button,.v2-actions{white-space:nowrap}
+.v2-workspaces{flex-wrap:nowrap}
+.v2-workspaces button{flex:0 1 auto;min-width:0}
+.geometry-grid-preview{grid-column:1/-1;color:#71849a;font-size:10px;padding-top:2px}
+@media(max-width:900px){.v2-titlebar{grid-template-columns:minmax(150px,1fr) minmax(180px,1fr) auto;padding:0 12px}.v2-brand small{display:none}.v2-actions{gap:8px}.v2-actions .connection{display:none}}

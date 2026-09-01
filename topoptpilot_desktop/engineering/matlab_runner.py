@@ -35,6 +35,31 @@ def _matlab_quote(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace("'", "''")
 
 
+_UNIT_TO_METERS = {"m": 1.0, "mm": 1e-3, "cm": 1e-2, "um": 1e-6}
+_DEFAULT_CELL_SIZE_M = 0.25
+
+
+def _resolve_physical_grid(geometry: dict[str, Any], dimension: str, params: dict[str, Any]) -> tuple[int, int, int]:
+    existing = (geometry.get("nelx"), geometry.get("nely"), geometry.get("nelz"))
+    if all(isinstance(value, int) and value > 0 for value in existing[:2]) and (dimension == "2d" or (isinstance(existing[2], int) and existing[2] > 0)):
+        return int(existing[0]), int(existing[1]), 1 if dimension == "2d" else int(existing[2])
+    dimensions = geometry.get("dimensions")
+    if not isinstance(dimensions, (list, tuple)) or len(dimensions) < 2:
+        return int(params.get("nelx", 24)), int(params.get("nely", 12)), 1 if dimension == "2d" else int(params.get("nelz", 4))
+    unit = str(geometry.get("unit") or "m").strip().lower()
+    scale = _UNIT_TO_METERS.get(unit)
+    if scale is None:
+        raise ValueError("geometry.unit 仅支持 m、mm、cm 或 um")
+    count = 2 if dimension == "2d" else 3
+    values = [float(dimensions[index]) for index in range(count)]
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("geometry.dimensions 必须为有限正数")
+    cell = geometry.get("cell_size_m", _DEFAULT_CELL_SIZE_M)
+    if not isinstance(cell, (int, float)) or not math.isfinite(float(cell)) or float(cell) <= 0:
+        raise ValueError("geometry.cell_size_m 必须为正数")
+    grid = [max(1, int(math.ceil(value * scale / float(cell)))) for value in values]
+    return grid[0], grid[1], 1 if dimension == "2d" else grid[2]
+
 def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
     geometry = task.get("geometry") or {}
     params = task.get("params") or {}
@@ -53,12 +78,13 @@ def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
     dimension = str(task.get("dimension") or task.get("solver_dimension") or "3d").lower()
     if dimension not in {"2d", "3d"}:
         raise ValueError("task.dimension 仅支持 2d 或 3d")
+    nelx, nely, nelz = _resolve_physical_grid(geometry, dimension, params)
     return {
         "solver_dimension": dimension,
         "bc_type": load_case,
-        "nelx": int(geometry.get("nelx", params.get("nelx", 24))),
-        "nely": int(geometry.get("nely", params.get("nely", 12))),
-        "nelz": 1 if dimension == "2d" else int(geometry.get("nelz", params.get("nelz", 4))),
+        "nelx": nelx,
+        "nely": nely,
+        "nelz": nelz,
         "volfrac": float(params.get("volfrac", task.get("volfrac", 0.4))),
         "penal": float(params.get("penal", 3.0)),
         "rmin": float(params.get("rmin", 1.5)),
@@ -77,6 +103,9 @@ def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
         "live_stress_snapshots": True,
         "render_iteration_frames": True,
         "provenance_mode": "engineering-local-matlab",
+        "dimensions": geometry.get("dimensions"),
+        "unit": geometry.get("unit", "m"),
+        "cell_size_m": geometry.get("cell_size_m", _DEFAULT_CELL_SIZE_M),
     }
 
 

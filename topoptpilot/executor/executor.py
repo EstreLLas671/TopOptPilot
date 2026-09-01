@@ -13,9 +13,17 @@ def build_solver_task(experiment: dict, research: dict | None = None) -> dict:
     projection = str(parameters.get("projection", "heaviside_projection" if projected else "none"))
     controller = str(parameters.get("controller", "periodic_controller" if projection != "none" else "fixed_controller"))
     filter_name = str(parameters.get("filter", "density_filter" if projection != "none" else "sensitivity_filter"))
+    fidelity_code = str(experiment.get("fidelity", "F0")).split()[0]
+    geometry = dict(research.get("geometry") or {})
+    if fidelity_code in {"F2", "F3"}:
+        grid = parameters.get("grid3d")
+        if not (isinstance(grid, (list, tuple)) and len(grid) == 3):
+            candidate = [geometry.get("nelx"), geometry.get("nely"), geometry.get("nelz")]
+            if all(isinstance(value, (int, float)) and int(value) > 0 for value in candidate):
+                parameters["grid3d"] = [int(value) for value in candidate]
     return {
         "task_id": experiment["id"], "experiment_group": experiment["id"],
-        "fidelity": str(experiment.get("fidelity", "F0")).split()[0],
+        "fidelity": fidelity_code,
         "solver_variant": experiment.get("solver_variant", "auto"),
         "acceleration_mode": experiment.get("acceleration_mode", "auto"),
         "hypothesis_id": research.get("hypothesis") or "workspace",
@@ -24,7 +32,7 @@ def build_solver_task(experiment: dict, research: dict | None = None) -> dict:
         "projection": projection,
         "controller": controller,
         "filter": filter_name,
-        "geometry": research.get("geometry"),
+        "geometry": geometry,
         "bc_config": {**(research.get("boundary_conditions") or {}),
                       "load_scale": _load_scale(research)},
         "unit_context": unit_context,

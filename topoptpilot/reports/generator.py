@@ -182,7 +182,7 @@ class ResearchReportGenerator:
         lines = ["# TopOptPilot 智能体分析报告" if zh else "# TopOptPilot Agent Analysis Report", "",
             f"**{'报告编号' if zh else 'Report No.'}**：TOP-{str(generated)[:10].replace('-','')}-{research['id']}",
             f"**{'任务标题' if zh else 'Task title'}**：{research.get('name') or missing}", f"**{'生成时间' if zh else 'Generated'}**：{generated}",
-            "**智能体版本**：TopOptPilot 2.0.3", f"**对应任务 ID**：{research['id']}",
+            "**智能体版本**：TopOptPilot 2.0.4", f"**对应任务 ID**：{research['id']}",
             f"**{'迭代轮次' if zh else 'Rounds'}**：{current_round}", "", "---", "",
             "## **报告摘要**" if zh else "## **Executive summary**", "", summary, "",
             "## **第一章：任务摘要（映射用户需求）**" if zh else "## **Chapter 1: Task summary**", "",

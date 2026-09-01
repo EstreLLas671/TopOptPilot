@@ -424,8 +424,8 @@ class ResearchService:
                          if item.get("proposal_id") == proposal_id][-8:]
         request = ExperimentCreate(
             purpose=proposal["purpose"], fidelity={
-                "F0": "F0 — MATLAB 2D Coarse", "F1": "F1 — MATLAB 2D Fine",
-                "F2": "F2 — MATLAB 3D Coarse", "F3": "F3 — MATLAB 3D Fine",
+                "F0": "F0 — Python 2D Coarse", "F1": "F1 — Python 2D Fine",
+                "F2": "F2 — Python 3D Target", "F3": "F3 — MATLAB 3D Formal",
             }[fidelity], mesh_level=FidelityManager.mesh_level(fidelity),
             backend=proposal["backend"], parameters=proposal["parameters"],
             warm_start=proposal.get("source_experiment"),
@@ -956,9 +956,13 @@ class ResearchService:
         task = build_solver_task(experiment, research)
         if experiment.get("warm_start"):
             source = self.store.get_experiment(experiment["warm_start"])
-            density = ((source or {}).get("result") or {}).get("artifacts", {}).get("density")
+            source_result = (source or {}).get("result") or {}
+            density = (source_result.get("artifacts") or {}).get("density")
             if density is not None:
                 task["params"]["initial_density"] = density
+                if str(experiment.get("fidelity", "")).split()[0] == "F3":
+                    task["params"]["verification_mode"] = "fixed_density"
+                    task["params"]["verification_source_experiment"] = str(experiment["warm_start"])
         cache_task = {**task, "backend": experiment["backend"]}
         fidelity_code = str(experiment.get("fidelity", "F0")).split()[0]
         solver_entry = self.project_root / (
@@ -1648,8 +1652,8 @@ class ResearchService:
         source = self._experiment_arg(research_id, args, "/promote <experiment>")
         current = str(source["fidelity"]).split()[0]
         target = FidelityManager().promote_code(current)
-        labels = {"F0": "F0 — MATLAB 2D Coarse", "F1": "F1 — MATLAB 2D Fine",
-                  "F2": "F2 — MATLAB 3D Coarse", "F3": "F3 — MATLAB 3D Fine"}
+        labels = {"F0": "F0 — Python 2D Coarse", "F1": "F1 — Python 2D Fine",
+                  "F2": "F2 — Python 3D Target", "F3": "F3 — MATLAB 3D Formal"}
         promoted = ExperimentCreate(purpose=f"Promote {source['id']} to {target}",
                                     fidelity=labels[target], mesh_level=FidelityManager.mesh_level(target),
                                     backend=FidelityManager.backend_for(target), parameters=source["parameters"],

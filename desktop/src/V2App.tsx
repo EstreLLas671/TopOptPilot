@@ -176,7 +176,7 @@ export default function V2App() {
     </div>
   </>;
 
-  if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 TopOptPilot</b><span>{error || "连接统一 sidecar…"}</span></div>;
+  if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 TopOptPilot</b>{error ? <span>{error}</span> : null}</div>;
   if (settingsOpen && settings) return <SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={value => { setSettings(value); document.documentElement.lang = value.locale; document.documentElement.dataset.density = value.ui_density; applyTheme(value); }}/>
   return <div className="v2-shell">
     <header className="v2-titlebar" data-tauri-drag-region>

@@ -272,6 +272,18 @@ export default function InteractiveVolumeView({
   }, [draw]);
 
   useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      updateView(view => { view.zoom = clamp(view.zoom * Math.exp(-event.deltaY * .0012), .35, 4); });
+    };
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return () => node.removeEventListener("wheel", handleWheel);
+  });
+
+  useEffect(() => {
     if (typeof MutationObserver === "undefined") return;
     const observer = new MutationObserver(draw);
     observer.observe(document.documentElement, {
@@ -328,7 +340,6 @@ export default function InteractiveVolumeView({
         }}
         onPointerUp={event => { if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null; event.currentTarget.releasePointerCapture?.(event.pointerId); }}
         onPointerCancel={() => { dragRef.current = null; }}
-        onWheel={event => { event.preventDefault(); updateView(view => { view.zoom = clamp(view.zoom * Math.exp(-event.deltaY * .0012), .35, 4); }); }}
         onDoubleClick={reset}
         onKeyDown={event => {
           if (event.key === "r" || event.key === "R" || event.key === "0") reset();
