@@ -265,6 +265,9 @@ class ResearchOptimizationConfig(BaseModel):
     dimension: Literal["2d", "3d"] = "3d"
     bcType: Literal["cantilever", "MBB", "simply_supported", "L-bracket"] = "cantilever"
     accuracy: Literal["standard", "high"] = "standard"
+    dimensions: list[float] = Field(default_factory=lambda: [6.0, 2.0, 1.5], min_length=3, max_length=3)
+    unit: Literal["m", "mm", "cm", "um"] = "m"
+    cellSizeMeters: float = Field(default=0.25, gt=0)
     nelx: int = Field(default=24, ge=1, le=2000)
     nely: int = Field(default=8, ge=1, le=2000)
     nelz: int = Field(default=6, ge=1, le=2000)
@@ -295,6 +298,7 @@ class ResearchStateActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["apply_research_state"] = "apply_research_state"
+    messageId: str | None = Field(default=None, min_length=1, max_length=160)
     goal: str | None = Field(default=None, min_length=1, max_length=2000)
     hypothesis: str | None = Field(default=None, min_length=1, max_length=4000)
     optimizationConfig: ResearchOptimizationConfig | None = None
@@ -439,6 +443,8 @@ def apply_research_suggestion(research_id: str, request: ResearchStateActionRequ
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     payload: dict[str, object] = {"changed_fields": request.changedFields}
+    if request.messageId:
+        payload["agent_message_id"] = request.messageId
     if "goal" in request.changedFields and request.goal is not None:
         service.store.update_research(research_id, goal=request.goal.strip())
     if "hypothesis" in request.changedFields and request.hypothesis is not None:
@@ -510,23 +516,23 @@ def _retry_missing_state_action(
     reply: str,
     actions: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Retry once with the configured default model when a missing-state suggestion lacks a safe action."""
-    if not _research_state_missing(context):
-        return actions
-    valid = [action for action in actions if _complete_missing_state_action(action)]
+    """At most one constrained extraction for an explicit state recommendation."""
+    valid = [action for action in actions if _research_action_is_valid(action)]
     if valid:
         return valid[:1]
+    if not re.search(r"(建议|推荐|研究目标|研究假设|参数配置|体积分数|惩罚因子|滤波半径|网格|材料|工况)", reply):
+        return []
     config = _research_config_template(research_id)[0].model_dump()
     extraction = _model_chat([
         {
             "role": "system",
             "content": (
                 "你是 TopOptPilot 的受限研究状态提取器。只输出一个 "
-                "<topoptpilot-research-action>JSON</topoptpilot-research-action>，不得输出其他文字。"
-                "JSON 必须是 apply_research_state，且同时包含非空 goal、非空 hypothesis、完整合法 "
-                "optimizationConfig，并令 changedFields 严格等于 "
-                "[\"goal\",\"hypothesis\",\"optimizationConfig\"]。"
-                "不得包含命令、路径、代码、自动运行或未声明字段。"
+                "<topoptpilot-research-action>JSON</topoptpilot-research-action> 或空文本。"
+                "动作必须是 apply_research_state。只允许 goal、hypothesis、optimizationConfig、"
+                "changedFields、rationale；changedFields 只能列出实际建议字段。"
+                "目标和假设若列出必须非空；optimizationConfig 若列出必须是完整合法配置。"
+                "不得包含命令、路径、代码、自动运行或其他字段。"
             ),
         },
         {
@@ -541,7 +547,15 @@ def _retry_missing_state_action(
     if not extraction.get("success"):
         return []
     _, extracted = _research_action(str(extraction.get("content") or ""))
-    return [action for action in extracted if _complete_missing_state_action(action)][:1]
+    return [action for action in extracted if _research_action_is_valid(action)][:1]
+
+
+def _research_action_is_valid(action: dict[str, object]) -> bool:
+    try:
+        ResearchStateActionRequest.model_validate(action)
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 @router.post("/{research_id}/vision-chat")
@@ -554,7 +568,7 @@ def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> di
                 "content": (
                     "你是 TopOptPilot 的科研图像分析助手。仅基于提供的 Research State 与图片回答，"
                     "区分观察与假设，不得绕过 Policy、预算或 F0-F3 审批，不得直接启动实验。"
-                    "若研究目标或假设为空，应明确指出并给出可编辑建议，同时必须在回复末尾附加"
+                    "只要回复提出可填写或修改的研究目标、研究假设或参数配置，就必须在回复末尾附加"
                     "<topoptpilot-research-action>{\"type\":\"apply_research_state\",\"goal\":\"可选\","
                     "\"hypothesis\":\"可选\",\"optimizationConfig\":完整合法配置,\"changedFields\":[实际字段],"
                     "\"rationale\":\"简短原因\"}</topoptpilot-research-action>。"
@@ -601,7 +615,7 @@ def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, o
                     "你是 TopOptPilot 的科研对话助手。仅基于提供的 Research State 回答，"
                     "区分事实、观察与假设；不得伪造实验结果，不得绕过 Policy、预算或 F0-F3 审批，"
                     "也不得直接启动实验。用户要求执行时，应说明需要进入受控自主研究或审批流程。"
-                    "若研究目标或假设为空，必须明确提示缺失项并给出推荐内容，同时必须在回复末尾附加 "
+                    "只要回复提出可填写或修改的研究目标、研究假设或参数配置，就必须在回复末尾附加 "
                     "<topoptpilot-research-action>{\"type\":\"apply_research_state\","
                     "\"goal\":\"可选\",\"hypothesis\":\"可选\",\"optimizationConfig\":完整合法配置,"
                     "\"changedFields\":[实际字段],\"rationale\":\"简短原因\"}</topoptpilot-research-action>；"

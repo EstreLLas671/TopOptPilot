@@ -35,14 +35,29 @@ class MatlabMcpWorker:
         }
         self._warmup: dict[str, Any] | None = None
         self._run_stats: list[dict[str, Any]] = []
+        self._futures: dict[str, Future] = {}
 
     def submit(self, task: dict[str, Any], research_id: str, experiment_id: str,
                done: Callable[[str, Future], None] | None = None) -> tuple[str, Future]:
         run_id = f"run_matlab_mcp_{experiment_id.lower()}"
         future = self.pool.submit(self.run, task, research_id, experiment_id)
+        with self._lock:
+            self._futures[run_id] = future
         if done:
             future.add_done_callback(lambda current: done(run_id, current))
         return run_id, future
+
+    def cancel(self, run_id: str) -> bool:
+        with self._lock:
+            future = self._futures.get(run_id)
+        if not future:
+            return False
+        if future.cancel():
+            return True
+        if future.running():
+            self.connector.stop()
+            return True
+        return False
 
     def run(self, task: dict[str, Any], research_id: str, experiment_id: str) -> dict[str, Any]:
         job_dir = (self.data_dir / research_id / "matlab_mcp" / experiment_id).resolve()

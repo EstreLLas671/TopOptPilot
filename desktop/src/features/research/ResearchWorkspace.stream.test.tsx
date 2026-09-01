@@ -198,10 +198,10 @@ describe("ResearchWorkspace stream lifecycle", () => {
     />);
     fireEvent.click(screen.getByRole("button", { name: "发送科研消息" }));
     await waitFor(() => expect(apiMocks.conversationCreate).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole("region", { name: "Agent 研究状态建议" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Agent 研究状态建议" })).toBeTruthy();
     expect(apiMocks.applyResearchSuggestion).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "批准并填入" }));
-    await waitFor(() => expect(apiMocks.applyResearchSuggestion).toHaveBeenCalledWith(research.id, action));
+    await waitFor(() => expect(apiMocks.applyResearchSuggestion).toHaveBeenCalledWith(research.id, { ...action, messageId: "msg-agent-action" }));
   });
 
   it("imports a verified completed engineering scheme without starting research", async () => {

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run_audit(include_online: bool = True) -> dict:
     report = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-              "version": "6.1.1", "gates": {}}
+              "version": "2.0.5", "gates": {}}
     report["gates"]["artifacts"] = _artifact_gate()
     report["gates"]["desktop_app"] = _desktop_gate()
     report["gates"]["strict_f3"] = _strict_f3_gate()
@@ -83,7 +83,7 @@ def _desktop_gate() -> dict:
     release_dir = ROOT / "desktop/src-tauri/target/release"
     executable_candidates = (release_dir / "topoptpilot.exe",)
     installer_dir = release_dir / "bundle/nsis"
-    installer_candidates = (installer_dir / "TopOptPilot_2.0.4_x64-setup.exe",)
+    installer_candidates = (installer_dir / "TopOptPilot_2.0.5_x64-setup.exe",)
     executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
     installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
     resources = release_dir / "resources"

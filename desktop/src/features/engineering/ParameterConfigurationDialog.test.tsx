@@ -60,20 +60,20 @@ describe("ParameterConfigurationDialog", () => {
     render(<Harness onApply={onApply} />);
 
     await user.click(screen.getByRole("button", { name: "打开参数" }));
-    const xUnits = screen.getByLabelText("X 单元") as HTMLInputElement;
-    await user.clear(xUnits);
-    await user.type(xUnits, "48");
+    const cellSize = screen.getByLabelText("单元网格尺寸（m）") as HTMLInputElement;
+    await user.clear(cellSize);
+    await user.type(cellSize, "0.125");
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(onApply).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "打开参数" }));
-    expect((screen.getByLabelText("X 单元") as HTMLInputElement).value).toBe("24");
-    await user.clear(screen.getByLabelText("X 单元"));
-    await user.type(screen.getByLabelText("X 单元"), "48");
+    expect((screen.getByLabelText("单元网格尺寸（m）") as HTMLInputElement).value).toBe("0.25");
+    await user.clear(screen.getByLabelText("单元网格尺寸（m）"));
+    await user.type(screen.getByLabelText("单元网格尺寸（m）"), "0.125");
     await user.click(screen.getByRole("button", { name: "应用配置" }));
 
     expect(onApply).toHaveBeenCalledTimes(1);
-    expect(onApply.mock.calls[0][0]).toMatchObject({ nelx: 48, dimension: "3d" });
+    expect(onApply.mock.calls[0][0]).toMatchObject({ cellSizeMeters: 0.125, nelx: 48, dimension: "3d" });
     expect(onApply.mock.calls[0][1]).toBe("local-matlab");
   });
 

@@ -129,6 +129,7 @@ def test_research_agent_suggestion_requires_confirmation_and_never_runs(monkeypa
             "optimizationConfig": config,
             "changedFields": ["goal", "hypothesis", "optimizationConfig"],
             "rationale": "由当前证据提出的受限建议",
+            "messageId": "msg-agent-action",
         }
         response = client.post(f"/api/researches/{created['id']}/apply-suggestion", json=payload)
         assert response.status_code == 200
@@ -137,6 +138,7 @@ def test_research_agent_suggestion_requires_confirmation_and_never_runs(monkeypa
         assert response.json()["optimizationConfig"] == config
         events = isolated.store.list_events(created["id"])
         assert events[-1]["kind"] == "AGENT_SUGGESTION_APPROVED"
+        assert events[-1]["payload"]["agent_message_id"] == "msg-agent-action"
         assert isolated.get_research(created["id"])["experiments"] == []
 
         rejected = client.post(

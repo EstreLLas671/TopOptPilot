@@ -153,6 +153,7 @@ class EngineeringChatResponse(BaseModel):
 _CONFIG_KEYS = {
     "dimension", "bcType", "accuracy", "nelx", "nely", "nelz", "volfrac",
     "penal", "rmin", "maxIterations", "minIterations", "filterStrategy", "material",
+    "dimensions", "unit", "cellSizeMeters",
 }
 _MATERIAL_KEYS = {"preset", "name", "youngsModulusGPa", "poissonRatio", "densityKgM3", "yieldStrengthMPa"}
 
@@ -176,6 +177,13 @@ def _validated_optimization_action(content: str) -> dict[str, Any] | None:
     if config.get("dimension") not in {"2d", "3d"} or config.get("bcType") not in {"cantilever", "MBB", "simply_supported", "L-bracket"}:
         return None
     if config.get("accuracy") not in {"standard", "high"} or config.get("filterStrategy") not in {"fixed", "adaptive"}:
+        return None
+    dimensions = config.get("dimensions")
+    if not isinstance(dimensions, list) or len(dimensions) != 3 or any(not isinstance(value, (int, float)) or isinstance(value, bool) or float(value) <= 0 for value in dimensions):
+        return None
+    if not isinstance(config.get("unit"), str) or config.get("unit").strip().lower() not in {"m", "mm", "cm", "um"}:
+        return None
+    if not isinstance(config.get("cellSizeMeters"), (int, float)) or isinstance(config.get("cellSizeMeters"), bool) or float(config["cellSizeMeters"]) <= 0:
         return None
     if material.get("preset") not in {"normalized", "structural-steel", "aluminum-6061-t6", "titanium-ti6al4v", "custom"}:
         return None
@@ -201,6 +209,25 @@ def _validated_optimization_action(content: str) -> dict[str, Any] | None:
         action["rationale"] = raw["rationale"].strip()[:500]
     return action
 
+
+def _extract_engineering_action(reply: str, context: dict[str, Any],
+                                chat: Callable[[list[dict[str, Any]]], dict[str, Any]]) -> dict[str, Any] | None:
+    """Perform one constrained extraction when a recommendation omitted its action."""
+    if not re.search(r"(建议|推荐|参数配置|体积分数|惩罚因子|滤波半径|网格|材料|工况)", reply):
+        return None
+    extraction = chat([
+        {"role": "system", "content": (
+            "你是 TopOptPilot 受限动作提取器。只输出一个 "
+            "<topoptpilot-action>JSON</topoptpilot-action> 或空文本。"
+            "动作必须是 apply_optimization_config，config 必须是完整合法配置，"
+            "不得包含命令、路径、代码或自动运行字段。"
+        )},
+        {"role": "user", "content": "当前工程配置：" + json.dumps(context, ensure_ascii=False, default=str)
+         + chr(10) + "Agent 回复：" + reply},
+    ])
+    if not extraction.get("success"):
+        return None
+    return _validated_optimization_action(str(extraction.get("content") or ""))
 
 def generate_engineering_chat(
     request: EngineeringChatRequest,
@@ -254,6 +281,8 @@ def generate_engineering_chat(
         )
     content = str(response.get("content") or "")
     action = _validated_optimization_action(content)
+    if action is None:
+        action = _extract_engineering_action(reply=content, context=context, chat=chat)
     reply = re.sub(
         r"<topoptpilot-action>\s*[\s\S]*?\s*</topoptpilot-action>",
         "",

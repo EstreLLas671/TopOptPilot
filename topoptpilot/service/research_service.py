@@ -289,7 +289,7 @@ class ResearchService:
                 "database": str(self.store.db_path), "cache_dir": str(self.cache_dir),
                 "cache_bytes": directory_size(self.cache_dir),
                 "log_dir": str(self.data_dir / "logs"), "free_disk_bytes": disk.free,
-                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "6.1.1"}
+                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "2.0.5"}
 
     def export_diagnostics(self) -> Path:
         output = self.data_dir / "diagnostics" / f"topoptpilot-diagnostics-{uuid.uuid4().hex[:8]}.zip"
@@ -342,9 +342,9 @@ class ResearchService:
             "matlab": {"status": matlab_state, "version": matlab_mcp.get("matlab_version"),
                        "root": matlab_mcp.get("matlab_root")},
             "sidecar": {"status": "VERIFIED", "port": os.getenv("TOPPILOT_SIDECAR_PORT"),
-                        "version": "6.1.1"},
+                        "version": "2.0.5"},
         }
-        return {"status": "ok", "version": "6.1.1", "components": components,
+        return {"status": "ok", "version": "2.0.5", "components": components,
                 "solver_2d": matlab_state in {"READY", "VERIFIED"}, "solver_3d": matlab_state in {"READY", "VERIFIED"},
                 "matlab": matlab_mcp["state"] != "UNAVAILABLE", "matlab_mcp": matlab_mcp,
                 "database": str(self.store.db_path),
@@ -618,21 +618,51 @@ class ResearchService:
 
     def archive_research(self, research_id: str) -> dict[str, Any]:
         research = self._require_research(research_id)
-        active_experiments = [
-            item["id"] for item in self.store.list_experiments(research_id)
-            if str(item.get("status", "")).upper() in {"WAITING", "QUEUED", "RUNNING"}
-        ]
-        pending_decisions = [
-            item["id"] for item in self.store.list_decisions(research_id)
-            if str(item.get("status", "")).upper() == "PENDING"
-        ]
-        active_tasks = [
-            item["id"] for item in self.store.list_subagent_tasks(research_id)
-            if str(item.get("status", "")).upper() in {"WAITING", "QUEUED", "RUNNING", "PENDING"}
-        ]
-        blockers = active_experiments + pending_decisions + active_tasks
-        if str(research.get("status", "")).upper() == "RUNNING" or blockers:
-            raise ValueError("Research 仍有运行任务或待审批事项，请先停止并处理后再移入回收站")
+        if research.get("archived_at"):
+            return research
+        research = self._require_research(research_id)
+        # Deleting a Research is reversible. Terminate in-flight work first,
+        # while retaining every result/evidence record already persisted.
+        if self.pi_runtime is not None:
+            try:
+                self.pi_runtime.cancel(research_id)
+            except Exception:
+                pass
+        for experiment in self.store.list_experiments(research_id):
+            status = str(experiment.get("status", "")).upper()
+            run_id = experiment.get("run_id")
+            if status in {"WAITING", "QUEUED", "RUNNING", "PENDING"}:
+                if run_id:
+                    try:
+                        self.queue.cancel(str(run_id))
+                    except Exception:
+                        pass
+                    try:
+                        self.matlab_worker.cancel(str(run_id))
+                    except Exception:
+                        pass
+                self.store.update_experiment(
+                    experiment["id"], status="CANCELLED",
+                    error=experiment.get("error") or "Research 已删除，运行已取消",
+                )
+        for task in self.store.list_subagent_tasks(research_id):
+            if str(task.get("status", "")).upper() in {"WAITING", "QUEUED", "RUNNING", "PENDING"}:
+                self.store.update_subagent_task(
+                    task["id"], status="CANCELLED",
+                    error=task.get("error") or "Research 已删除，任务已取消",
+                )
+        for decision in self.store.list_decisions(research_id):
+            if str(decision.get("status", "")).upper() == "PENDING":
+                self.store.resolve_decision_if_pending(decision["id"], "REJECTED")
+        self.store.update_research(
+            research_id, status="STOPPED", termination_reason="DELETED_BY_USER",
+        )
+        self.store.append_event(
+            research_id, EventKind.SYSTEM.value, "RESEARCH_DELETED",
+            "研究已终止并移入回收站；已写入的实验证据和制品保留。",
+            payload={"reason": "DELETED_BY_USER", "inflight_cancelled": True},
+            source="USER",
+        )
         if self.pi_runtime is not None:
             self.pi_runtime.release(research_id)
         return self.store.update_research(research_id, archived_at=utc_now())

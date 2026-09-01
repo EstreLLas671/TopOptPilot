@@ -87,7 +87,7 @@ describe("EngineeringWorkspace mount", () => {
     expect(screen.getByText(/文件树最多显示 2,000 个支持文件/)).toBeTruthy();
   });
 
-  it("scans MATLAB and Runtime once and exposes explicit refresh in the parameter dialog", async () => {
+  it("scans MATLAB once and exposes explicit refresh in the parameter dialog", async () => {
     apiMocks.engineeringInstallations.mockResolvedValue({
       preference: "local-matlab",
       installations: [{
@@ -108,8 +108,6 @@ describe("EngineeringWorkspace mount", () => {
     render(<EngineeringWorkspace health={null} onError={() => undefined} onResearchBaseline={async () => undefined}/>);
     await waitFor(() => {
       expect(apiMocks.engineeringInstallations).toHaveBeenCalledTimes(1);
-      expect(apiMocks.engineeringRuntimeInstallations).toHaveBeenCalledTimes(1);
-      expect(apiMocks.engineeringBundledRuntime).toHaveBeenCalledTimes(1);
       expect(apiMocks.engineeringProbe).toHaveBeenCalledWith("D:/MATLAB/R2024b/bin/matlab.exe", "R2024b");
     });
 
@@ -124,11 +122,11 @@ describe("EngineeringWorkspace mount", () => {
     await userEvent.click(screen.getByRole("button", { name: "打开参数配置" }));
     const dimension = screen.getByLabelText("求解维度") as HTMLSelectElement;
     expect(dimension.value).toBe("3d");
-    expect(screen.getByLabelText("Z 单元")).toBeTruthy();
+    expect(screen.getByLabelText("高(Z)")).toBeTruthy();
 
     await userEvent.selectOptions(dimension, "2d");
     expect(dimension.value).toBe("2d");
-    expect((screen.getByLabelText("Z 单元") as HTMLInputElement).value).toBe("2D 固定为 1");
+    expect((screen.getByLabelText("高(Z)") as HTMLInputElement).value).toBe("二维模型不适用");
   });
 
   it("keeps Engineering free of Research details and puts workspace left and settings right", async () => {

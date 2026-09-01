@@ -4,6 +4,7 @@ import { api } from "../../api";
 import type { Conversation, ConversationAttachment, ConversationMessage, EngineeringRun, ProjectFile } from "../../types";
 import { parseOptimizationConfigAction, type OptimizationConfig, type OptimizationConfigAction } from "../../optimization-config";
 import { CHAT_IMAGE_MAX_COUNT, imageCandidateFromFile, useChatImageDrop, type DroppedImageCandidate } from "../../chat-image-drop";
+import ParameterConfigurationDialog from "./ParameterConfigurationDialog";
 
 type Props = {
   projectId: string;
@@ -22,7 +23,7 @@ type PendingAttachment = ConversationAttachment & { preview: string };
 const configLabels: Record<string, string> = {
   dimension: "维度", bcType: "工况", accuracy: "精度", nelx: "X 向网格", nely: "Y 向网格", nelz: "Z 向网格",
   volfrac: "体积分数", penal: "惩罚因子", rmin: "滤波半径", maxIterations: "最大迭代",
-  minIterations: "最小迭代", filterStrategy: "滤波策略", material: "材料",
+  minIterations: "最小迭代", filterStrategy: "滤波策略", material: "材料", dimensions: "实际尺寸", unit: "尺寸单位", cellSizeMeters: "单元网格尺寸",
 };
 const EMPTY_CONVERSATIONS: Conversation[] = [];
 
@@ -55,7 +56,8 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [allowExternalSource, setAllowExternalSource] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [suggestedAction, setSuggestedAction] = useState<OptimizationConfigAction | null>(null);
+  const [suggestedActions, setSuggestedActions] = useState<Array<OptimizationConfigAction & { messageId: string }>>([]);
+  const [suggestionEditorOpen, setSuggestionEditorOpen] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const dropZone = useRef<HTMLElement>(null);
   const messageList = useRef<HTMLDivElement>(null);
@@ -64,6 +66,7 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
   const uploadingHashes = useRef(new Set<string>());
   const conversationLoadGeneration = useRef(0);
   const activeConversationRef = useRef("");
+  const lastHistoryNotification = useRef("");
   const draftKey = `topoptpilot:engineering-draft:${ownerId}:${conversationId || "new"}`;
   const draftRef = useRef<EngineeringChatDraft>({ message: "", allowExternalSource: false, attachments: [] });
   const hydratedDraftKey = useRef("");
@@ -151,11 +154,11 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     }
   }, [externalConversations]);
   useEffect(() => {
-    if (!sameConversationList(conversations, externalConversations)) {
-      onHistoryChange?.(conversations, conversationId);
-      return;
-    }
-    onHistoryChange?.(externalConversations, conversationId);
+    const next = sameConversationList(conversations, externalConversations) ? externalConversations : conversations;
+    const signature = JSON.stringify({ id: conversationId, items: next.map(item => [item.id, item.title, item.updatedAt]) });
+    if (lastHistoryNotification.current === signature) return;
+    lastHistoryNotification.current = signature;
+    onHistoryChange?.(next, conversationId);
   }, [conversationId, conversations, externalConversations, onHistoryChange]);
 
   useEffect(() => {
@@ -248,7 +251,8 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
       setMessages(items => [...items, assistant]);
       setMessage("");
       setAttachments([]);
-      setSuggestedAction(response.actions.map(parseOptimizationConfigAction).find(Boolean) || null);
+      const actions = response.actions.map(parseOptimizationConfigAction).filter((item): item is OptimizationConfigAction => Boolean(item));
+      if (actions.length) setSuggestedActions(queue => [...queue, ...actions.map(action => ({ ...action, messageId: assistant.id }))]);
       const updatedAt = Date.now();
       setConversations(items => items
         .map(item => item.id === targetConversationId ? { ...item, updatedAt } : item)
@@ -270,7 +274,7 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
       if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
     }}>
       {!messages.length ? <div className="chat-empty"><Bot size={30}/><b>从当前工程上下文开始</b><span>询问 MATLAB、参数或结果，也可上传图片和常用文档。</span></div> : messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已随会话保存在本地</small> : null}{item.source ? <small>{item.source === "not_configured" ? "未配置 Qwen" : item.source}</small> : null}</div></article>)}
-      {suggestedAction ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="optimization-action-card suggestion-dialog" role="dialog" aria-modal="true" aria-label="应用建议参数"><header><b>Agent 建议参数</b><button className="dialog-icon-button" aria-label="取消建议参数" title="取消" onClick={() => setSuggestedAction(null)}><X size={14}/></button></header><p>{suggestedAction.rationale || "AI 返回了一组完整且通过校验的优化配置。"}</p><div className="optimization-action-diff">{suggestedAction.changedFields.map(field => <div key={field}><b>{configLabels[field] || field}</b><span>{displayConfigValue(config[field as keyof OptimizationConfig])}</span><i>→</i><strong>{displayConfigValue(suggestedAction.config[field as keyof OptimizationConfig])}</strong></div>)}</div><footer><button className="outline-button" onClick={() => setSuggestedAction(null)}>取消</button><button className="primary-button" onClick={() => { onApplySuggestedConfig?.(suggestedAction); setSuggestedAction(null); }}>填入参数</button></footer></section></div> : null}
+      {suggestedActions[0] ? <><div className="suggestion-dialog-backdrop" role="presentation"><section className="optimization-action-card suggestion-dialog" role="dialog" aria-modal="true" aria-label="应用建议参数"><header><b>Agent 建议参数</b><button className="dialog-icon-button" aria-label="取消建议参数" title="取消" onClick={() => setSuggestedActions(queue => queue.slice(1))}><X size={14}/></button></header><p>{suggestedActions[0].rationale || "AI 返回了一组完整且通过校验的优化配置。"}</p><div className="optimization-action-diff">{suggestedActions[0].changedFields.map(field => <div key={field}><b>{configLabels[field] || field}</b><span>{displayConfigValue(config[field as keyof OptimizationConfig])}</span><i>→</i><strong>{displayConfigValue(suggestedActions[0].config[field as keyof OptimizationConfig])}</strong></div>)}</div><footer><button className="outline-button" onClick={() => setSuggestedActions(queue => queue.slice(1))}>取消</button><button className="outline-button" onClick={() => setSuggestionEditorOpen(true)}>编辑后填入</button><button className="primary-button" onClick={() => { onApplySuggestedConfig?.(suggestedActions[0]); setSuggestedActions(queue => queue.slice(1)); }}>填入参数</button></footer></section></div><ParameterConfigurationDialog open={suggestionEditorOpen} config={suggestedActions[0].config} lane="local-matlab" busy={busy} matlabDiagnostic="Agent 建议参数" runtimeDiagnostic="Agent 建议参数" onClose={() => setSuggestionEditorOpen(false)} onApply={(next) => { onApplySuggestedConfig?.({ ...suggestedActions[0], config: next }); setSuggestionEditorOpen(false); setSuggestedActions(queue => queue.slice(1)); }} /></> : null}
       <div ref={messageEnd} className="chat-message-end" aria-hidden="true"/>
     </div>
     <footer className="chat-composer">

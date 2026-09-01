@@ -65,6 +65,7 @@ export interface SubagentTask { id:string; role:string; objective:string; status
 export interface Hypothesis { id:string; round_number:number; statement:string; competing?:string[]; evidence_ids?:string[]; status:string }
 export interface ResearchStateAction {
   type: "apply_research_state";
+  messageId?: string;
   goal?: string;
   hypothesis?: string;
   optimizationConfig?: OptimizationConfig;
