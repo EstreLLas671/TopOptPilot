@@ -205,3 +205,24 @@ def test_autonomous_no_approval_candidate_records_policy_reflection(monkeypatch,
         assert "Policy、Safety 与预算校验" in approval_events[-1]["payload"]["reflection"]
     finally:
         isolated.close()
+
+
+def test_fidelity_stage_gate_requires_explicit_repeat_or_advance(monkeypatch, tmp_path) -> None:
+    isolated = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    try:
+        created = _research(isolated)
+        gate = isolated.store.append_event(
+            created["id"], "HUMAN", "FIDELITY_STAGE_AWAITING_DECISION", "F1 完成",
+            payload={"stage_code": "F1", "internal_fidelity": "F0", "round": 1,
+                     "experiment_ids": ["E01"], "result": {"successful": 1, "failed": 0}},
+        )
+        sent = []
+        monkeypatch.setattr(isolated, "_send_pi_or_fallback", lambda *args: sent.append(args))
+        repeated = isolated.decide_fidelity_stage(created["id"], False)
+        assert repeated["status"] == "RUNNING"
+        assert isolated._pending_fidelity_stage_gate(created["id"]) is None
+        decisions = [event for event in isolated.store.list_events(created["id"])
+                     if event["title"] == "FIDELITY_STAGE_DECISION"]
+        assert decisions[-1]["payload"]["gate_event_id"] == str(gate["id"])
+    finally:
+        isolated.close()

@@ -57,6 +57,71 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+_SURFACE_CUBE_VERTICES = (
+    (0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0),
+    (0, 0, 1), (1, 0, 1), (1, 1, 1), (0, 1, 1),
+)
+_SURFACE_TETRAHEDRA = (
+    (0, 5, 1, 6), (0, 1, 2, 6), (0, 2, 3, 6),
+    (0, 3, 7, 6), (0, 7, 4, 6), (0, 4, 5, 6),
+)
+_SURFACE_TETRA_EDGES = ((0, 1), (1, 2), (2, 0), (0, 3), (1, 3), (2, 3))
+
+
+def _density_surface_triangles(density: Any, dimensions: list[float] | tuple[float, ...] | None,
+                               level: float = .5) -> list[list[tuple[float, float, float]]]:
+    """Extract a display-only smooth isosurface without voxel or element edges."""
+    import numpy as np
+    from scipy.ndimage import gaussian_filter
+
+    values = np.asarray(density, dtype=float)
+    if values.ndim != 3 or min(values.shape) < 1 or not np.isfinite(values).all():
+        return []
+    # A small display-only interpolation removes staircase seams while keeping
+    # the source F3 density array and its resolution untouched as evidence.
+    scalar = gaussian_filter(np.pad(values, 1, mode="constant"), sigma=.35)
+    rows, columns, layers = values.shape
+    physical = [float(value) for value in (dimensions or [columns, rows, layers])[:3]]
+    while len(physical) < 3:
+        physical.append(1.0)
+
+    def physical_point(row: float, column: float, layer: float) -> tuple[float, float, float]:
+        return (
+            min(max((column - .5) / max(columns, 1), 0.0), 1.0) * physical[0],
+            min(max((row - .5) / max(rows, 1), 0.0), 1.0) * physical[1],
+            min(max((layer - .5) / max(layers, 1), 0.0), 1.0) * physical[2],
+        )
+
+    triangles: list[list[tuple[float, float, float]]] = []
+    padded_rows, padded_columns, padded_layers = scalar.shape
+    for layer in range(padded_layers - 1):
+        for column in range(padded_columns - 1):
+            for row in range(padded_rows - 1):
+                cube = [
+                    ((row + dr, column + dc, layer + dl), scalar[row + dr, column + dc, layer + dl])
+                    for dr, dc, dl in _SURFACE_CUBE_VERTICES
+                ]
+                for tetrahedron in _SURFACE_TETRAHEDRA:
+                    tetra = [cube[index] for index in tetrahedron]
+                    intersections: list[tuple[float, float, float]] = []
+                    for left_index, right_index in _SURFACE_TETRA_EDGES:
+                        left_point, left_value = tetra[left_index]
+                        right_point, right_value = tetra[right_index]
+                        if (left_value >= level) == (right_value >= level):
+                            continue
+                        amount = (level - left_value) / (right_value - left_value)
+                        point = tuple(
+                            left_point[index] + (right_point[index] - left_point[index]) * amount
+                            for index in range(3)
+                        )
+                        intersections.append(physical_point(*point))
+                    if len(intersections) == 3:
+                        triangles.append(intersections)
+                    elif len(intersections) == 4:
+                        triangles.extend((intersections[:3], [intersections[0], intersections[2], intersections[3]]))
+    return triangles
+
+
 def _validate_writable_dir(raw: str | None) -> Path | None:
     """Return the resolved absolute path of an existing writable directory, or None."""
     if raw is None or not str(raw).strip():
@@ -97,6 +162,7 @@ class ResearchService:
         self.knowledge = KnowledgeBase(self.store, self.project_root / "topoptpilot/knowledge/documents")
         self.queue = ExperimentQueue(self.data_dir / "progress", max_workers=max_workers)
         self.matlab_worker = MatlabMcpWorker(self.data_dir, self.project_root)
+        self._autonomous_stop_lock = threading.RLock()
         self._cache_dir_lock = threading.RLock()
         self.cache_dir = self._resolve_cache_dir(
             (self.store.get_app_settings() or {}).get("data", {}).get("cache_dir"))
@@ -289,7 +355,7 @@ class ResearchService:
                 "database": str(self.store.db_path), "cache_dir": str(self.cache_dir),
                 "cache_bytes": directory_size(self.cache_dir),
                 "log_dir": str(self.data_dir / "logs"), "free_disk_bytes": disk.free,
-                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "2.0.5"}
+                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "2.0.7"}
 
     def export_diagnostics(self) -> Path:
         output = self.data_dir / "diagnostics" / f"topoptpilot-diagnostics-{uuid.uuid4().hex[:8]}.zip"
@@ -342,9 +408,9 @@ class ResearchService:
             "matlab": {"status": matlab_state, "version": matlab_mcp.get("matlab_version"),
                        "root": matlab_mcp.get("matlab_root")},
             "sidecar": {"status": "VERIFIED", "port": os.getenv("TOPPILOT_SIDECAR_PORT"),
-                        "version": "2.0.5"},
+                        "version": "2.0.7"},
         }
-        return {"status": "ok", "version": "2.0.5", "components": components,
+        return {"status": "ok", "version": "2.0.7", "components": components,
                 "solver_2d": matlab_state in {"READY", "VERIFIED"}, "solver_3d": matlab_state in {"READY", "VERIFIED"},
                 "matlab": matlab_mcp["state"] != "UNAVAILABLE", "matlab_mcp": matlab_mcp,
                 "database": str(self.store.db_path),
@@ -446,8 +512,16 @@ class ResearchService:
                 "experiment": self.get_experiment(experiment["id"])}
 
     def start_autonomous_research(self, research_id: str) -> dict[str, Any]:
-        """Start the Pi-owned closed loop; Policy remains the sole parameter compiler."""
+        """Start F1; every completed fidelity stage waits for the user's decision."""
         research = self._require_research(research_id)
+        status = str(research.get("status") or "").upper()
+        if status in {"RUNNING", "STOPPING"}:
+            raise ValueError("自主研究仍在运行或停止中")
+        if status == "STOP_FAILED":
+            raise ValueError("上次停止未完成，请先重试停止自主研究")
+        if str(research.get("termination_reason") or "").upper() == "USER_STOPPED":
+            self.store.create_next_research_run(research_id)
+            research = self._require_research(research_id)
         self.store.update_research(research_id, mode="AUTONOMOUS", status="RUNNING")
         self.store.append_event(research_id, EventKind.SYSTEM.value, "ROUND_STARTED",
                                 f"Autonomous round {int(research.get('current_round', 0)) + 1} started.")
@@ -481,18 +555,164 @@ class ResearchService:
         )
         language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
         prompt = (
-            "You are the primary Pi Research Agent. Begin or continue an autonomous topology-"
-            "optimization campaign. First call research_get_context, research_get_budget, "
+            "You are the primary Pi Research Agent. Begin workflow F1, which maps to internal fidelity F0. "
+            "First call research_get_context, research_get_budget, "
             "solver_get_capabilities and knowledge_search. Dispatch the HYPOTHESIS and "
             "EXPERIMENT_PLANNER Subagents when their bounded review is needed. For every round, first "
             "propose exactly three complete candidate plans from meaningfully different improvement angles "
             "(for example penalty/filter strategy, mesh/volume constraints, and load/material/connectivity). "
-            "Compile each plan through policy_compile_intent, preview every returned proposal, and submit "
+            "Compile each plan through policy_compile_intent, keep all three plans at internal fidelity F0, "
+            "preview every returned proposal, and submit "
             "the safe bounded batch only within the available budget. Wait for real FEM evidence from all "
             "submitted candidates, compare compliance, volume fraction, gray ratio and connectivity, then "
             "select the best route, record a diagnosis of its weaknesses, and formulate the next-round plan. "
             "Do not invent metrics, do not auto-approve, and never provide numeric solver parameters directly. "
-            f"Stop on goal, plateau, or exhausted budget. Reply in {language}."
+            f"After this batch, stop and wait for the explicit stage decision. Reply in {language}."
+        )
+        threading.Thread(target=self._send_pi_or_fallback,
+                         args=(research_id, prompt, "experiment-planning"), daemon=True).start()
+        return self.get_research(research_id)
+
+    def stop_autonomous_research(self, research_id: str) -> dict[str, Any]:
+        """Stop every active autonomous child and expose STOPPED only after reconciliation."""
+        with self._autonomous_stop_lock:
+            research = self._require_research(research_id)
+            status = str(research.get("status") or "").upper()
+            reason = str(research.get("termination_reason") or "").upper()
+            if status == "STOPPED" and reason == "USER_STOPPED":
+                return self.get_research(research_id)
+            if status == "STOPPING":
+                return self.get_research(research_id)
+
+            run_ids: list[tuple[str, str]] = []
+            for experiment in self.store.list_experiments(research_id):
+                experiment_status = str(experiment.get("status") or "").upper()
+                if (status == "STOP_FAILED" and experiment_status == "CANCELLED"
+                        and experiment.get("run_id")
+                        and not str(experiment["run_id"]).startswith("claim_")):
+                    run_ids.append((str(experiment["run_id"]), str(experiment.get("backend") or "")))
+                if experiment_status in {"WAITING", "QUEUED", "RUNNING", "PENDING"}:
+                    if experiment.get("run_id") and not str(experiment["run_id"]).startswith("claim_"):
+                        run_ids.append((str(experiment["run_id"]), str(experiment.get("backend") or "")))
+                    self.store.update_experiment(
+                        experiment["id"], status="CANCELLED", completed_at=utc_now(),
+                        error="自主研究已由用户停止",
+                    )
+            for decision in self.store.list_decisions(research_id):
+                if decision.get("status") == "PENDING":
+                    self.store.resolve_decision_if_pending(decision["id"], "REJECTED")
+            for proposal in self.store.list_proposals(research_id):
+                if str(proposal.get("status") or "").upper() in {
+                    "PREVIEW", "PENDING", "PENDING_HUMAN_APPROVAL", "SUBMITTED"
+                }:
+                    self.store.update_proposal(proposal["id"], status="CANCELLED")
+            for task in self.store.list_subagent_tasks(research_id):
+                if str(task.get("status") or "").upper() in {"QUEUED", "RUNNING", "PENDING"}:
+                    self.store.update_subagent_task(
+                        task["id"], status="CANCELLED", completed_at=utc_now(),
+                        error="自主研究已由用户停止",
+                    )
+            self.store.update_research(
+                research_id, status="STOPPING", termination_reason="USER_STOPPED",
+            )
+            self.store.append_event(
+                research_id, EventKind.HUMAN.value, "AUTONOMOUS_STOP_REQUESTED",
+                "用户要求停止自主研究；正在终止 Agent、子任务和求解器。",
+                payload={"run_ids": [run_id for run_id, _ in run_ids]}, source="USER",
+            )
+            stopping_response = self.get_research(research_id)
+
+            def reconcile_stop() -> None:
+                errors: list[str] = []
+                if self.pi_runtime is not None:
+                    try:
+                        self.pi_runtime.cancel(research_id)
+                        self.pi_runtime.release(research_id)
+                    except Exception as exc:
+                        errors.append(f"Pi: {exc}")
+                for run_id, backend in run_ids:
+                    try:
+                        worker = self.matlab_worker if backend == "matlab" else self.queue
+                        worker.cancel(run_id)
+                        if not worker.wait_for_stop(run_id, timeout=15.0):
+                            errors.append(f"{backend or 'python'}:{run_id} 未在超时内停止")
+                    except Exception as exc:
+                        errors.append(f"{backend or 'python'}:{run_id}: {exc}")
+                try:
+                    self.store.upsert_agent_session(
+                        research_id, status="OFFLINE", stream_text="",
+                        last_error="；".join(errors) if errors else None,
+                    )
+                    if errors:
+                        self.store.update_research(research_id, status="STOP_FAILED")
+                        self.store.append_event(
+                            research_id, EventKind.SYSTEM.value, "AUTONOMOUS_STOP_FAILED",
+                            "；".join(errors), payload={"errors": errors},
+                        )
+                    else:
+                        self.store.update_research(
+                            research_id, status="STOPPED", termination_reason="USER_STOPPED",
+                        )
+                        self.store.append_event(
+                            research_id, EventKind.SYSTEM.value, "AUTONOMOUS_STOPPED",
+                            "自主研究后台链路已全部停止；下次运行将建立空白活动轮次。",
+                            payload={"termination_reason": "USER_STOPPED"},
+                        )
+                except Exception:
+                    self.store.update_research(research_id, status="STOP_FAILED")
+
+            threading.Thread(
+                target=reconcile_stop, daemon=True, name=f"stop-autonomous-{research_id}",
+            ).start()
+            return stopping_response
+
+    def _pending_fidelity_stage_gate(self, research_id: str) -> dict[str, Any] | None:
+        events = self.store.list_events(research_id)
+        resolved = {
+            str((event.get("payload") or {}).get("gate_event_id"))
+            for event in events if event.get("title") == "FIDELITY_STAGE_DECISION"
+        }
+        for event in reversed(events):
+            if (event.get("title") == "FIDELITY_STAGE_AWAITING_DECISION"
+                    and str(event.get("id")) not in resolved):
+                return event
+        return None
+
+    def decide_fidelity_stage(self, research_id: str, advance: bool) -> dict[str, Any]:
+        """Repeat the completed stage once or explicitly advance to the next F1-F4 stage."""
+        self._require_research(research_id)
+        gate = self._pending_fidelity_stage_gate(research_id)
+        if not gate:
+            raise ValueError("当前没有等待确认的 F1-F4 阶段结果")
+        payload = gate.get("payload") or {}
+        stage_code = str(payload.get("stage_code") or "F1")
+        internal_fidelity = str(payload.get("internal_fidelity") or "F0")
+        stage_number = max(1, min(4, int(stage_code[1:]) if stage_code[1:].isdigit() else 1))
+        internal_number = max(0, min(3, int(internal_fidelity[1:])
+                                     if internal_fidelity[1:].isdigit() else 0))
+        next_stage = f"F{min(4, stage_number + 1)}"
+        next_internal = f"F{min(3, internal_number + 1)}"
+        self.store.append_event(
+            research_id, EventKind.HUMAN.value, "FIDELITY_STAGE_DECISION",
+            (f"确认进入 {next_stage}" if advance and stage_number < 4 else
+             "确认完成 F4" if advance else f"要求在 {stage_code} 再进行一轮"),
+            payload={"gate_event_id": str(gate.get("id")), "stage_code": stage_code,
+                     "decision": "ADVANCE" if advance else "REPEAT"},
+            source="USER",
+        )
+        if advance and stage_number >= 4:
+            self.store.update_research(research_id, status="STOPPED", termination_reason="F4_CONFIRMED")
+            return self.get_research(research_id)
+        target_stage = next_stage if advance else stage_code
+        target_internal = next_internal if advance else internal_fidelity
+        self.store.update_research(research_id, status="RUNNING")
+        prompt = (
+            f"The user explicitly chose {'advance' if advance else 'repeat'} after {stage_code}. "
+            f"Run exactly one new {target_stage} batch at internal fidelity {target_internal}. "
+            "Call research_get_context and research_get_budget, propose exactly three meaningfully different "
+            "candidate plans, compile all parameters through policy_compile_intent, preview and submit only "
+            "safe proposals within budget. Do not promote beyond the requested internal fidelity. After all "
+            "real results are recorded, stop and wait for the next explicit stage decision."
         )
         threading.Thread(target=self._send_pi_or_fallback,
                          args=(research_id, prompt, "experiment-planning"), daemon=True).start()
@@ -510,7 +730,7 @@ class ResearchService:
 
     def _safe_mode_next(self, research_id: str) -> None:
         research = self._require_research(research_id)
-        if research["status"] == "STOPPED" or research.get("termination_reason"):
+        if research["status"] in {"STOPPING", "STOPPED", "STOP_FAILED"} or research.get("termination_reason"):
             return
         experiments = self.store.list_experiments(research_id)
         budget = FidelityManager.budget(research, experiments)
@@ -620,27 +840,15 @@ class ResearchService:
         research = self._require_research(research_id)
         if research.get("archived_at"):
             return research
-        research = self._require_research(research_id)
-        # Deleting a Research is reversible. Terminate in-flight work first,
-        # while retaining every result/evidence record already persisted.
-        if self.pi_runtime is not None:
-            try:
-                self.pi_runtime.cancel(research_id)
-            except Exception:
-                pass
+        # Persist the reversible deletion first. Process termination can take
+        # several seconds on Windows and must not block the UI request.
+        run_ids: list[tuple[str, str]] = []
         for experiment in self.store.list_experiments(research_id):
             status = str(experiment.get("status", "")).upper()
             run_id = experiment.get("run_id")
             if status in {"WAITING", "QUEUED", "RUNNING", "PENDING"}:
                 if run_id:
-                    try:
-                        self.queue.cancel(str(run_id))
-                    except Exception:
-                        pass
-                    try:
-                        self.matlab_worker.cancel(str(run_id))
-                    except Exception:
-                        pass
+                    run_ids.append((str(run_id), str(experiment.get("backend") or "")))
                 self.store.update_experiment(
                     experiment["id"], status="CANCELLED",
                     error=experiment.get("error") or "Research 已删除，运行已取消",
@@ -663,9 +871,31 @@ class ResearchService:
             payload={"reason": "DELETED_BY_USER", "inflight_cancelled": True},
             source="USER",
         )
-        if self.pi_runtime is not None:
-            self.pi_runtime.release(research_id)
-        return self.store.update_research(research_id, archived_at=utc_now())
+        archived = self.store.update_research(research_id, archived_at=utc_now())
+
+        def release_inflight() -> None:
+            if self.pi_runtime is not None:
+                try:
+                    self.pi_runtime.cancel(research_id)
+                except Exception:
+                    pass
+            for run_id, backend in run_ids:
+                try:
+                    if backend == "matlab":
+                        self.matlab_worker.cancel(run_id)
+                    else:
+                        self.queue.cancel(run_id)
+                except Exception:
+                    pass
+            if self.pi_runtime is not None:
+                try:
+                    self.pi_runtime.release(research_id)
+                except Exception:
+                    pass
+
+        threading.Thread(target=release_inflight, daemon=True,
+                         name=f"archive-{research_id}").start()
+        return archived
 
     def restore_research(self, research_id: str) -> dict[str, Any]:
         self._require_research(research_id)
@@ -993,6 +1223,17 @@ class ResearchService:
                 if str(experiment.get("fidelity", "")).split()[0] == "F3":
                     task["params"]["verification_mode"] = "fixed_density"
                     task["params"]["verification_source_experiment"] = str(experiment["warm_start"])
+                    if "grid3d" not in task["params"]:
+                        import numpy as np
+                        density_shape = np.asarray(density).shape
+                        if len(density_shape) == 3 and all(int(value) > 0 for value in density_shape):
+                            # Density arrays use (nely, nelx, nelz), while the
+                            # MATLAB task contract uses [nelx, nely, nelz].
+                            # Reuse the exact F2 discretization for fixed-density
+                            # F3 verification when no user-confirmed grid exists.
+                            task["params"]["grid3d"] = [
+                                int(density_shape[1]), int(density_shape[0]), int(density_shape[2]),
+                            ]
         cache_task = {**task, "backend": experiment["backend"]}
         fidelity_code = str(experiment.get("fidelity", "F0")).split()[0]
         solver_entry = self.project_root / (
@@ -1097,11 +1338,14 @@ class ResearchService:
             if not experiment:
                 return
             research = self._require_research(experiment["research_id"])
-            if experiment["status"] == "CANCELLED" or research["status"] == "STOPPED":
+            if (experiment["status"] == "CANCELLED"
+                    or research["status"] in {"STOPPING", "STOPPED", "STOP_FAILED"}
+                    or research.get("active_run_id") != experiment.get("research_run_id")):
                 self.store.update_experiment(experiment_id, status="CANCELLED", completed_at=utc_now())
                 self.store.append_event(research["id"], EventKind.SYSTEM.value,
                                         f"EXPERIMENT {experiment_id} CANCELLED",
-                                        "The completed worker output was discarded after /stop.", experiment_id)
+                                        "The completed worker output was discarded after /stop.", experiment_id,
+                                        research_run_id=experiment.get("research_run_id"))
                 return
             try:
                 result = future.result()
@@ -1322,19 +1566,28 @@ class ResearchService:
                         },
                         source="RESEARCH_ORCHESTRATOR",
                     )
-                    prompt = (
-                        f"EXPERIMENT_BATCH_COMPLETED: {completed_ids}. Read structured results, "
-                        "search relevant offline knowledge and inspect solver capabilities. Dispatch the "
-                        "HYPOTHESIS Subagent for competing explanations and the EXPERIMENT_PLANNER Subagent "
-                        "for proposal review, then choose the next scientific intent. You must call "
-                        "policy_compile_intent; do not invent numeric parameters. Submit the complete safe "
-                        "controlled batch within budget, or state a termination reason."
+                    fidelity_rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+                    completed_fidelities = [str(item.get("fidelity") or "F0").split()[0]
+                                            for item in completed_items]
+                    internal_fidelity = max(completed_fidelities,
+                                            key=lambda value: fidelity_rank.get(value, 0), default="F0")
+                    stage_code = f"F{fidelity_rank.get(internal_fidelity, 0) + 1}"
+                    self.store.append_event(
+                        research["id"], EventKind.HUMAN.value, "FIDELITY_STAGE_AWAITING_DECISION",
+                        f"{stage_code} 已完成，请确认进入下一流程，或在本流程再进行一轮。",
+                        payload={
+                            "stage_code": stage_code, "internal_fidelity": internal_fidelity,
+                            "round": next_round, "experiment_ids": completed_ids,
+                            "best_experiment_id": best.get("id"),
+                            "result": {
+                                "best_compliance": (best.get("result") or {}).get("objective", {}).get("compliance"),
+                                "successful": len(successful_items), "failed": len(failed_items),
+                                "weak_points": weak_points,
+                            },
+                        },
+                        source="RESEARCH_ORCHESTRATOR",
                     )
-                    skill = ("failure-diagnosis" if any(item["status"] in {"FAILED", "CANCELLED"} and item.get("result")
-                                                        for item in completed_items)
-                             else "hypothesis-evaluation")
-                    threading.Thread(target=self._send_pi_or_fallback,
-                                     args=(research["id"], prompt, skill), daemon=True).start()
+                    self.store.update_research(research["id"], status="READY")
                 elif current["status"] != "STOPPED":
                     self.store.update_research(research["id"], status="READY")
 
@@ -1374,12 +1627,30 @@ class ResearchService:
         self._write_density_vtk(vtk_path, density)
         topology_path = directory / "topology.png"
         if density.ndim == 3:
+            from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+            research = self.get_research(research_id)
+            configured = ((research.get("defaults") or {}).get("optimization_config") or {})
+            dimensions = list(configured.get("dimensions") or
+                              (research.get("geometry") or {}).get("dimensions") or
+                              [density.shape[1], density.shape[0], density.shape[2]])
+            while len(dimensions) < 3:
+                dimensions.append(1.0)
+            triangles = _density_surface_triangles(density, dimensions)
             figure = plt.figure(figsize=(7.2, 5.2), dpi=170, facecolor="white")
             axis = figure.add_subplot(111, projection="3d")
-            axis.voxels(density >= .5, facecolors="#b7b7b7", edgecolor="#252525",
-                        linewidth=.18, shade=True)
+            if triangles:
+                surface = Poly3DCollection(
+                    triangles, facecolor="#aeb7c2", edgecolor="none",
+                    linewidth=0, antialiased=True,
+                )
+                surface.set_rasterized(True)
+                axis.add_collection3d(surface)
+                axis.set_xlim(0, dimensions[0]); axis.set_ylim(0, dimensions[1]); axis.set_zlim(0, dimensions[2])
+            else:
+                axis.text2D(.5, .5, "No material above density threshold", ha="center", va="center",
+                            transform=axis.transAxes)
             axis.view_init(elev=24, azim=-54)
-            axis.set_box_aspect(tuple(max(1, value) for value in density.shape))
+            axis.set_box_aspect(tuple(max(float(value), 1e-12) for value in dimensions[:3]))
             axis.set_axis_off()
         else:
             figure, axis = plt.subplots(figsize=(7.2, 2.8), dpi=170, facecolor="white")
@@ -1393,15 +1664,40 @@ class ResearchService:
         if stress_path.is_file():
             stress = np.load(stress_path)
             if stress.ndim == 3:
+                from mpl_toolkits.mplot3d.art3d import Poly3DCollection
                 figure = plt.figure(figsize=(7.2, 5.2), dpi=170, facecolor="white")
                 axis = figure.add_subplot(111, projection="3d")
-                solid = density >= .5
+                research = self.get_research(research_id)
+                configured = ((research.get("defaults") or {}).get("optimization_config") or {})
+                dimensions = list(configured.get("dimensions") or
+                                  (research.get("geometry") or {}).get("dimensions") or
+                                  [density.shape[1], density.shape[0], density.shape[2]])
+                while len(dimensions) < 3:
+                    dimensions.append(1.0)
+                triangles = _density_surface_triangles(density, dimensions)
                 span = max(float(np.max(stress) - np.min(stress)), 1e-12)
-                colors = plt.cm.gray(.25 + .65 * (stress - np.min(stress)) / span)
-                axis.voxels(solid, facecolors=colors, edgecolor="#333333",
-                            linewidth=.12, shade=True)
+                rows, columns, layers = stress.shape
+                colors = []
+                for triangle in triangles:
+                    center = np.mean(np.asarray(triangle, dtype=float), axis=0)
+                    column = min(columns - 1, max(0, int(round(center[0] / dimensions[0] * columns - .5))))
+                    row = min(rows - 1, max(0, int(round(center[1] / dimensions[1] * rows - .5))))
+                    layer = min(layers - 1, max(0, int(round(center[2] / dimensions[2] * layers - .5))))
+                    normalized = (float(stress[row, column, layer]) - float(np.min(stress))) / span
+                    colors.append(plt.cm.gray(.25 + .65 * normalized))
+                if triangles:
+                    surface = Poly3DCollection(
+                        triangles, facecolors=colors, edgecolor="none",
+                        linewidth=0, antialiased=True,
+                    )
+                    surface.set_rasterized(True)
+                    axis.add_collection3d(surface)
+                    axis.set_xlim(0, dimensions[0]); axis.set_ylim(0, dimensions[1]); axis.set_zlim(0, dimensions[2])
+                else:
+                    axis.text2D(.5, .5, "No material above density threshold", ha="center", va="center",
+                                transform=axis.transAxes)
                 axis.view_init(elev=24, azim=-54)
-                axis.set_box_aspect(tuple(max(1, value) for value in density.shape))
+                axis.set_box_aspect(tuple(max(float(value), 1e-12) for value in dimensions[:3]))
                 axis.set_axis_off()
             else:
                 figure, axis = plt.subplots(figsize=(7.2, 2.8), dpi=170, facecolor="white")
@@ -1453,6 +1749,8 @@ class ResearchService:
                     "result_source": result.get("result_source", "LIVE_REAL_RUN"),
                     "shape": list(density.shape),
                     "dimension": int(density.ndim),
+                    "rendering": "density-isosurface" if artifact_type == "TOPOLOGY_IMAGE" else None,
+                    "surface_level": .5 if artifact_type == "TOPOLOGY_IMAGE" else None,
                     "stress_unit": result.get("quality", {}).get("stress_unit"),
                     "stress_unit_trusted": result.get("quality", {}).get("stress_unit_trusted"),
                 },
@@ -1619,11 +1917,11 @@ class ResearchService:
         return WorkspaceCommandResult(ok=True, message=f"Research {status.lower()}.", action=status.lower())
 
     def _command_stop(self, research_id: str) -> WorkspaceCommandResult:
-        for experiment in self.store.list_experiments(research_id):
-            if experiment["status"] in {"WAITING", "RUNNING"} and experiment["run_id"]:
-                self.queue.cancel(experiment["run_id"])
-                self.store.update_experiment(experiment["id"], status="CANCELLED")
-        return self._set_research_status(research_id, "STOPPED")
+        research = self.stop_autonomous_research(research_id)
+        return WorkspaceCommandResult(
+            ok=True, message="Research stopping." if research["status"] == "STOPPING" else "Research stopped.",
+            action="stop", data={"status": research["status"]},
+        )
 
     def _pending_decision(self, research_id: str) -> dict[str, Any]:
         decision = next((d for d in reversed(self.store.list_decisions(research_id))

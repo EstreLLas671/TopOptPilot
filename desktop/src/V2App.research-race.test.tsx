@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => ({ initializeBackend: mocks.initializeBackend, api: mocks }));
 vi.mock("./theme", () => ({ applyTheme: vi.fn() }));
-vi.mock("./SettingsWorkspace", () => ({ default: () => null }));
+vi.mock("./SettingsWorkspace", () => ({ default: (props: any) => <div data-testid="settings-center"><button onClick={props.onClose}>返回工作台</button></div> }));
 vi.mock("./features/engineering/EngineeringWorkspace", () => ({ default: () => <div>engineering</div> }));
 vi.mock("./features/research/ResearchWorkspace", () => ({
   default: (props: any) => <div>
@@ -59,5 +59,17 @@ describe("V2App Research selection races", () => {
     await waitFor(() => expect(pending.get("R-B")?.length).toBe(1));
     pending.get("R-B")?.shift()?.({ ...summary("R-B"), experiments: [{ id: "E-B", status: "SUCCESS" }] });
     await waitFor(() => expect(screen.getByTestId("active-experiment").textContent).toBe("E-B"));
+  });
+
+  it("opens settings without unmounting the foreground engineering workspace", async () => {
+    render(<V2App/>);
+    await screen.findByText("engineering");
+    expect(document.body.textContent).not.toContain("SIDECAR");
+    fireEvent.click(screen.getByRole("button", { name: "打开设置" }));
+    expect(screen.getByTestId("settings-center")).toBeTruthy();
+    expect(screen.getByText("engineering")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "返回工作台" }));
+    expect(screen.queryByTestId("settings-center")).toBeNull();
+    expect(screen.getByText("engineering")).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArchiveRestore, Bot, CheckCircle2, ChevronRight, FileJson2, FlaskConical, FolderOpen, ImagePlus, LoaderCircle, MessageCircle, Play, Plus, Send, Settings2, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArchiveRestore, Bot, CheckCircle2, ChevronRight, FileJson2, FlaskConical, FolderOpen, ImagePlus, LoaderCircle, MessageCircle, Play, Plus, Send, Settings2, ShieldCheck, Square, Trash2, X } from "lucide-react";
 import { api } from "../../api";
-import type { ConversationAttachment, ConversationMessage, EngineeringComparisonScheme, Experiment, Research, ResearchStateAction, ResearchWorkflowProgress } from "../../types";
+import type { ConversationAttachment, ConversationMessage, EngineeringComparisonScheme, Experiment, Research, ResearchStageGate, ResearchStateAction, ResearchWorkflowProgress } from "../../types";
 import { DEFAULT_OPTIMIZATION_CONFIG, normalizeOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 import type { EngineeringSolverLane } from "../../engineering-workspace";
 import { solverLaneLabel } from "../../workspace";
@@ -34,6 +34,10 @@ type Props = {
   setCommand: (value: string) => void;
 };
 type PendingAttachment = ConversationAttachment & { preview: string };
+type ResearchDraft = {
+  goal:string; hypothesis:string; config:OptimizationConfig;
+  dirty:{goal:boolean;hypothesis:boolean;config:boolean};
+};
 
 export default function ResearchWorkspace(props: Props) {
   const { researches, selected, active, command, busy, safeMode, onCommand, onCreateResearch, onArchive, onRestore, onDecision, onError, onSelect, onSelectExperiment, setCommand } = props;
@@ -43,6 +47,7 @@ export default function ResearchWorkspace(props: Props) {
   const [streamText, setStreamText] = useState("");
   const [progressText, setProgressText] = useState("等待研究任务");
   const [autonomousBusy, setAutonomousBusy] = useState(false);
+  const [stopBusy, setStopBusy] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [researchActionBusy, setResearchActionBusy] = useState("");
   const [archived, setArchived] = useState<Research[]>([]);
@@ -66,6 +71,7 @@ export default function ResearchWorkspace(props: Props) {
   const [selectedSchemeId, setSelectedSchemeId] = useState("");
   const [schemeImportBusy, setSchemeImportBusy] = useState(false);
   const [workflowProgress, setWorkflowProgress] = useState<ResearchWorkflowProgress | null>(selected?.workflow || null);
+  const [stageDecisionBusy, setStageDecisionBusy] = useState(false);
   const [resultExperiment, setResultExperiment] = useState<Experiment | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportName, setReportName] = useState("");
@@ -86,7 +92,29 @@ export default function ResearchWorkspace(props: Props) {
   const uploadingHashes = useRef(new Set<string>());
   const lastEventId = useRef(0);
   const recordedAgentEvents = useRef(new Set<number>());
+  const queuedSuggestionSources = useRef(new Set<string>());
+  const draftsByResearch = useRef(new Map<string, ResearchDraft>());
   const selectedLoadGeneration = useRef(0);
+  const selectedStatus = String(selected?.status || "").toUpperCase();
+  const stoppingAutonomous = selectedStatus === "STOPPING";
+  const canStopAutonomous = selectedStatus === "RUNNING" || selectedStatus === "STOP_FAILED";
+
+  const cacheDraft = useCallback((patch: Partial<Omit<ResearchDraft, "dirty">>, dirty: Partial<ResearchDraft["dirty"]> = {}) => {
+    if (!selected) return;
+    const current = draftsByResearch.current.get(selected.id) || {
+      goal: selected.goal || "", hypothesis: selected.hypothesis || "",
+      config: researchConfig, dirty: { goal: false, hypothesis: false, config: false },
+    };
+    draftsByResearch.current.set(selected.id, {
+      ...current, ...patch, dirty: { ...current.dirty, ...dirty },
+    });
+  }, [selected?.id, selected?.goal, selected?.hypothesis, researchConfig]);
+
+  const enqueueSuggestions = useCallback((sourceId: string, actions: ResearchStateAction[], messageId: string) => {
+    if (!actions.length || queuedSuggestionSources.current.has(sourceId)) return;
+    queuedSuggestionSources.current.add(sourceId);
+    setSuggestedActions(queue => [...queue, ...actions.map(action => ({ ...action, messageId }))]);
+  }, []);
   const metrics = useMemo(() => ({
     compliance: active?.result?.objective?.compliance,
     gray: active?.result?.quality?.gray_ratio,
@@ -97,6 +125,21 @@ export default function ResearchWorkspace(props: Props) {
     const artifacts = (active?.result?.artifacts ?? {}) as Record<string, unknown>;
     return { density: normalizeResearchField(artifacts.density), history: normalizeResearchHistory(artifacts.history) };
   }, [active]);
+  const pendingStageGate = useMemo<ResearchStageGate | null>(() => {
+    const events = selected?.events || [];
+    const resolved = new Set(events.filter(event => event.title === "FIDELITY_STAGE_DECISION")
+      .map(event => String(event.payload?.gate_event_id || "")));
+    const gate = [...events].reverse().find(event => event.title === "FIDELITY_STAGE_AWAITING_DECISION" && !resolved.has(String(event.id)));
+    if (!gate) return null;
+    const payload = gate.payload || {};
+    const stageCode = String(payload.stage_code || "F1") as ResearchStageGate["stageCode"];
+    return {
+      eventId: String(gate.id), stageCode, internalFidelity: String(payload.internal_fidelity || "F0"),
+      round: Number(payload.round || 1), experimentIds: Array.isArray(payload.experiment_ids) ? payload.experiment_ids.map(String) : [],
+      bestExperimentId: payload.best_experiment_id ? String(payload.best_experiment_id) : undefined,
+      result: payload.result && typeof payload.result === "object" ? payload.result as Record<string, unknown> : {},
+    };
+  }, [selected?.events]);
 
   const persistAssistant = useCallback(async (content: string, source = "qwen", targetConversationId = conversationId) => {
     if (!targetConversationId || !content.trim()) return null;
@@ -117,8 +160,16 @@ export default function ResearchWorkspace(props: Props) {
     }
     let cancelled = false;
     setResultExperiment(null);
-    setGoalDraft(selected.goal || "");
-    setHypothesisDraft(selected.hypothesis || "");
+    const cachedDraft = draftsByResearch.current.get(selected.id);
+    const initialDraft = cachedDraft || {
+      goal: selected.goal || "", hypothesis: selected.hypothesis || "",
+      config: DEFAULT_OPTIMIZATION_CONFIG,
+      dirty: { goal: false, hypothesis: false, config: false },
+    };
+    draftsByResearch.current.set(selected.id, initialDraft);
+    setGoalDraft(initialDraft.goal);
+    setHypothesisDraft(initialDraft.hypothesis);
+    setResearchConfig(initialDraft.config);
     setSuggestedActions([]);
     setWorkflowProgress(selected.workflow || null);
     recordedAgentEvents.current.clear();
@@ -130,7 +181,17 @@ export default function ResearchWorkspace(props: Props) {
     ]).then(async ([artifacts, config, conversations]) => {
       if (cancelled || generation !== selectedLoadGeneration.current) return;
       setArtifactIndex(artifacts);
-      setResearchConfig(normalizeOptimizationConfig(config));
+      const normalizedConfig = normalizeOptimizationConfig(config);
+      const currentDraft = draftsByResearch.current.get(selected.id);
+      if (currentDraft?.dirty.config) {
+        setResearchConfig(currentDraft.config);
+      } else {
+        setResearchConfig(normalizedConfig);
+        draftsByResearch.current.set(selected.id, {
+          ...(currentDraft || initialDraft), config: normalizedConfig,
+          dirty: { ...(currentDraft || initialDraft).dirty, config: false },
+        });
+      }
       const id = conversations[0]?.id || "";
       if (cancelled || generation !== selectedLoadGeneration.current) return;
       setConversationId(id);
@@ -141,7 +202,23 @@ export default function ResearchWorkspace(props: Props) {
       window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
     }).catch(reason => { if (!cancelled) onError(String(reason)); });
     return () => { cancelled = true; };
-  }, [selected?.id, selected?.goal, onError]);
+  }, [selected?.id, onError]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const current = draftsByResearch.current.get(selected.id);
+    if (!current) return;
+    const next = { ...current, dirty: { ...current.dirty } };
+    if (!current.dirty.goal && current.goal !== (selected.goal || "")) {
+      next.goal = selected.goal || "";
+      setGoalDraft(next.goal);
+    }
+    if (!current.dirty.hypothesis && current.hypothesis !== (selected.hypothesis || "")) {
+      next.hypothesis = selected.hypothesis || "";
+      setHypothesisDraft(next.hypothesis);
+    }
+    draftsByResearch.current.set(selected.id, next);
+  }, [selected?.id, selected?.goal, selected?.hypothesis]);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,7 +275,11 @@ export default function ResearchWorkspace(props: Props) {
         if (kind === "AGENT_MESSAGE" && body && !recordedAgentEvents.current.has(id)) {
           recordedAgentEvents.current.add(id);
           setStreamText("");
-          void persistAssistant(body, "pi");
+          const sourceId = `event:${id}`;
+          void api.researchSuggestionExtract(selected.id, sourceId, body).then(async extraction => {
+            const assistant = await persistAssistant(extraction.reply || body, "pi");
+            if (assistant) enqueueSuggestions(sourceId, extraction.actions || [], assistant.id);
+          }).catch(() => { void persistAssistant(body, "pi"); });
         }
       }
       window.clearTimeout(refreshTimer);
@@ -250,7 +331,7 @@ export default function ResearchWorkspace(props: Props) {
       window.clearInterval(pollTimer);
       socket?.close();
     };
-  }, [selected?.id, onSelect, onError, persistAssistant]);
+  }, [selected?.id, onSelect, onError, persistAssistant, enqueueSuggestions]);
 
   async function autonomous() {
     if (!selected) return;
@@ -263,6 +344,21 @@ export default function ResearchWorkspace(props: Props) {
     try { await api.autonomous(selected.id); await onSelect(selected.id); }
     catch (reason) { onError(String(reason)); }
     finally { setAutonomousBusy(false); }
+  }
+  async function stopAutonomous() {
+    if (!selected || stopBusy || stoppingAutonomous) return;
+    setStopBusy(true);
+    setProgressText("正在停止 Agent、子任务与求解器");
+    try { await api.stopAutonomous(selected.id); await onSelect(selected.id); }
+    catch (reason) { onError(String(reason)); }
+    finally { setStopBusy(false); }
+  }
+  async function decideStage(advance: boolean) {
+    if (!selected || !pendingStageGate || stageDecisionBusy) return;
+    setStageDecisionBusy(true);
+    try { await api.researchFidelityStageDecision(selected.id, advance); await onSelect(selected.id); }
+    catch (reason) { onError(String(reason)); }
+    finally { setStageDecisionBusy(false); }
   }
   async function compare() {
     if (!selected || experiments.length < 2) return;
@@ -400,21 +496,19 @@ export default function ResearchWorkspace(props: Props) {
       setMessages(items => [...items, user]);
       if (attachmentIds.length) {
         const response = await api.researchVisionChat(selected.id, value, attachmentIds);
-        const replyAction = response.actions?.[0];
         const reply = response.reply || (response.actions?.length ? "已生成可确认的研究状态建议。" : response.source === "not_configured" ? "当前未配置可用的 Qwen 凭据。" : "当前模型无法处理该附件，草稿已保留。");
         const assistant = await persistAssistant(reply, response.source, targetConversationId);
-        if (assistant && replyAction) setSuggestedActions(queue => [...queue, { ...replyAction, messageId: assistant.id }]);
+        if (assistant) enqueueSuggestions(`message:${assistant.id}`, response.actions || [], assistant.id);
       } else if (!value.startsWith("/")) {
         setProgressText("正在读取 Research State 并生成真实回复");
         const response = await api.researchChat(selected.id, value, active?.id);
-        const replyAction = response.actions?.[0];
         const reply = response.reply || (response.actions?.length
           ? "已生成可确认的研究状态建议。"
           : response.source === "not_configured"
             ? "当前未配置 Qwen 凭据。科研对话已保留，但不会生成伪造回复。"
             : "当前模型不可用，科研对话已保留。");
         const assistant = await persistAssistant(reply, response.source, targetConversationId);
-        if (assistant && replyAction) setSuggestedActions(queue => [...queue, { ...replyAction, messageId: assistant.id }]);
+        if (assistant) enqueueSuggestions(`message:${assistant.id}`, response.actions || [], assistant.id);
       } else {
         setProgressText("正在理解目标并读取 Research State");
         const response = await onCommand(value);
@@ -430,7 +524,12 @@ export default function ResearchWorkspace(props: Props) {
   async function saveGoal() {
     if (!selected || !goalDraft.trim() || goalDraft.trim() === selected.goal) return;
     setGoalBusy(true);
-    try { await api.saveResearchGoal(selected.id, goalDraft.trim()); await onSelect(selected.id); }
+    try {
+      const saved = await api.saveResearchGoal(selected.id, goalDraft.trim());
+      const goal = saved.goal || goalDraft.trim();
+      setGoalDraft(goal); cacheDraft({ goal }, { goal: false });
+      await onSelect(selected.id);
+    }
     catch (reason) { onError(String(reason)); }
     finally { setGoalBusy(false); }
   }
@@ -438,7 +537,12 @@ export default function ResearchWorkspace(props: Props) {
   async function saveHypothesis() {
     if (!selected || !hypothesisDraft.trim() || hypothesisDraft.trim() === (selected.hypothesis || "")) return;
     setHypothesisBusy(true);
-    try { await api.saveResearchHypothesis(selected.id, hypothesisDraft.trim()); await onSelect(selected.id); }
+    try {
+      const saved = await api.saveResearchHypothesis(selected.id, hypothesisDraft.trim());
+      const hypothesis = saved.hypothesis || hypothesisDraft.trim();
+      setHypothesisDraft(hypothesis); cacheDraft({ hypothesis }, { hypothesis: false });
+      await onSelect(selected.id);
+    }
     catch (reason) { onError(String(reason)); }
     finally { setHypothesisBusy(false); }
   }
@@ -447,9 +551,18 @@ export default function ResearchWorkspace(props: Props) {
     if (!selected || !action) return;
     try {
       const value = await api.applyResearchSuggestion(selected.id, action);
-      if (value.optimizationConfig) setResearchConfig(value.optimizationConfig);
-      setGoalDraft(value.research.goal || "");
-      setHypothesisDraft(value.research.hypothesis || "");
+      if (action.changedFields.includes("optimizationConfig") && value.optimizationConfig) {
+        setResearchConfig(value.optimizationConfig);
+        cacheDraft({ config: value.optimizationConfig }, { config: false });
+      }
+      if (action.changedFields.includes("goal")) {
+        const goal = value.research.goal || "";
+        setGoalDraft(goal); cacheDraft({ goal }, { goal: false });
+      }
+      if (action.changedFields.includes("hypothesis")) {
+        const hypothesis = value.research.hypothesis || "";
+        setHypothesisDraft(hypothesis); cacheDraft({ hypothesis }, { hypothesis: false });
+      }
       setSuggestedActions(queue => queue.slice(1));
       await onSelect(selected.id);
     } catch (reason) { onError(String(reason)); }
@@ -460,6 +573,7 @@ export default function ResearchWorkspace(props: Props) {
     try {
       const saved = await api.saveResearchOptimizationConfig(selected.id, config);
       setResearchConfig(saved);
+      cacheDraft({ config: saved }, { config: false });
       setResearchLane(lane);
       setConfigOpen(false);
       await onSelect(selected.id);
@@ -487,6 +601,7 @@ export default function ResearchWorkspace(props: Props) {
     try {
       const value = await api.researchImportEngineeringScheme(selected.id, selectedSchemeId);
       setResearchConfig(value.optimizationConfig);
+      cacheDraft({ config: value.optimizationConfig }, { config: false });
       const targetConversationId = await ensureConversation();
       const systemMessage = await api.conversationMessage(targetConversationId, {
         role: "system",
@@ -509,9 +624,10 @@ export default function ResearchWorkspace(props: Props) {
     <div className="research-evidence"><h4>证据索引</h4><p>Research State 是唯一权威来源。移入回收站不会删除实验、审批、报告或制品。</p><div className="budget-line"><span>预算</span><b>{selected?.budget_used ?? 0}/{selected?.budget_total ?? 0}</b></div></div></>;
   const runningExperiment = experiments.find(item => ["RUNNING", "WAITING", "QUEUED"].includes(String(item.status).toUpperCase()));
   const pendingDecision = selected?.decisions?.find(decision => decision.status === "PENDING");
-  const stage = runningExperiment ? progressText : pendingDecision ? "等待 Policy / F0-F3 审批" : streamText ? "正在分析结果并生成回复" : autonomousBusy ? "正在制定实验方案" : "等待下一条科研指令";
+  const stage = stoppingAutonomous ? "正在停止自主研究" : runningExperiment ? progressText : pendingDecision ? "等待 Policy / F0-F3 审批" : streamText ? "正在分析结果并生成回复" : autonomousBusy ? "正在制定实验方案" : "等待下一条科研指令";
 
   return <>
+    {pendingStageGate ? <FidelityStageResultDialog gate={pendingStageGate} busy={stageDecisionBusy} onDecision={decideStage}/> : null}
     <ParameterConfigurationDialog open={configOpen} config={researchConfig} lane={researchLane} busy={Boolean(runningExperiment)} matlabDiagnostic="科研 MATLAB 任务将通过 Policy、审批和 MATLAB MCP 执行。" runtimeDiagnostic="Runtime 为可选工程链路，不替代科研审批。" onClose={() => setConfigOpen(false)} onApply={(config, lane) => void saveConfig(config, lane)}/>
     <ResearchResultDialog researchId={selected?.id || ""} experiment={resultExperiment} onClose={() => setResultExperiment(null)}/>
     {schemePickerOpen ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="engineering-scheme-import-dialog suggestion-dialog" role="dialog" aria-modal="true" aria-label="导入工程方案"><header><b>导入工程方案</b><button className="dialog-icon-button" title="关闭" aria-label="关闭工程方案导入" onClick={() => setSchemePickerOpen(false)}><X size={14}/></button></header>{engineeringSchemes.length ? <div className="engineering-scheme-import-list">{engineeringSchemes.map(item => <label className={selectedSchemeId === item.id ? "active" : ""} key={item.id}><input type="radio" name="engineering-scheme" checked={selectedSchemeId === item.id} onChange={() => setSelectedSchemeId(item.id)}/><span><b>{item.name}</b><small>Run {item.runId} · {String(item.config.dimension || "3d").toUpperCase()} · {String(item.run?.provenance.backend || item.run?.lane || "solver")}</small><small>柔度 {item.run?.metrics.compliance?.toFixed?.(4) ?? "—"} · 体积分数 {item.run?.metrics.volumeFraction?.toFixed?.(4) ?? "—"} · 灰度率 {item.run?.metrics.grayRatio?.toFixed?.(4) ?? "—"}</small></span></label>)}</div> : <p>没有完整性已验证且运行完成的工程方案。</p>}<footer><button className="outline-button" onClick={() => setSchemePickerOpen(false)}>取消</button><button className="primary-button" disabled={!selectedSchemeId || schemeImportBusy} onClick={() => void importEngineeringScheme()}>{schemeImportBusy ? "导入中…" : "导入并填入"}</button></footer></section></div> : null}
@@ -522,7 +638,7 @@ export default function ResearchWorkspace(props: Props) {
       leftRail={<div className="left-rail-icons"><button aria-label="研究项目" title="研究项目"><FlaskConical size={15}/></button><button aria-label="科研对话" title="科研对话" onClick={() => setCenterTab("chat")}><MessageCircle size={15}/></button><button aria-label="科研审批" title="科研审批" onClick={() => setCenterTab("audit")}><ShieldCheck size={15}/></button></div>}
       left={leftPane}
       center={<section className="v2-center research-center research-chat-workspace">
-        <div className="research-header"><div><h1>{selected?.name || "选择一个 Research"}</h1></div><div className="research-header-actions"><button className="primary-button" disabled={!selected || autonomousBusy || Boolean(runningExperiment) || String(selected?.status || "").toUpperCase() === "RUNNING"} onClick={() => void autonomous()}>{autonomousBusy ? <LoaderCircle className="spin"/> : <Play size={14}/>}运行自主研究</button></div></div>
+        <div className="research-header"><div><h1>{selected?.name || "选择一个 Research"}</h1></div><div className="research-header-actions"><button className="primary-button" disabled={!selected || autonomousBusy || stopBusy || stoppingAutonomous || (!canStopAutonomous && (Boolean(runningExperiment) || Boolean(pendingStageGate)))} onClick={() => void (canStopAutonomous ? stopAutonomous() : autonomous())}>{stoppingAutonomous || stopBusy ? <LoaderCircle className="spin"/> : canStopAutonomous ? <Square size={13}/> : <Play size={14}/>} {stoppingAutonomous || stopBusy ? "正在停止…" : canStopAutonomous ? "停止自主研究" : "运行自主研究"}</button></div></div>
         <nav className="v2-tabs research-center-tabs" role="tablist"><button role="tab" aria-selected={centerTab === "chat"} className={"tab" + (centerTab === "chat" ? " active" : "")} onClick={() => setCenterTab("chat")}><MessageCircle size={14}/>科研对话</button><button role="tab" aria-selected={centerTab === "audit"} className={"tab" + (centerTab === "audit" ? " active" : "")} onClick={() => setCenterTab("audit")}><ShieldCheck size={14}/>过程 / 审计</button></nav>
         <div className="research-stage-strip"><span className="connection-dot"/><b>{stage}</b><small>{agentEvent}</small></div>
         {workflowProgress && workflowProgress.stage !== "idle" ? <section className="research-workflow-progress" aria-label="自主研究阶段进度"><header><b>第 {workflowProgress.round} 轮</b><span>{workflowProgress.percent}%</span></header><div className="research-workflow-track"><i style={{ width: `${workflowProgress.percent}%` }}/></div><small>{workflowProgress.steps.find(item => item.status === "active")?.label || (workflowProgress.percent === 100 ? "本轮已完成" : "等待下一阶段")}</small></section> : null}
@@ -533,22 +649,22 @@ export default function ResearchWorkspace(props: Props) {
           <footer className="chat-composer research-chat-composer">{attachments.length ? <div className="chat-attachment-preview">{attachments.map(item => <figure key={item.id}>{item.preview ? <img src={item.preview} alt={item.fileName || "待发送附件"}/> : <span className="attachment-file-name">{item.fileName || "附件"}</span>}<button aria-label="移除附件" onClick={() => setAttachments(values => values.filter(value => value.id !== item.id))}><X size={12}/></button></figure>)}</div> : null}<div><button type="button" className="chat-composer-action scheme-import-button" aria-label="导入工程方案" title="导入工程方案" onClick={() => void openSchemePicker()} disabled={!selected || sending || schemeImportBusy}><Plus size={15}/></button><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf,.docx,.xlsx,.txt,.md,.csv" multiple onChange={event => void uploadFiles(event.target.files)}/><button type="button" className="chat-composer-action" aria-label="上传科研附件" title="上传附件" onClick={() => fileInput.current?.click()} disabled={sending}><ImagePlus size={15}/></button><textarea value={command} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendResearchMessage(); } }} placeholder="描述目标、询问证据或提出下一项实验…"/><button className="chat-composer-action" aria-label="发送科研消息" title="发送" onClick={() => void sendResearchMessage()} disabled={(!command.trim() && !attachments.length) || sending || busy}>{sending || busy ? <LoaderCircle className="spin" size={15}/> : <Send size={15}/>}</button></div></footer>
         </div> : <div className="research-audit-main">{selected?.events?.slice(-30).map(event => <article className="timeline-item" key={event.id}><span className="timeline-icon"><CheckCircle2 size={14}/></span><div><small>{event.kind} · {new Date(event.created_at).toLocaleTimeString()}</small><h3>{event.title}</h3><p>{event.body}</p></div></article>)}{selected?.decisions?.filter(decision => decision.status === "PENDING").map(decision => <article className="decision-card" key={decision.id}><header><ShieldCheck size={14}/>Policy 审批 <span>{decision.risk}</span></header><h3>{decision.proposal?.fidelity || "实验提案"}</h3><p>{decision.reason}</p><div><button className="approve" onClick={() => onDecision(decision.id, "approve")}>批准并提交</button><button onClick={() => onDecision(decision.id, "reject")}>拒绝</button></div></article>)}</div>}
       </section>}
-      bottom={<section className="research-bottom-progress"><header><b>科研执行进度</b><span>{workflowProgress ? `第 ${workflowProgress.round} 轮 · ${workflowProgress.percent}%` : stage}</span></header><div className="research-workflow-steps">{(workflowProgress?.steps || []).map(step => <article className={"research-workflow-step " + step.status} key={step.id}><header><span className="workflow-step-state"/><b>{step.label}</b><small>{step.status === "completed" ? "已完成" : step.status === "active" ? "进行中" : step.status === "failed" ? "失败" : "等待"}</small></header>{step.result ? <p><strong>结果</strong>{step.result}</p> : null}{step.reflection ? <p><strong>反思</strong>{step.reflection}</p> : null}{step.evidenceIds.length ? <p><strong>证据</strong>{step.evidenceIds.join(" · ")}</p> : null}{step.nextAction ? <p><strong>下一步</strong>{step.nextAction}</p> : null}</article>)}{!workflowProgress ? <div className="research-progress-empty">尚未启动自主研究。</div> : null}</div></section>}
+      bottom={<section className="research-bottom-progress"><header><b>科研执行进度</b><span>{workflowProgress ? `第 ${workflowProgress.round} 轮 · ${workflowProgress.percent}%` : stage}</span></header><div className="research-workflow-steps">{(workflowProgress?.steps || []).map(step => <article className={"research-workflow-step " + step.status} key={step.id}><header><span className="workflow-step-state"/><b>{step.label}</b><small>{step.status === "completed" ? "已完成" : step.status === "active" ? "进行中" : step.status === "failed" ? "失败" : "等待"}</small></header>{step.result ? <p><strong>结果</strong>{step.result}</p> : null}{step.reflection ? <p><strong>反思</strong>{step.reflection}</p> : null}{step.evidenceIds.length ? <p><strong>证据</strong>{step.evidenceIds.join(" · ")}</p> : null}{step.nextAction ? <p><strong>下一步</strong>{step.nextAction}</p> : null}</article>)}{!workflowProgress ? <div className="research-progress-empty">尚未启动 F1 阶段。</div> : null}</div></section>}
       right={<>
         <div className="v2-pane-title"><span>研究状态</span><span className="permission research">research</span></div>
         {selected ? <>
           <section className="inspector-card research-goal-card">
-            <h4>研究目标</h4>
-            <textarea aria-label="研究目标" placeholder="填写希望达成的科研目标" value={goalDraft} onChange={event => setGoalDraft(event.target.value)} maxLength={2000}/>
+            <h4 className="research-state-heading">研究目标</h4>
+            <textarea aria-label="研究目标" placeholder="填写希望达成的科研目标" value={goalDraft} onChange={event => { setGoalDraft(event.target.value); cacheDraft({ goal: event.target.value }, { goal: true }); }} maxLength={2000}/>
             <button className="primary-button" disabled={goalBusy || !goalDraft.trim() || goalDraft.trim() === selected.goal} onClick={() => void saveGoal()}>{goalBusy ? "保存中…" : "保存目标"}</button>
           </section>
           <section className="inspector-card research-hypothesis-card">
-            <h4>研究假设</h4>
-            <textarea aria-label="研究假设" placeholder="填写待验证的机制、趋势或因果假设" value={hypothesisDraft} onChange={event => setHypothesisDraft(event.target.value)} maxLength={4000}/>
+            <h4 className="research-state-heading">研究假设</h4>
+            <textarea aria-label="研究假设" placeholder="填写待验证的机制、趋势或因果假设" value={hypothesisDraft} onChange={event => { setHypothesisDraft(event.target.value); cacheDraft({ hypothesis: event.target.value }, { hypothesis: true }); }} maxLength={4000}/>
             <button className="primary-button" disabled={hypothesisBusy || !hypothesisDraft.trim() || hypothesisDraft.trim() === (selected.hypothesis || "")} onClick={() => void saveHypothesis()}>{hypothesisBusy ? "保存中…" : "保存假设"}</button>
           </section>
           <section className="inspector-card engineering-settings-card parameter-summary-card research-config-card" aria-label="参数配置">
-            <header><div><span className="settings-card-kicker">OPTIMIZATION</span><h4>参数配置</h4></div><button aria-label="打开参数配置" title="打开完整参数配置" onClick={() => setConfigOpen(true)}><Settings2 size={15}/></button></header>
+            <header><div><h4 className="research-state-heading">参数配置</h4></div><button aria-label="打开参数配置" title="打开完整参数配置" onClick={() => setConfigOpen(true)}><Settings2 size={15}/></button></header>
             <dl>
               <div><dt>求解维度</dt><dd>{researchConfig.dimension.toUpperCase()}</dd></div>
               <div><dt>网格</dt><dd>{researchConfig.nelx} × {researchConfig.nely}{researchConfig.dimension === "3d" ? " × " + researchConfig.nelz : ""}</dd></div>
@@ -560,7 +676,7 @@ export default function ResearchWorkspace(props: Props) {
             <button className="primary-button open-parameter-dialog" onClick={() => setConfigOpen(true)}><Settings2 size={14}/>打开详细参数</button>
           </section>
           <section className="inspector-card research-results-card">
-            <h4>结果呈现</h4>
+            <h4 className="research-state-heading">结果呈现</h4>
             {active ? <><div className="run-heading"><div><h3>{active.id}</h3><small>{active.fidelity} · {active.backend}</small></div><span className={"status status-" + active.status.toLowerCase()}>{active.status}</span></div><div className="metric-cards"><Metric label="柔度" value={metrics.compliance}/><Metric label="灰度率" value={metrics.gray}/><Metric label={`最大应力（${metrics.stressUnit}）`} value={metrics.stress}/></div>{active.error ? <p className="error-text">{active.error}</p> : null}</> : <p className="inspector-empty-copy">尚无科研实验结果。</p>}
             <div className="research-plan-flow" aria-label="三方案科研流程"><span className="active">1 · 三方案</span><span>2 · 真实实验比较</span><span>3 · 优选路线</span><span>4 · 问题诊断</span><span>5 · 下一轮建议</span></div>
             <div className="research-artifact-list">{artifactIndex.experiments.slice(-5).map(item => <div className="artifact-row" key={item.experimentId}><span><FileJson2 size={12}/>{item.experimentId} · {item.backend}</span><small>{item.files.length} 个文件 · {item.provenance.resultKind || "unknown"}</small></div>)}</div>
@@ -572,6 +688,14 @@ export default function ResearchWorkspace(props: Props) {
       </>}
     />
   </>;
+}
+
+function FidelityStageResultDialog({ gate, busy, onDecision }: { gate: ResearchStageGate; busy:boolean; onDecision:(advance:boolean)=>void }) {
+  const successful = Number(gate.result.successful || 0);
+  const failed = Number(gate.result.failed || 0);
+  const compliance = gate.result.best_compliance;
+  const weakPoints = Array.isArray(gate.result.weak_points) ? gate.result.weak_points.map(String) : [];
+  return <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-suggestion-card suggestion-dialog fidelity-stage-dialog" role="dialog" aria-modal="true" aria-label={`${gate.stageCode} 阶段结果`}><header><b>{gate.stageCode} 阶段结果</b><span>第 {gate.round} 轮</span></header><p>本阶段已完成，是否进入下一流程？选择“否”会留在 {gate.stageCode} 再进行一轮。</p><div className="optimization-action-diff"><div><b>真实实验</b><span>{gate.experimentIds.length} 个</span><i>·</i><strong>{successful} 成功 / {failed} 失败</strong></div><div><b>当前最优</b><span>{gate.bestExperimentId || "无可用方案"}</span><i>·</i><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "暂无可信柔度"}</strong></div>{weakPoints.length ? <div><b>阶段诊断</b><span>{weakPoints.join("；")}</span><i>·</i><strong>可在本阶段继续优化</strong></div> : null}</div><footer><button className="outline-button" disabled={busy} onClick={() => onDecision(false)}>否，继续本流程一轮</button><button className="primary-button" disabled={busy} onClick={() => onDecision(true)}>{busy ? <LoaderCircle className="spin" size={14}/> : null}{gate.stageCode === "F4" ? "是，完成流程" : "是，进入下一流程"}</button></footer></section></div>;
 }
 
 function ResearchSuggestionCard({ action, currentGoal, currentHypothesis, currentConfig, onApply, onCancel }: {

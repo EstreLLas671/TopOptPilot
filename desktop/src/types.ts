@@ -38,7 +38,7 @@ export interface Research {
   contract?:Record<string,any>; defaults?:Record<string,any>; budgets?:Record<string,number>; current_round?:number; budget_total: number; budget_used: number;
   experiments: Experiment[]; events: EventRecord[]; decisions: Decision[];
   subagent_tasks?:SubagentTask[]; hypotheses?:Hypothesis[]; artifact_lineage?:ArtifactLineage[];
-  best_experiment?: Experiment; termination_reason?: string;
+  best_experiment?: Experiment; termination_reason?: string; active_run_id?:string;
   workflow?: ResearchWorkflowProgress;
 }
 export type ResearchWorkflowStage = "idle" | "context" | "planning" | "approval" | "experiments" | "comparison" | "selection" | "diagnosis" | "next_round" | "completed" | "failed";
@@ -50,6 +50,16 @@ export interface ResearchWorkflowStep {
 export interface ResearchWorkflowProgress {
   round:number; stage:ResearchWorkflowStage; percent:number; steps:ResearchWorkflowStep[];
   budgetUsed:number; budgetTotal:number;
+}
+export interface ResearchRun {
+  id:string; research_id:string; ordinal:number;
+  status:"READY"|"RUNNING"|"STOPPING"|"STOPPED"|"STOP_FAILED"|"COMPLETED"|"ARCHIVED";
+  budget_total:number; budget_used:number; termination_reason?:string|null;
+  created_at:string; stopped_at?:string|null; archived_at?:string|null;
+}
+export interface ResearchStageGate {
+  eventId:string; stageCode:"F1"|"F2"|"F3"|"F4"; internalFidelity:string; round:number;
+  experimentIds:string[]; bestExperimentId?:string; result:Record<string,unknown>;
 }
 export interface ImportedEngineeringBaseline {
   schemeId:string; name:string; runId:string; configDigest:string;

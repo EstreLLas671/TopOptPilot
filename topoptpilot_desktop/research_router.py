@@ -78,6 +78,9 @@ def _research_config_from_engineering_task(task: dict[str, object]) -> ResearchO
         dimension=str(task.get("dimension") or "3d").lower(),
         bcType=load_case,
         accuracy=str(params.get("accuracy") or "standard"),
+        dimensions=list(geometry.get("dimensions") or [6.0, 2.0, 1.5]),
+        unit=str(geometry.get("unit") or "m"),
+        cellSizeMeters=float(geometry.get("cell_size_m") or geometry.get("cellSizeMeters") or 0.25),
         nelx=int(geometry.get("nelx") or 24),
         nely=int(geometry.get("nely") or 8),
         nelz=int(geometry.get("nelz") or 1),
@@ -130,8 +133,9 @@ def import_engineering_scheme(research_id: str, request: EngineeringSchemeImport
         "provenance": provenance,
         "importedFrom": "engineering-comparison-scheme",
     }
-    defaults = dict(research.get("defaults") or {})
-    defaults["optimization_config"] = config.model_dump()
+    _persist_research_optimization_config(research_id, research, config)
+    refreshed = service.get_research(research_id)
+    defaults = dict(refreshed.get("defaults") or {})
     defaults["engineering_scheme_baseline"] = baseline
     service.store.update_research_json(research_id, defaults=defaults)
     service.store.append_event(
@@ -326,6 +330,12 @@ class ResearchChatRequest(BaseModel):
     selectedExperiment: str | None = Field(default=None, max_length=160)
 
 
+class ResearchSuggestionExtractRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sourceId: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=12000)
+
+
 def _research_config_template(research_id: str) -> tuple[ResearchOptimizationConfig, bool]:
     research = service.get_research(research_id)
     defaults = dict(research.get("defaults") or {})
@@ -335,8 +345,18 @@ def _research_config_template(research_id: str) -> tuple[ResearchOptimizationCon
     geometry = research.get("geometry") or {}
     material = research.get("material") or {}
     raw_dimension = str(geometry.get("dimension") or "3d").lower()
+    raw_dimensions = list(geometry.get("dimensions") or [6.0, 2.0, 1.5])
+    while len(raw_dimensions) < 3:
+        raw_dimensions.append(1.0)
     seed = ResearchOptimizationConfig(
         dimension="2d" if raw_dimension in {"2", "2d"} else "3d",
+        dimensions=raw_dimensions[:3],
+        unit=str(geometry.get("unit") or "m"),
+        cellSizeMeters=float(geometry.get("cell_size_m") or 0.25),
+        nelx=int(geometry.get("nelx") or 24),
+        nely=int(geometry.get("nely") or 8),
+        nelz=int(geometry.get("nelz") or 6),
+        accuracy=str(geometry.get("accuracy") or "standard"),
         material=ResearchMaterialConfig(
             preset="normalized",
             name=str(material.get("name") or "归一化参考材料"),
@@ -365,6 +385,30 @@ def _research_config(research_id: str) -> ResearchOptimizationConfig:
     return seed
 
 
+def _persist_research_optimization_config(
+    research_id: str,
+    research: dict[str, object],
+    request: ResearchOptimizationConfig,
+) -> dict[str, object]:
+    """Persist one authoritative config and mirror its physical domain into solver state."""
+    payload = request.model_dump()
+    defaults = dict(research.get("defaults") or {})
+    defaults["optimization_config"] = payload
+    geometry = dict(research.get("geometry") or {})
+    geometry.update({
+        "dimension": request.dimension,
+        "dimensions": list(request.dimensions),
+        "unit": request.unit,
+        "cell_size_m": request.cellSizeMeters,
+        "nelx": request.nelx,
+        "nely": request.nely,
+        "nelz": 1 if request.dimension == "2d" else request.nelz,
+        "accuracy": request.accuracy,
+    })
+    service.store.update_research_json(research_id, defaults=defaults, geometry=geometry)
+    return payload
+
+
 @router.get("/{research_id}/optimization-config", response_model=ResearchOptimizationConfig)
 @settings_router.get("/api/researches/{research_id}/optimization-config", response_model=ResearchOptimizationConfig)
 def get_research_optimization_config(research_id: str) -> ResearchOptimizationConfig:
@@ -381,10 +425,7 @@ def put_research_optimization_config(research_id: str, request: ResearchOptimiza
         research = service.get_research(research_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    defaults = dict(research.get("defaults") or {})
-    payload = request.model_dump()
-    defaults["optimization_config"] = payload
-    service.store.update_research_json(research_id, defaults=defaults)
+    payload = _persist_research_optimization_config(research_id, research, request)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     service.store.append_event(
         research_id, "CONFIG_UPDATED", "科研默认参数已更新",
@@ -460,10 +501,9 @@ def apply_research_suggestion(research_id: str, request: ResearchStateActionRequ
         })
     saved_config = None
     if "optimizationConfig" in request.changedFields and request.optimizationConfig is not None:
-        defaults = dict(current.get("defaults") or {})
-        config_payload = request.optimizationConfig.model_dump()
-        defaults["optimization_config"] = config_payload
-        service.store.update_research_json(research_id, defaults=defaults)
+        config_payload = _persist_research_optimization_config(
+            research_id, service.get_research(research_id), request.optimizationConfig
+        )
         payload["config_digest"] = hashlib.sha256(
             json.dumps(config_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -476,7 +516,7 @@ def apply_research_suggestion(research_id: str, request: ResearchStateActionRequ
     return {"research": service.get_research(research_id), "optimizationConfig": saved_config}
 
 
-def _research_action(content: str) -> tuple[str, list[dict[str, object]]]:
+def _research_action(content: str, base_config: dict[str, object] | None = None) -> tuple[str, list[dict[str, object]]]:
     match = re.search(
         r"<topoptpilot-research-action>\s*([\s\S]*?)\s*</topoptpilot-research-action>",
         content,
@@ -485,7 +525,16 @@ def _research_action(content: str) -> tuple[str, list[dict[str, object]]]:
     action = None
     if match:
         try:
-            action = ResearchStateActionRequest.model_validate(json.loads(match.group(1)))
+            raw = json.loads(match.group(1))
+            if isinstance(raw, dict) and isinstance(raw.get("optimizationConfig"), dict):
+                patch = raw["optimizationConfig"]
+                merged = {**(base_config or {}), **patch}
+                if (isinstance((base_config or {}).get("material"), dict)
+                        and isinstance(patch.get("material"), dict)):
+                    merged["material"] = {**base_config["material"], **patch["material"]}
+                raw["optimizationConfig"] = merged
+                raw.setdefault("changedFields", ["optimizationConfig"])
+            action = ResearchStateActionRequest.model_validate(raw)
         except (ValueError, TypeError, json.JSONDecodeError):
             action = None
     reply = re.sub(
@@ -520,8 +569,6 @@ def _retry_missing_state_action(
     valid = [action for action in actions if _research_action_is_valid(action)]
     if valid:
         return valid[:1]
-    if not re.search(r"(建议|推荐|研究目标|研究假设|参数配置|体积分数|惩罚因子|滤波半径|网格|材料|工况)", reply):
-        return []
     config = _research_config_template(research_id)[0].model_dump()
     extraction = _model_chat([
         {
@@ -531,7 +578,8 @@ def _retry_missing_state_action(
                 "<topoptpilot-research-action>JSON</topoptpilot-research-action> 或空文本。"
                 "动作必须是 apply_research_state。只允许 goal、hypothesis、optimizationConfig、"
                 "changedFields、rationale；changedFields 只能列出实际建议字段。"
-                "目标和假设若列出必须非空；optimizationConfig 若列出必须是完整合法配置。"
+                "目标和假设若列出必须非空；optimizationConfig 可以只包含回复中明确建议的字段，"
+                "其余字段由当前合法参数模板补齐。"
                 "不得包含命令、路径、代码、自动运行或其他字段。"
             ),
         },
@@ -546,7 +594,7 @@ def _retry_missing_state_action(
     ])
     if not extraction.get("success"):
         return []
-    _, extracted = _research_action(str(extraction.get("content") or ""))
+    _, extracted = _research_action(str(extraction.get("content") or ""), config)
     return [action for action in extracted if _research_action_is_valid(action)][:1]
 
 
@@ -556,6 +604,27 @@ def _research_action_is_valid(action: dict[str, object]) -> bool:
     except (ValueError, TypeError):
         return False
     return True
+
+
+@router.post("/{research_id}/suggestions/extract")
+def extract_research_suggestion(
+    research_id: str, request: ResearchSuggestionExtractRequest,
+) -> dict[str, object]:
+    """Idempotently extract one editable state suggestion from a visible Agent reply."""
+    try:
+        service._require_research(research_id)
+        cached = service.store.get_suggestion_extraction(research_id, request.sourceId)
+        if cached is not None:
+            return cached
+        context = service.tools.research_get_context(research_id)
+        config = _research_config_template(research_id)[0].model_dump()
+        reply, actions = _research_action(request.content, config)
+        actions = _retry_missing_state_action(research_id, context, reply, actions)
+        return service.store.save_suggestion_extraction(
+            research_id, request.sourceId, reply or request.content, actions,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{research_id}/vision-chat")
@@ -570,7 +639,7 @@ def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> di
                     "区分观察与假设，不得绕过 Policy、预算或 F0-F3 审批，不得直接启动实验。"
                     "只要回复提出可填写或修改的研究目标、研究假设或参数配置，就必须在回复末尾附加"
                     "<topoptpilot-research-action>{\"type\":\"apply_research_state\",\"goal\":\"可选\","
-                    "\"hypothesis\":\"可选\",\"optimizationConfig\":完整合法配置,\"changedFields\":[实际字段],"
+                    "\"hypothesis\":\"可选\",\"optimizationConfig\":建议的部分或完整配置,\"changedFields\":[实际字段],"
                     "\"rationale\":\"简短原因\"}</topoptpilot-research-action>。"
                 ),
             },
@@ -588,7 +657,10 @@ def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> di
     if not response.get("success"):
         source = "not_configured" if response.get("error") == "not_configured" else "safe_mode"
         return {"reply": "", "source": source, "contextDigest": digest}
-    reply, actions = _research_action(str(response.get("content") or ""))
+    reply, actions = _research_action(
+        str(response.get("content") or ""),
+        _research_config_template(research_id)[0].model_dump(),
+    )
     actions = _retry_missing_state_action(research_id, context, reply, actions)
     return {"reply": reply, "source": "qwen", "contextDigest": digest, "actions": actions}
 
@@ -614,10 +686,10 @@ def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, o
                 "content": (
                     "你是 TopOptPilot 的科研对话助手。仅基于提供的 Research State 回答，"
                     "区分事实、观察与假设；不得伪造实验结果，不得绕过 Policy、预算或 F0-F3 审批，"
-                    "也不得直接启动实验。用户要求执行时，应说明需要进入受控自主研究或审批流程。"
+                    "也不得直接启动实验。用户要求执行时，应说明需要先完成当前 F1-F4 阶段确认。"
                     "只要回复提出可填写或修改的研究目标、研究假设或参数配置，就必须在回复末尾附加 "
                     "<topoptpilot-research-action>{\"type\":\"apply_research_state\","
-                    "\"goal\":\"可选\",\"hypothesis\":\"可选\",\"optimizationConfig\":完整合法配置,"
+                    "\"goal\":\"可选\",\"hypothesis\":\"可选\",\"optimizationConfig\":建议的部分或完整配置,"
                     "\"changedFields\":[实际字段],\"rationale\":\"简短原因\"}</topoptpilot-research-action>；"
                     "动作不得包含命令、文件路径、代码或自动运行字段。"
                 ),
@@ -635,6 +707,9 @@ def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, o
     if not response.get("success"):
         source = "not_configured" if response.get("error") == "not_configured" else "safe_mode"
         return {"reply": "", "source": source, "contextDigest": digest}
-    reply, actions = _research_action(str(response.get("content") or ""))
+    reply, actions = _research_action(
+        str(response.get("content") or ""),
+        _research_config_template(research_id)[0].model_dump(),
+    )
     actions = _retry_missing_state_action(research_id, context, reply, actions)
     return {"reply": reply, "source": "qwen", "contextDigest": digest, "actions": actions}

@@ -177,15 +177,15 @@ export default function V2App() {
   </>;
 
   if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 TopOptPilot</b>{error ? <span>{error}</span> : null}</div>;
-  if (settingsOpen && settings) return <SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={value => { setSettings(value); document.documentElement.lang = value.locale; document.documentElement.dataset.density = value.ui_density; applyTheme(value); }}/>
   return <div className="v2-shell">
     <header className="v2-titlebar" data-tauri-drag-region>
       <div className="v2-brand"><span className="v2-brand-mark"><Boxes size={18}/></span><div><b>TopOptPilot</b><small>TOPOLOGY WORKBENCH</small></div></div>
       <nav className="v2-workspaces" aria-label="工作区">{(["engineering", "research"] as WorkspaceMode[]).map(item => <button key={item} title={item === "engineering" ? "工程开发" : "AI 科研"} className={mode === item ? "active" : ""} onClick={() => setMode(item)}><span className="workspace-dot" data-mode={item}/>{workspaceLabel(item)}</button>)}</nav>
-      <div className="v2-actions"><span className="connection"><i/>SIDECAR {health?.version || ""}</span><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/></button></div>
+      <div className="v2-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/></button></div>
     </header>
     {error ? <div className="v2-error"><ShieldCheck size={15}/>{error}<button aria-label="关闭错误" onClick={() => setError("")}>×</button></div> : null}
     {researchNameOpen ? <div className="research-name-backdrop" role="presentation"><section className="research-name-dialog" role="dialog" aria-modal="true" aria-label="命名新研究"><header><div><span className="view-kicker">NEW RESEARCH</span><h2>命名新研究</h2></div><button aria-label="关闭新建研究" onClick={() => setResearchNameOpen(false)}>×</button></header><label>研究名称<input autoFocus maxLength={120} value={researchNameDraft} onChange={event => setResearchNameDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && researchNameDraft.trim()) void confirmCreateResearch(); }}/></label><footer><button className="outline-button" onClick={() => setResearchNameOpen(false)}>取消</button><button className="primary-button" disabled={researchNameBusy || !researchNameDraft.trim()} onClick={() => void confirmCreateResearch()}>{researchNameBusy ? "创建中…" : "创建 Research"}</button></footer></section></div> : null}
     {workspace}
+    {settingsOpen && settings ? <div className="settings-workspace-overlay"><SettingsWorkspace settings={settings} onClose={() => setSettingsOpen(false)} onSaved={value => { setSettings(value); document.documentElement.lang = value.locale; document.documentElement.dataset.density = value.ui_density; applyTheme(value); }}/></div> : null}
   </div>;
 }

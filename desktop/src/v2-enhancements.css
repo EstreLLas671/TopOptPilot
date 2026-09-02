@@ -180,6 +180,7 @@ html[data-theme=dark] .material-fieldset input[readonly],html[data-theme=dark] .
 .engineering-settings-card { padding: 12px; border: 1px solid #d9e2ec; border-radius: 9px; background: #fff; box-shadow: 0 1px 3px rgba(43,62,82,.04); }
 .engineering-settings-card > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 11px; }
 .engineering-settings-card > header h3, .engineering-settings-card > header h4 { margin: 2px 0 0; color: #40566d; font-size: 14px; }
+.inspector-card .research-state-heading { font-size: 14px; }
 .settings-card-kicker { color: #7891aa; font-size: 10px; font-weight: 700; letter-spacing: .8px; }
 .engineering-settings-card > header button { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid #d5e0ea; border-radius: 7px; background: #f8fafc; color: #557491; cursor: pointer; }
 .engineering-settings-card > header button:hover, .engineering-settings-card > header button:focus-visible { border-color: #9dbbda; background: #edf4fb; color: #2765a4; outline: none; }
@@ -291,6 +292,7 @@ html[data-theme=dark] .chat-drop-overlay { border-color: #679ed4 !important; bac
 .research-chat-workspace .research-header h1, .chat-panel-header h2 { font-size: 20px; }
 .research-header h1 { font-size: 24px; }
 .engineering-settings-card > header h3, .engineering-settings-card > header h4 { font-size: 16px; }
+.inspector-card .research-state-heading { font-size: 16px; }
 .settings-card-kicker { font-size: 12px; }
 .environment-summary-row { font-size: 14px; }
 .environment-summary-row strong, .engineering-settings-card p,
@@ -352,6 +354,7 @@ body, button, input, select, textarea { font-family: var(--topoptpilot-font-sans
 .research-chat-workspace .research-header h1, .chat-panel-header h2 { font-size: 19px; }
 .research-header h1 { font-size: 23px; }
 .engineering-settings-card > header h3, .engineering-settings-card > header h4 { font-size: 15px; }
+.inspector-card .research-state-heading { font-size: 15px; }
 .settings-card-kicker { font-size: 11px; }
 .environment-summary-row { font-size: 13px; }
 .environment-summary-row strong, .engineering-settings-card p,

@@ -198,3 +198,27 @@ def test_engineering_parameter_action_is_structured_and_removed_from_reply() -> 
     assert response.actions[0]["type"] == "apply_optimization_config"
     assert response.actions[0]["config"]["penal"] == 3.0
     assert "topoptpilot-action" not in response.reply
+
+
+def test_engineering_partial_parameter_action_merges_current_config() -> None:
+    config = {
+        "dimension": "3d", "bcType": "cantilever", "accuracy": "standard",
+        "nelx": 24, "nely": 8, "nelz": 6, "volfrac": 0.4, "penal": 2.5,
+        "rmin": 1.5, "maxIterations": 60, "minIterations": 10,
+        "filterStrategy": "fixed", "dimensions": [6, 2, 1.5], "unit": "m",
+        "cellSizeMeters": 0.25,
+        "material": {"preset": "normalized", "name": "参考材料", "youngsModulusGPa": 1.0,
+                     "poissonRatio": 0.3, "densityKgM3": 1.0, "yieldStrengthMPa": 1.0},
+    }
+    content = (
+        "建议将惩罚因子提高到 3。<topoptpilot-action>"
+        '{"type":"apply_optimization_config","config":{"penal":3},'
+        '"changedFields":["penal"]}</topoptpilot-action>'
+    )
+    response = generate_engineering_chat(
+        EngineeringChatRequest(message="调整惩罚因子", context={"parameters": config}),
+        lambda _messages: {"success": True, "content": content}, configured=True,
+    )
+    assert response.actions[0]["config"]["penal"] == 3
+    assert response.actions[0]["config"]["volfrac"] == 0.4
+    assert response.actions[0]["changedFields"] == ["penal"]

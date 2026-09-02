@@ -567,6 +567,7 @@ export default function EngineeringWorkspace({
     try {
       const created = await api.conversationCreate("engineering", projectId || "engineering-unbound", "工程对话");
       setConversationHistory(items => [created, ...items]);
+      setActiveConversationId(created.id);
       setRequestedConversationId(created.id);
       setViewTab("chat");
       setRightTab("history");
@@ -598,7 +599,7 @@ export default function EngineeringWorkspace({
     finally { setConversationActionBusy(""); }
   }
   return <>
-    <ParameterConfigurationDialog open={detailsOpen} config={optimizationConfig} lane={lane} busy={runBusy} matlabDiagnostic={matlabDiagnostic} runtimeDiagnostic={runtimeDiagnostic} onRefreshEnvironment={() => void scanEngineeringEnvironment()} onClose={() => setDetailsOpen(false)} onApply={(nextConfig, nextLane) => { setOptimizationConfig(nextConfig); setLane(nextLane); setDetailsOpen(false); }}/>
+    <ParameterConfigurationDialog open={detailsOpen} config={optimizationConfig} lane={lane} busy={runBusy} matlabDiagnostic={matlabProbeState === "ready" ? `MATLAB ${matlabInstallation?.release || matlabInstallation?.version || ""} 已就绪`.replace("  ", " ") : "MATLAB 当前不可用，请重新检测。"} runtimeDiagnostic={runtimeDiagnostic} onRefreshEnvironment={() => void scanEngineeringEnvironment()} onClose={() => setDetailsOpen(false)} onApply={(nextConfig, nextLane) => { setOptimizationConfig(nextConfig); setLane(nextLane); setDetailsOpen(false); }}/>
     <ResizableWorkspaceLayout mode="engineering"
     activitySignal={bottomActivitySignal}
     completionSignal={completionSignal}
@@ -631,7 +632,7 @@ export default function EngineeringWorkspace({
         <div className="engineering-run-secondary-actions"><button aria-label="导出运行报告" title="生成运行报告" disabled={!run || runBusy} onClick={() => void exportReport()}><FileCode2 size={13}/></button><button aria-label="创建科研基线" title="创建科研基线" disabled={baselineBusy || !run || run.status !== "completed" || run.provenance.resultKind !== "solver" || !run.files.length} onClick={() => void createResearchBaseline()}><FlaskConical size={13}/></button></div>
       </nav>
       <div className={`engineering-view-content${viewTab === "chat" ? " chat-view-content" : ""}`} role="tabpanel">
-        {viewTab === "chat" ? <EngineeringChatPanel projectId={projectId} selectedFile={selectedFile} run={run} config={optimizationConfig} onError={reportError} requestedConversationId={requestedConversationId} conversationHistory={conversationHistory} onHistoryChange={receiveConversationHistory} onApplySuggestedConfig={action => updateConfig(action.config)}/> : null}
+        <EngineeringChatPanel active={viewTab === "chat"} projectId={projectId} selectedFile={selectedFile} run={run} config={optimizationConfig} onError={reportError} requestedConversationId={requestedConversationId} conversationHistory={conversationHistory} onHistoryChange={receiveConversationHistory} onApplySuggestedConfig={action => updateConfig(action.config)}/>
         {viewTab === "code" ? <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}><MonacoEditor language={languageFor(selectedFile?.relative_path)} value={selectedFile?.content || "% 打开项目后选择 UTF-8 源文件"} onChange={value => { if (selectedFile && !patchApplyBusy) { setSelectedFile({ ...selectedFile, content: value || "" }); setDirty(true); } }} options={{ readOnly: !selectedFile || projectBusy || patchApplyBusy, minimap: { enabled: false }, fontSize: 13, lineHeight: 22, automaticLayout: true, scrollBeyondLastLine: false, wordWrap: "off" }} theme="vs"/></Suspense></div> : null}
         {viewTab === "results" ? <ResultViewer run={run} onError={reportError}/> : null}
         {viewTab === "iteration" ? <EngineeringIterationView run={run} events={events} maxIterations={optimizationConfig.maxIterations}/> : null}

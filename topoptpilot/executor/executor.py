@@ -16,11 +16,12 @@ def build_solver_task(experiment: dict, research: dict | None = None) -> dict:
     fidelity_code = str(experiment.get("fidelity", "F0")).split()[0]
     geometry = dict(research.get("geometry") or {})
     if fidelity_code in {"F2", "F3"}:
-        grid = parameters.get("grid3d")
-        if not (isinstance(grid, (list, tuple)) and len(grid) == 3):
-            candidate = [geometry.get("nelx"), geometry.get("nely"), geometry.get("nelz")]
-            if all(isinstance(value, (int, float)) and int(value) > 0 for value in candidate):
-                parameters["grid3d"] = [int(value) for value in candidate]
+        candidate = [geometry.get("nelx"), geometry.get("nely"), geometry.get("nelz")]
+        if all(isinstance(value, (int, float)) and int(value) > 0 for value in candidate):
+            # The user-confirmed physical domain owns F2/F3 discretization.  A
+            # proposal may vary optimization parameters, but cannot silently
+            # replace the configured dimensions through its own grid3d value.
+            parameters["grid3d"] = [int(value) for value in candidate]
     return {
         "task_id": experiment["id"], "experiment_group": experiment["id"],
         "fidelity": fidelity_code,

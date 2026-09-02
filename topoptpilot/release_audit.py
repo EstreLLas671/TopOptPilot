@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import argparse
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run_audit(include_online: bool = True) -> dict:
     report = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-              "version": "2.0.5", "gates": {}}
+              "version": "2.0.7", "gates": {}}
     report["gates"]["artifacts"] = _artifact_gate()
     report["gates"]["desktop_app"] = _desktop_gate()
     report["gates"]["strict_f3"] = _strict_f3_gate()
@@ -83,10 +84,22 @@ def _desktop_gate() -> dict:
     release_dir = ROOT / "desktop/src-tauri/target/release"
     executable_candidates = (release_dir / "topoptpilot.exe",)
     installer_dir = release_dir / "bundle/nsis"
-    installer_candidates = (installer_dir / "TopOptPilot_2.0.5_x64-setup.exe",)
+    installer_candidates = (installer_dir / "TopOptPilot_2.0.7_x64-setup.exe",)
     executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
     installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
-    resources = release_dir / "resources"
+    bundled_resources = release_dir / "resources"
+    staged_resources = ROOT / "desktop/src-tauri/resources"
+    resources = bundled_resources if bundled_resources.is_dir() else staged_resources
+    tauri_config_path = ROOT / "desktop/src-tauri/tauri.conf.json"
+    resource_contract = resources == bundled_resources
+    if resources == staged_resources and tauri_config_path.is_file():
+        try:
+            configured_resources = json.loads(tauri_config_path.read_text(encoding="utf-8"))[
+                "bundle"
+            ]["resources"]
+            resource_contract = "resources/**/*" in configured_resources
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            resource_contract = False
     required_resources = (
         "bin/topoptpilot-backend.exe",
         "node/node.exe",
@@ -97,11 +110,14 @@ def _desktop_gate() -> dict:
     )
     missing_resources = [relative for relative in required_resources if not (resources / relative).is_file()]
     runtime_in_standard_package = (resources / "runtime").exists()
-    passed = executable.is_file() and installer.is_file() and not missing_resources and not runtime_in_standard_package
+    passed = (executable.is_file() and installer.is_file() and resource_contract
+              and not missing_resources and not runtime_in_standard_package)
     return {
         "pass": passed,
         "package_kind": "standard-local-matlab",
         "runtime_optional": True,
+        "resource_contract": resource_contract,
+        "resource_root": str(resources),
         "runtime_in_standard_package": runtime_in_standard_package,
         "missing_resources": missing_resources,
         "executable": str(executable),
@@ -146,13 +162,21 @@ def _v6_source_gates() -> dict:
     fidelity = (ROOT / "topoptpilot/fidelity/manager.py").read_text(encoding="utf-8")
     report = (ROOT / "topoptpilot/reports/generator.py").read_text(encoding="utf-8")
     setup = (ROOT / "desktop/src/ResearchSetup.tsx").read_text(encoding="utf-8")
+    evidence_emission = re.search(
+        r'append_event\(\s*research\["id"\],\s*EventKind\.EVIDENCE\.value', service
+    )
+    batch_emission = re.search(
+        r'append_event\(\s*research\["id"\],\s*EventKind\.SYSTEM\.value,\s*'
+        r'"EXPERIMENT_BATCH_COMPLETED"', service
+    )
     return {
         "v5_visual_consistency": {"pass": "#101114" in styles and "#346bd8" in styles},
         "research_contract": {"pass": "contract_json" in store and '"immutable": True' in service},
         "agent_provenance": {"pass": all(value in store for value in
             ("decision_source", "intent_source", "policy_version", "evidence_ids_json"))},
-        "evaluator_first": {"pass": service.find('EventKind.EVIDENCE.value') <
-            service.find('EXPERIMENT_BATCH_COMPLETED')},
+        "evaluator_first": {"pass": bool(
+            evidence_emission and batch_emission and evidence_emission.start() < batch_emission.start()
+        )},
         "websocket_realtime": {"pass": "stream-ticket" in api and "_ws_tickets.pop" in api
             and "?ticket=" in (ROOT / "desktop/src/api.ts").read_text(encoding="utf-8")},
         "experiment_canvas": {"pass": "ExperimentCanvas" in app and all(

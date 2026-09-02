@@ -57,7 +57,17 @@ class MatlabMcpWorker:
         if future.running():
             self.connector.stop()
             return True
-        return False
+        return future.done()
+
+    def wait_for_stop(self, run_id: str, timeout: float = 15.0) -> bool:
+        with self._lock:
+            future = self._futures.get(run_id)
+        if future is None:
+            return True
+        deadline = time.monotonic() + max(0.0, timeout)
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return future.done()
 
     def run(self, task: dict[str, Any], research_id: str, experiment_id: str) -> dict[str, Any]:
         job_dir = (self.data_dir / research_id / "matlab_mcp" / experiment_id).resolve()
