@@ -16,6 +16,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+class ExperimentCancelled(RuntimeError):
+    """Cooperative cancellation raised inside an isolated FEM worker."""
+
+
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     temp = path.with_suffix(f".{os.getpid()}.tmp")
     temp.write_text(json.dumps(value, default=_json_default), encoding="utf-8")
@@ -43,6 +47,12 @@ def _run_solver(task: dict[str, Any], backend: str, progress_path: str) -> dict[
     target = Path(progress_path)
 
     def progress(iteration: int, state: dict[str, Any]) -> None:
+        try:
+            current = json.loads(target.read_text(encoding="utf-8")) if target.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            current = {}
+        if current.get("cancel_requested"):
+            raise ExperimentCancelled("experiment cancelled by user")
         payload = {"iteration": iteration, **state}
         _atomic_json(target, payload)
 
@@ -100,7 +110,7 @@ class ExperimentQueue:
         elif future.done():
             status = "FAILED" if future.exception() else "SUCCESS"
         elif future.running():
-            status = "RUNNING"
+            status = "STOPPING" if progress.get("cancel_requested") else "RUNNING"
         else:
             status = "WAITING"
         return {"run_id": run_id, **progress, "status": status}
@@ -108,7 +118,31 @@ class ExperimentQueue:
     def cancel(self, run_id: str) -> bool:
         with self._lock:
             future = self._futures.get(run_id)
-        return bool(future and future.cancel())
+            path = self._paths.get(run_id)
+        if not future:
+            return False
+        if future.cancel():
+            if path:
+                _atomic_json(path, {"status": "CANCELLED", "cancel_requested": True})
+            return True
+        if future.running() and path:
+            try:
+                snapshot = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+            except (OSError, json.JSONDecodeError):
+                snapshot = {}
+            _atomic_json(path, {**snapshot, "status": "STOPPING", "cancel_requested": True})
+            return True
+        return future.done()
+
+    def wait_for_stop(self, run_id: str, timeout: float = 10.0) -> bool:
+        with self._lock:
+            future = self._futures.get(run_id)
+        if future is None:
+            return True
+        deadline = time.monotonic() + max(0.0, timeout)
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return future.done()
 
     def shutdown(self, wait: bool = False) -> None:
         self._pool.shutdown(wait=wait, cancel_futures=True)

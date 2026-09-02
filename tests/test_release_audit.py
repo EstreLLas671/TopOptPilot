@@ -27,7 +27,7 @@ def _write_standard_resources(root) -> None:
 def test_desktop_gate_reports_topoptpilot_executable_and_installer_paths(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
     executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.5_x64-setup.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.7_x64-setup.exe"
     executable.parent.mkdir(parents=True)
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")
@@ -38,7 +38,7 @@ def test_desktop_gate_reports_topoptpilot_executable_and_installer_paths(monkeyp
 
     assert result["pass"] is True
     assert result["executable"].endswith("topoptpilot.exe")
-    assert result["installer"].endswith("TopOptPilot_2.0.5_x64-setup.exe")
+    assert result["installer"].endswith("TopOptPilot_2.0.7_x64-setup.exe")
 def test_cases_gate_requires_real_matlab_mcp_f3() -> None:
     cases = {
         "A": {"metrics": {"best_feasible_objective": 1.0}},
@@ -96,6 +96,7 @@ def test_source_gates_match_v2_lanes_and_grounded_reports() -> None:
     gates = release_audit._v6_source_gates()
 
     assert "all_matlab_fidelities" not in gates
+    assert gates["evaluator_first"]["pass"] is True
     assert gates["fidelity_lane_mapping"]["pass"] is True
     assert gates["fact_grounded_reports"]["pass"] is True
     assert gates["credential_not_in_sqlite"]["pass"] is True
@@ -103,7 +104,7 @@ def test_source_gates_match_v2_lanes_and_grounded_reports() -> None:
 def test_desktop_gate_rejects_missing_standard_resources_and_runtime_payload(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(release_audit, "ROOT", tmp_path)
     executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
-    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.5_x64-setup.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.7_x64-setup.exe"
     executable.parent.mkdir(parents=True)
     installer.parent.mkdir(parents=True)
     executable.write_bytes(b"exe")
@@ -122,3 +123,26 @@ def test_desktop_gate_rejects_missing_standard_resources_and_runtime_payload(mon
     mixed = release_audit._desktop_gate()
     assert mixed["pass"] is False
     assert mixed["runtime_in_standard_package"] is True
+
+
+def test_desktop_gate_accepts_tauri_resource_contract_without_release_copy(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(release_audit, "ROOT", tmp_path)
+    executable = tmp_path / "desktop/src-tauri/target/release/topoptpilot.exe"
+    installer = tmp_path / "desktop/src-tauri/target/release/bundle/nsis/TopOptPilot_2.0.7_x64-setup.exe"
+    executable.parent.mkdir(parents=True)
+    installer.parent.mkdir(parents=True)
+    executable.write_bytes(b"exe")
+    installer.write_bytes(b"installer")
+    resources = tmp_path / "desktop/src-tauri/resources"
+    for relative in STANDARD_RESOURCE_FILES:
+        path = resources / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"resource")
+    config = tmp_path / "desktop/src-tauri/tauri.conf.json"
+    config.write_text('{"bundle":{"resources":["resources/**/*"]}}', encoding="utf-8")
+
+    result = release_audit._desktop_gate()
+
+    assert result["pass"] is True
+    assert result["resource_contract"] is True
+    assert result["resource_root"].endswith("desktop\\src-tauri\\resources")

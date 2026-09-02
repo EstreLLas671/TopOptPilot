@@ -16,6 +16,7 @@ type Props = {
   conversationHistory?: Conversation[];
   onHistoryChange?: (items: Conversation[], currentId: string) => void;
   onApplySuggestedConfig?: (action: OptimizationConfigAction) => void;
+  active?: boolean;
 };
 
 type PendingAttachment = ConversationAttachment & { preview: string };
@@ -47,7 +48,7 @@ function displayConfigValue(value: unknown): string {
 type EngineeringChatDraft = { message: string; allowExternalSource: boolean; attachments: PendingAttachment[] };
 const engineeringChatDrafts = new Map<string, EngineeringChatDraft>();
 
-export default function EngineeringChatPanel({ projectId, selectedFile, run, config, onError, requestedConversationId = "", conversationHistory: externalConversations = EMPTY_CONVERSATIONS, onHistoryChange, onApplySuggestedConfig }: Props) {
+export default function EngineeringChatPanel({ projectId, selectedFile, run, config, onError, requestedConversationId = "", conversationHistory: externalConversations = EMPTY_CONVERSATIONS, onHistoryChange, onApplySuggestedConfig, active = true }: Props) {
   const ownerId = projectId || "engineering-unbound";
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -134,7 +135,9 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     void api.conversationList("engineering", ownerId).then(async items => {
       if (cancelled || generation !== conversationLoadGeneration.current) return;
       setConversations(items);
-      const id = items[0]?.id;
+      const id = items.some(item => item.id === requestedConversationId)
+        ? requestedConversationId
+        : items[0]?.id;
       if (!cancelled && id) await loadConversation(id);
       else if (!cancelled) { setConversationId(""); setMessages([]); }
     }).catch(reason => { if (!cancelled) onError(String(reason)); });
@@ -264,7 +267,7 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     }
   }
 
-  return <section ref={dropZone} className={"engineering-chat-panel chat-drop-zone" + (dragActive ? " drag-active" : "")} aria-label="工程开发聊天" {...dropHandlers}>
+  return <section ref={dropZone} className={"engineering-chat-panel chat-drop-zone" + (dragActive ? " drag-active" : "")} style={active ? undefined : { display: "none" }} aria-hidden={!active} aria-label="工程开发聊天" {...dropHandlers}>
     {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
     <header className="chat-panel-header">
       <div><span className="eyebrow">ENGINEERING ASSISTANT</span><h2>工程开发聊天</h2></div>

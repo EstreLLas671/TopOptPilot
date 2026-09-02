@@ -30,11 +30,19 @@ def test_research_optimization_config_get_put_and_dimension_migration(monkeypatc
         assert migrated.status_code == 200
         assert migrated.json()["dimension"] == "2d"
 
-        payload = migrated.json() | {"dimension": "3d", "minIterations": 4, "maxIterations": 12}
+        payload = migrated.json() | {
+            "dimension": "3d", "dimensions": [12.0, 4.0, 2.0], "unit": "mm",
+            "cellSizeMeters": 0.001, "nelx": 12, "nely": 4, "nelz": 2,
+            "minIterations": 4, "maxIterations": 12,
+        }
         saved = client.put(f"/api/researches/{created['id']}/optimization-config", json=payload)
         assert saved.status_code == 200
         assert saved.json()["dimension"] == "3d"
         assert isolated.get_research(created["id"])["defaults"]["optimization_config"] == saved.json()
+        geometry = isolated.get_research(created["id"])["geometry"]
+        assert geometry["dimensions"] == [12.0, 4.0, 2.0]
+        assert geometry["unit"] == "mm"
+        assert [geometry["nelx"], geometry["nely"], geometry["nelz"]] == [12, 4, 2]
         assert any(item["kind"] == "CONFIG_UPDATED" for item in isolated.store.list_events(created["id"]))
     finally:
         isolated.close()
@@ -162,3 +170,45 @@ def test_research_action_is_removed_from_visible_reply() -> None:
     assert reply == "建议补充假设。"
     assert actions[0]["type"] == "apply_research_state"
     assert "topoptpilot-research-action" not in reply
+
+
+def test_research_partial_config_action_merges_current_config() -> None:
+    base = research_router.ResearchOptimizationConfig(penal=2.5, volfrac=0.4).model_dump()
+    content = (
+        "建议提高惩罚因子。<topoptpilot-research-action>"
+        '{"type":"apply_research_state","optimizationConfig":{"penal":3},'
+        '"changedFields":["optimizationConfig"]}</topoptpilot-research-action>'
+    )
+    _, actions = research_router._research_action(content, base)
+    assert actions[0]["optimizationConfig"]["penal"] == 3
+    assert actions[0]["optimizationConfig"]["volfrac"] == 0.4
+
+
+def test_async_agent_suggestion_extraction_is_idempotent_and_accepts_partial_config(
+    monkeypatch, tmp_path,
+) -> None:
+    isolated = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    monkeypatch.setattr(research_router, "service", isolated)
+    calls = []
+
+    def model_chat(_messages):
+        calls.append(1)
+        return {"success": True, "content": (
+            '<topoptpilot-research-action>{"type":"apply_research_state",'
+            '"optimizationConfig":{"penal":3.5},"changedFields":["optimizationConfig"],'
+            '"rationale":"提高惩罚因子"}</topoptpilot-research-action>'
+        )}
+
+    monkeypatch.setattr(research_router, "_model_chat", model_chat)
+    try:
+        created = _research(isolated)
+        client = TestClient(app)
+        payload = {"sourceId": "event:91", "content": "建议将惩罚因子提高到 3.5。"}
+        first = client.post(f"/api/research/{created['id']}/suggestions/extract", json=payload)
+        second = client.post(f"/api/research/{created['id']}/suggestions/extract", json=payload)
+        assert first.status_code == second.status_code == 200
+        assert first.json() == second.json()
+        assert first.json()["actions"][0]["optimizationConfig"]["penal"] == 3.5
+        assert len(calls) == 1
+    finally:
+        isolated.close()

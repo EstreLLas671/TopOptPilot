@@ -9,6 +9,7 @@ from solver.stress import stress_unit_metadata, von_mises_2d, von_mises_3d
 from topoptpilot.evaluator.evaluator import evaluate_result
 from topoptpilot.executor.executor import build_solver_task
 from topoptpilot.reports.generator import ResearchReportGenerator
+from topoptpilot.service.research_service import _density_surface_triangles
 
 
 def test_real_q4_and_hex8_stress_are_finite_and_shape_preserving() -> None:
@@ -61,6 +62,29 @@ def test_stress_units_and_allowable_check_require_a_complete_chain() -> None:
     assert accepted["stress_margin"] == 30
 
 
+def test_f3_solver_grid_cannot_override_confirmed_research_dimensions() -> None:
+    experiment = {
+        "id": "E-F3", "fidelity": "F3 — MATLAB 3D Formal", "mesh_level": "formal",
+        "parameters": {"grid3d": [99, 99, 99], "volfrac": .4},
+    }
+    task = build_solver_task(experiment, {
+        "geometry": {"dimensions": [12, 4, 2], "unit": "mm", "nelx": 24, "nely": 8, "nelz": 4},
+        "constraints": {"volume_fraction": .4},
+    })
+    assert task["geometry"]["dimensions"] == [12, 4, 2]
+    assert task["params"]["grid3d"] == [24, 8, 4]
+
+
+def test_f3_density_surface_is_triangulated_in_configured_physical_dimensions() -> None:
+    density = np.zeros((4, 8, 3), dtype=float)
+    density[1:3, 1:7, 1:3] = 1.0
+    triangles = _density_surface_triangles(density, [12.0, 4.0, 2.0])
+    assert triangles and all(len(face) == 3 for face in triangles)
+    points = np.asarray(triangles).reshape(-1, 3)
+    assert np.all(points >= 0)
+    assert np.all(points <= np.asarray([12.0, 4.0, 2.0]) + 1e-12)
+
+
 def _report_images(directory: Path) -> dict[str, Path]:
     import matplotlib
     matplotlib.use("Agg", force=True)
@@ -107,7 +131,7 @@ def _report_research(images: dict[str, Path]) -> dict:
                                                       "connected": True, "stress": True}},
     }
     experiment = {"id": "E01", "round_number": 1, "status": "SUCCESS",
-                  "fidelity": "F2", "parameters": {"volfrac": .4, "penal": 3,
+                  "fidelity": "F3", "parameters": {"volfrac": .4, "penal": 3,
                                                        "rmin": 1.5, "max_iter": 20},
                   "result": result}
     artifacts = []
@@ -174,3 +198,12 @@ def test_report_export_is_atomic_relative_and_requires_explicit_overwrite(tmp_pa
                                 formats=["markdown", "pdf"], overwrite=True)
     assert replaced["markdown"].is_file() and replaced["pdf"].is_file()
     assert not list((tmp_path / "reports").glob(".专业科研报告.*-*"))
+
+
+def test_report_never_substitutes_a_lower_fidelity_figure_for_f3(tmp_path: Path) -> None:
+    images = _report_images(tmp_path / "figures")
+    research = _report_research(images)
+    research["experiments"][0]["fidelity"] = "F2"
+    markdown = ResearchReportGenerator(tmp_path).render_markdown(research)
+    assert "尚无成功的 F3 最终优化结果" in markdown
+    assert "![最终拓扑构型]" not in markdown

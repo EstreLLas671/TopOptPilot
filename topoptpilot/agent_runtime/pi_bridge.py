@@ -123,7 +123,7 @@ class PiProcess:
         self.request("prompt", message=message)
 
     def abort(self):
-        return self.request("abort")
+        return self.request("abort", timeout=1)
 
     def stop(self):
         if self.process and self.process.poll() is None:
@@ -299,7 +299,11 @@ class PiBridge:
         self.start(research_id).prompt(message, fallback_on_error=fallback_on_error)
 
     def cancel(self, research_id: str):
-        return self.start(research_id).abort()
+        process = self.processes.get(research_id)
+        if process is None or process.process is None or process.process.poll() is not None:
+            return False
+        process.abort()
+        return True
 
     def release(self, research_id: str) -> None:
         process = self.processes.pop(research_id, None)

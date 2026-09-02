@@ -45,6 +45,10 @@ class CommandRequest(BaseModel):
     selected_experiment: str | None = None
 
 
+class FidelityStageDecisionRequest(BaseModel):
+    advance: bool
+
+
 class DecisionEditRequest(BaseModel):
     parameters: dict
 
@@ -139,6 +143,32 @@ def start_autonomous(research_id: str):
         return service.start_autonomous_research(research_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/research/{research_id}/autonomous/stop")
+def stop_autonomous(research_id: str):
+    try:
+        return service.stop_autonomous_research(research_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/research/{research_id}/runs")
+def list_research_runs(research_id: str):
+    service._require_research(research_id)
+    return service.store.list_research_runs(research_id)
+
+
+@app.post("/api/research/{research_id}/fidelity-stage-decision")
+def decide_fidelity_stage(research_id: str, request: FidelityStageDecisionRequest):
+    try:
+        return service.decide_fidelity_stage(research_id, request.advance)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/research/{research_id}/events")

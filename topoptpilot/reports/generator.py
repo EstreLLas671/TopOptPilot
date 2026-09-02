@@ -71,6 +71,24 @@ def safe_report_name(value: str) -> str:
     return cleaned
 
 
+def _final_f3_experiment(research: dict[str, Any], experiments: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    def fidelity_code(item: dict[str, Any]) -> str:
+        parts = str(item.get("fidelity") or "").split()
+        return parts[0] if parts else ""
+
+    candidates = [
+        item for item in (experiments if experiments is not None else research.get("experiments") or [])
+        if fidelity_code(item) == "F3"
+        and item.get("status") == "SUCCESS" and item.get("result")
+    ]
+    if not candidates:
+        return None
+    best = research.get("best_experiment") or {}
+    if any(item.get("id") == best.get("id") for item in candidates):
+        return next(item for item in candidates if item.get("id") == best.get("id"))
+    return min(candidates, key=lambda item: (item.get("result") or {}).get("objective", {}).get("compliance", float("inf")))
+
+
 class ResearchReportGenerator:
     def __init__(self, output_dir: str | Path): self.output_dir = Path(output_dir)
 
@@ -139,15 +157,16 @@ class ResearchReportGenerator:
     @staticmethod
     def _copy_report_figures(research: dict[str, Any], assets: Path,
                              stem: str) -> dict[str, str]:
-        best = (research.get("best_experiment") or {}).get("id")
+        final_f3 = _final_f3_experiment(research)
+        final_f3_id = (final_f3 or {}).get("id")
         names = {"TOPOLOGY_IMAGE": "图1_最终拓扑构型.png",
                  "STRESS_IMAGE": "图2_应力分布.png",
                  "CONVERGENCE_IMAGE": "图3_收敛曲线.png"}
         lineage = [item for item in research.get("artifact_lineage") or []
                    if item.get("artifact_type") in names and item.get("path")
+                   and item.get("experiment_id") == final_f3_id
                    and Path(item["path"]).is_file()]
-        lineage.sort(key=lambda item: (item.get("experiment_id") != best,
-                                       list(names).index(item["artifact_type"])))
+        lineage.sort(key=lambda item: list(names).index(item["artifact_type"]))
         copied, used = {}, set()
         for item in lineage:
             kind = item["artifact_type"]
@@ -169,20 +188,28 @@ class ResearchReportGenerator:
         if round_number is not None: experiments = [e for e in experiments if int(e.get("round_number", 1)) <= round_number]
         hypotheses, tasks, lineage = research.get("hypotheses") or [], research.get("subagent_tasks") or [], research.get("artifact_lineage") or []
         completed = [e for e in experiments if e.get("result")]; feasible = [e for e in completed if ((e.get("result") or {}).get("evaluation") or {}).get("success")]
+        final_f3 = _final_f3_experiment(research, experiments)
+        final_f3_id = (final_f3 or {}).get("id")
         failed = [e for e in experiments if e.get("status") == "FAILED"]
         abnormal = bool(failed) and not completed
         current_round = round_number or research.get("current_round", 0)
         generated = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        sources = contract.get("field_sources") or {}; geometry, material = contract.get("geometry") or {}, contract.get("material") or {}
+        sources = contract.get("field_sources") or {}; geometry, material = dict(contract.get("geometry") or {}), contract.get("material") or {}
+        configured = ((research.get("defaults") or {}).get("optimization_config") or {})
+        if configured:
+            geometry.update({key: configured[key] for key in (
+                "dimension", "dimensions", "unit", "cellSizeMeters", "accuracy", "nelx", "nely", "nelz"
+            ) if key in configured})
         loads, boundary, constraints = contract.get("loads") or [], contract.get("boundary_conditions") or {}, contract.get("constraints") or {}
         user_prompt = contract.get("description") or missing
         summary = (("本次迭代异常终止，没有产生有效对比结果。" if zh else "The iteration terminated abnormally without valid comparison results.") if abnormal else
-                   (("Evaluator 已确认至少一个可行实验；结论仍限于已记录工况与约束。" if zh else "Evaluator confirmed at least one feasible experiment; the conclusion is limited to recorded cases and constraints.") if feasible else
-                   ("当前没有实验被 Evaluator 判定为可行，不能宣称设计成功。" if zh else "No experiment is currently marked feasible by Evaluator; design success cannot be claimed.")))
+                   (("尚无成功的 F3 最终优化结果，不能用低保真结果替代最终结论。" if zh else "No successful F3 final result is available; lower-fidelity evidence cannot replace the final conclusion.") if not final_f3 else
+                   (("Evaluator 已确认 F3 最终结果可行；结论仍限于已记录工况与约束。" if zh else "The evaluator marked the F3 final result feasible; the conclusion remains limited to recorded cases and constraints.") if ((final_f3.get("result") or {}).get("evaluation") or {}).get("success") else
+                   ("F3 最终结果尚未被 Evaluator 判定为可行，不能宣称设计成功。" if zh else "The F3 final result is not evaluator-feasible; design success cannot be claimed."))))
         lines = ["# TopOptPilot 智能体分析报告" if zh else "# TopOptPilot Agent Analysis Report", "",
             f"**{'报告编号' if zh else 'Report No.'}**：TOP-{str(generated)[:10].replace('-','')}-{research['id']}",
             f"**{'任务标题' if zh else 'Task title'}**：{research.get('name') or missing}", f"**{'生成时间' if zh else 'Generated'}**：{generated}",
-            "**智能体版本**：TopOptPilot 2.0.5", f"**对应任务 ID**：{research['id']}",
+            "**智能体版本**：TopOptPilot 2.0.7", f"**对应任务 ID**：{research['id']}",
             f"**{'迭代轮次' if zh else 'Rounds'}**：{current_round}", "", "---", "",
             "## **报告摘要**" if zh else "## **Executive summary**", "", summary, "",
             "## **第一章：任务摘要（映射用户需求）**" if zh else "## **Chapter 1: Task summary**", "",
@@ -234,7 +261,7 @@ class ResearchReportGenerator:
             "| :--- | :--- | :--- |", "| 1 | 密度阈值化 | 等值阈值仅用于结果呈现 |",
             "| 2 | 连通性检查 | 基于真实密度场计算连通分量 |",
             "| 3 | 应力后处理 | 单元高斯点 Von Mises 应力 |",
-            "| 4 | 三维呈现 | 使用真实三维密度生成体素表面图 |",
+            "| 4 | 三维呈现 | 从 F3 最终密度场提取无单元边线的等值曲面 |",
             "| 5 | 工程复核 | 屈曲、疲劳等未计算项须后续专项校核 |", "",
             "### 3.5 收敛条件与终止准则", "", "```text",
             "柔度变化满足求解器收敛阈值，或达到最大迭代次数；",
@@ -245,7 +272,7 @@ class ResearchReportGenerator:
         for e in experiments:
             solver=(e.get("result") or {}).get("solver") or {}; lines.append(f"| {e['id']} | {e.get('fidelity') or missing} | {shown(e.get('parameters'), missing)} | {e.get('solver_variant') or solver.get('solver_variant') or missing} | {e.get('task_hash') or solver.get('task_sha256') or missing} / {e.get('solver_sha256') or solver.get('solver_entry_sha256') or missing} |")
         lines += ["", "## **第四章：核心优化结果对比**" if zh else "## **Chapter 4: Core result comparison**", ""]
-        best=feasible[0] if feasible else (completed[-1] if completed else {}); br=best.get("result") or {}; be=br.get("evaluation") or {}
+        best=final_f3 or {}; br=best.get("result") or {}; be=br.get("evaluation") or {}
         if abnormal:
             lines += ["### 4.7 异常情况（仅在异常时启用）", "",
                       "> **⚠️ 本次迭代异常终止，无有效对比数据。不得输出成功结论。**", ""]
@@ -269,14 +296,15 @@ class ResearchReportGenerator:
                       f"| 灰度率 | ≤ {shown(constraints.get('gray_max'),missing)} | {shown((br.get('quality') or {}).get('gray_ratio'),missing)} | {shown((be.get('checks') or {}).get('gray'),missing)} |",
                       f"| 连通性 | {shown(constraints.get('connected'),missing)} | {shown((br.get('quality') or {}).get('connected_components'),missing)} | {shown((be.get('checks') or {}).get('connected'),missing)} |", "",
                       "### 4.4 优化结果可视化", ""]
-            figure_artifacts=[a for a in lineage if a.get("artifact_type") in {"TOPOLOGY_IMAGE","STRESS_IMAGE","CONVERGENCE_IMAGE"} and a.get("path") and Path(a["path"]).is_file()]
+            figure_artifacts=[a for a in lineage if a.get("experiment_id") == final_f3_id and a.get("artifact_type") in {"TOPOLOGY_IMAGE","STRESS_IMAGE","CONVERGENCE_IMAGE"} and a.get("path") and Path(a["path"]).is_file()]
             for artifact in figure_artifacts:
                 labels={"TOPOLOGY_IMAGE":"最终拓扑构型","STRESS_IMAGE":"应力分布","CONVERGENCE_IMAGE":"收敛曲线"}
                 caption=labels.get(artifact.get("artifact_type"),"真实结果图")
                 source=str(Path(artifact["path"]).resolve())
                 image_path=figure_paths.get(source, artifact["path"])
                 lines += [f"![{caption}]({image_path})", f"*{caption} · SHA-256：{artifact.get('sha256') or missing}*", ""]
-            if not figure_artifacts: lines += [missing, ""]
+            if not figure_artifacts:
+                lines += ["> **尚无成功的 F3 最终优化结果；不会使用 F0–F2 图像冒充最终结果。**" if zh else "> **No successful F3 final result is available; F0-F2 figures are not substituted.**", ""]
             best_quality=(br.get("quality") or {})
             stress_limit=next((constraints.get(key) for key in ("allowable_stress_mpa","stress_limit_mpa","max_stress_mpa") if constraints.get(key) is not None),None)
             best_stress=best_quality.get("maximum_von_mises")

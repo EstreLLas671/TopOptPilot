@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -123,9 +124,24 @@ class ResearchStateStore:
                     metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL,
                     FOREIGN KEY(research_id) REFERENCES research(id)
                 );
+                CREATE TABLE IF NOT EXISTS research_runs (
+                    id TEXT PRIMARY KEY, research_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                    status TEXT NOT NULL, budget_total INTEGER NOT NULL,
+                    budget_used INTEGER NOT NULL DEFAULT 0, termination_reason TEXT,
+                    created_at TEXT NOT NULL, stopped_at TEXT, archived_at TEXT,
+                    FOREIGN KEY(research_id) REFERENCES research(id)
+                );
+                CREATE TABLE IF NOT EXISTS research_suggestion_extractions (
+                    research_id TEXT NOT NULL, source_id TEXT NOT NULL,
+                    reply TEXT NOT NULL, actions_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(research_id, source_id),
+                    FOREIGN KEY(research_id) REFERENCES research(id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_subagent_research ON subagent_tasks(research_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_hypothesis_research ON hypotheses(research_id, round_number);
                 CREATE INDEX IF NOT EXISTS idx_artifact_research ON artifact_lineage(research_id, experiment_id);
+                CREATE INDEX IF NOT EXISTS idx_runs_research ON research_runs(research_id, ordinal);
             """)
             self._ensure_columns(db, "research", {
                 "budgets_json": "TEXT NOT NULL DEFAULT '{}'",
@@ -141,6 +157,7 @@ class ResearchStateStore:
                 "defaults_json": "TEXT NOT NULL DEFAULT '{}'",
                 "contract_json": "TEXT NOT NULL DEFAULT '{}'",
                 "archived_at": "TEXT",
+                "active_run_id": "TEXT",
             })
             self._ensure_columns(db, "experiments", {
                 "proposal_id": "TEXT",
@@ -164,15 +181,18 @@ class ResearchStateStore:
                 "review_verdict": "TEXT",
                 "human_decision": "TEXT",
                 "requires_approval": "INTEGER NOT NULL DEFAULT 0",
+                "research_run_id": "TEXT",
             })
             self._ensure_columns(db, "events", {
                 "event_id": "TEXT",
                 "event_type": "TEXT",
                 "source": "TEXT NOT NULL DEFAULT 'SYSTEM'",
+                "research_run_id": "TEXT",
             })
             self._ensure_columns(db, "decisions", {
                 "source": "TEXT NOT NULL DEFAULT 'HUMAN'",
                 "evidence_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "research_run_id": "TEXT",
             })
             self._ensure_columns(db, "proposals", {
                 "decision_source": "TEXT NOT NULL DEFAULT 'HUMAN'",
@@ -182,11 +202,51 @@ class ResearchStateStore:
                 "provider": "TEXT",
                 "session_id": "TEXT",
                 "evidence_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+                "research_run_id": "TEXT",
             })
             self._ensure_columns(db, "agent_sessions", {
                 "stream_text": "TEXT NOT NULL DEFAULT ''",
                 "last_error": "TEXT",
             })
+            for table in ("subagent_tasks", "hypotheses", "artifact_lineage"):
+                self._ensure_columns(db, table, {"research_run_id": "TEXT"})
+            self._backfill_research_runs(db)
+
+    @staticmethod
+    def _backfill_research_runs(db: sqlite3.Connection) -> None:
+        """Attach legacy evidence to one stable run without deleting any records."""
+        tables = ("experiments", "events", "decisions", "proposals",
+                  "subagent_tasks", "hypotheses", "artifact_lineage")
+        rows = db.execute(
+            "SELECT id, active_run_id, status, budget_total, budget_used, termination_reason, created_at "
+            "FROM research"
+        ).fetchall()
+        for row in rows:
+            run_id = row["active_run_id"]
+            if not run_id:
+                run_id = f"RR-{uuid.uuid4().hex[:12].upper()}"
+                db.execute(
+                    """INSERT INTO research_runs
+                    (id,research_id,ordinal,status,budget_total,budget_used,termination_reason,created_at,stopped_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (run_id, row["id"], 1, row["status"], row["budget_total"],
+                     row["budget_used"], row["termination_reason"], row["created_at"],
+                     utc_now() if row["status"] in {"STOPPED", "FAILED", "COMPLETED"} else None),
+                )
+                db.execute("UPDATE research SET active_run_id=? WHERE id=?", (run_id, row["id"]))
+            elif not db.execute("SELECT 1 FROM research_runs WHERE id=?", (run_id,)).fetchone():
+                db.execute(
+                    """INSERT INTO research_runs
+                    (id,research_id,ordinal,status,budget_total,budget_used,termination_reason,created_at)
+                    VALUES (?,?,?,?,?,?,?,?)""",
+                    (run_id, row["id"], 1, row["status"], row["budget_total"],
+                     row["budget_used"], row["termination_reason"], row["created_at"]),
+                )
+            for table in tables:
+                db.execute(
+                    f"UPDATE {table} SET research_run_id=? WHERE research_id=? AND research_run_id IS NULL",
+                    (run_id, row["id"]),
+                )
 
     @staticmethod
     def _ensure_columns(db: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
@@ -209,20 +269,27 @@ class ResearchStateStore:
 
     def create_research(self, data: dict[str, Any]) -> dict:
         now = utc_now()
+        run_id = f"RR-{uuid.uuid4().hex[:12].upper()}"
         with self._lock, self.connection() as db:
             db.execute("""INSERT INTO research
                 (id,name,goal,constraints_json,mode,status,budget_total,budget_used,locks_json,
                  created_at,updated_at,budgets_json,geometry_json,material_json,loads_json,
                  boundary_conditions_json,hypothesis,current_question,current_round,locale,defaults_json,
-                 contract_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 contract_json,active_run_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["name"], data["goal"], json.dumps(data["constraints"]),
                  data["mode"], "READY", data["budget_total"], 0, "{}", now, now,
                  json.dumps(data.get("budgets", {})), json.dumps(data.get("geometry", {})),
                  json.dumps(data.get("material", {})), json.dumps(data.get("loads", [])),
                  json.dumps(data.get("boundary_conditions", {})), data.get("hypothesis"),
                  None, 0, data.get("locale", "zh-CN"), json.dumps(data.get("defaults", {})),
-                 json.dumps(data.get("contract", {}))))
+                 json.dumps(data.get("contract", {})), run_id))
+            db.execute(
+                """INSERT INTO research_runs
+                (id,research_id,ordinal,status,budget_total,budget_used,created_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (run_id, data["id"], 1, "READY", data["budget_total"], 0, now),
+            )
         return self.get_research(data["id"])
 
     def list_research(self, archived: bool = False) -> list[dict]:
@@ -251,7 +318,62 @@ class ResearchStateStore:
             values.extend((utc_now(), research_id))
             with self._lock, self.connection() as db:
                 db.execute(f"UPDATE research SET {', '.join(assignments)} WHERE id=?", values)
+                run = db.execute("SELECT active_run_id FROM research WHERE id=?", (research_id,)).fetchone()
+                if run and run["active_run_id"]:
+                    run_fields = {name: fields[name] for name in
+                                  ("status", "budget_total", "budget_used", "termination_reason")
+                                  if name in fields}
+                    if run_fields:
+                        run_assignments = [f"{name}=?" for name in run_fields]
+                        run_values = list(run_fields.values())
+                        if str(fields.get("status") or "").upper() in {"STOPPED", "FAILED", "COMPLETED"}:
+                            run_assignments.append("stopped_at=?")
+                            run_values.append(utc_now())
+                        run_values.append(run["active_run_id"])
+                        db.execute(
+                            f"UPDATE research_runs SET {', '.join(run_assignments)} WHERE id=?",
+                            run_values,
+                        )
         return self.get_research(research_id)
+
+    def create_next_research_run(self, research_id: str) -> dict:
+        """Archive the active run and create a clean execution generation atomically."""
+        now = utc_now()
+        next_id = f"RR-{uuid.uuid4().hex[:12].upper()}"
+        with self._lock, self.connection() as db:
+            research = db.execute("SELECT * FROM research WHERE id=?", (research_id,)).fetchone()
+            if not research:
+                raise KeyError(f"Research {research_id} does not exist")
+            active_id = research["active_run_id"]
+            if active_id:
+                db.execute(
+                    "UPDATE research_runs SET status='ARCHIVED', archived_at=? WHERE id=?",
+                    (now, active_id),
+                )
+            ordinal = db.execute(
+                "SELECT COALESCE(MAX(ordinal),0)+1 FROM research_runs WHERE research_id=?",
+                (research_id,),
+            ).fetchone()[0]
+            db.execute(
+                """INSERT INTO research_runs
+                (id,research_id,ordinal,status,budget_total,budget_used,created_at)
+                VALUES (?,?,?,?,?,?,?)""",
+                (next_id, research_id, ordinal, "READY", research["budget_total"], 0, now),
+            )
+            db.execute(
+                """UPDATE research SET active_run_id=?, status='READY', budget_used=0,
+                current_round=0, termination_reason=NULL, updated_at=? WHERE id=?""",
+                (next_id, now, research_id),
+            )
+        return self.get_research(research_id)
+
+    def list_research_runs(self, research_id: str) -> list[dict]:
+        with self.connection() as db:
+            rows = db.execute(
+                "SELECT * FROM research_runs WHERE research_id=? ORDER BY ordinal",
+                (research_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def update_research_json(self, research_id: str, **fields: Any) -> dict:
         allowed = {"constraints", "budgets", "geometry", "material", "loads", "boundary_conditions", "defaults"}
@@ -279,13 +401,16 @@ class ResearchStateStore:
                 "SELECT COALESCE(MAX(ordinal),0)+1 FROM experiments WHERE research_id=?",
                 (data["research_id"],),
             ).fetchone()[0]
+            run_id = data.get("research_run_id") or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (data["research_id"],)
+            ).fetchone()[0]
             db.execute("""INSERT INTO experiments
                 (id,research_id,ordinal,purpose,fidelity,mesh_level,backend,parameters_json,
                  warm_start,status,safety,created_at,proposal_id,intent,round_number,decision_source,
                  intent_source,policy_version,model,provider,session_id,evidence_ids_json,result_source,
                  knowledge_ids_json,subagent_task_ids_json,solver_variant,acceleration_mode,
-                 review_verdict,human_decision,requires_approval)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  review_verdict,human_decision,requires_approval,research_run_id)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], ordinal, data["purpose"], data["fidelity"],
                  data["mesh_level"], data["backend"], json.dumps(data["parameters"]),
                  data.get("warm_start"), data["status"], data.get("safety", "LOW"), now,
@@ -298,7 +423,7 @@ class ResearchStateStore:
                  json.dumps(data.get("subagent_task_ids", [])),
                  data.get("solver_variant", "auto"), data.get("acceleration_mode", "auto"),
                  data.get("review_verdict"), data.get("human_decision"),
-                 int(bool(data.get("requires_approval", False)))))
+                  int(bool(data.get("requires_approval", False))), run_id))
         return self.get_experiment(data["id"])
 
     def get_experiment(self, experiment_id: str) -> dict | None:
@@ -307,11 +432,18 @@ class ResearchStateStore:
         return self._decode(row, ("parameters", "result", "evidence_ids", "knowledge_ids",
                                   "subagent_task_ids"))
 
-    def list_experiments(self, research_id: str) -> list[dict]:
+    def list_experiments(self, research_id: str, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute(
-                "SELECT * FROM experiments WHERE research_id=? ORDER BY ordinal", (research_id,)
-            ).fetchall()
+            if include_archived:
+                rows = db.execute(
+                    "SELECT * FROM experiments WHERE research_id=? ORDER BY ordinal", (research_id,)
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """SELECT e.* FROM experiments e JOIN research r ON r.id=e.research_id
+                    WHERE e.research_id=? AND e.research_run_id=r.active_run_id ORDER BY e.ordinal""",
+                    (research_id,),
+                ).fetchall()
         return [self._decode(row, ("parameters", "result", "evidence_ids", "knowledge_ids",
                                    "subagent_task_ids")) for row in rows]
 
@@ -349,38 +481,50 @@ class ResearchStateStore:
 
     def append_event(self, research_id: str, kind: str, title: str, body: str,
                      experiment_id: str | None = None, payload: dict | None = None,
-                     *, source: str | None = None, event_type: str | None = None) -> dict:
+                     *, source: str | None = None, event_type: str | None = None,
+                     research_run_id: str | None = None) -> dict:
         import uuid
         event_id = f"EV-{uuid.uuid4().hex[:12].upper()}"
         resolved_type = event_type or _event_type(kind, title)
         resolved_source = source or _event_source(kind, title)
         with self._lock, self.connection() as db:
+            run_id = research_run_id or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (research_id,)
+            ).fetchone()[0]
             cursor = db.execute("""INSERT INTO events
-                (research_id,experiment_id,kind,title,body,payload_json,created_at,event_id,event_type,source)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (research_id,experiment_id,kind,title,body,payload_json,created_at,event_id,event_type,source,research_run_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (research_id, experiment_id, kind, title, body,
-                 json.dumps(payload or {}, default=_json_default), utc_now(), event_id,
-                 resolved_type, resolved_source))
+                  json.dumps(payload or {}, default=_json_default), utc_now(), event_id,
+                  resolved_type, resolved_source, run_id))
             event_id = cursor.lastrowid
             row = db.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
         return _event_envelope(self._decode(row, ("payload",)))
 
-    def list_events(self, research_id: str, limit: int = 300) -> list[dict]:
+    def list_events(self, research_id: str, limit: int = 300, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("""SELECT * FROM events WHERE research_id=?
-                ORDER BY id DESC LIMIT ?""", (research_id, limit)).fetchall()
+            if include_archived:
+                rows = db.execute("""SELECT * FROM events WHERE research_id=?
+                    ORDER BY id DESC LIMIT ?""", (research_id, limit)).fetchall()
+            else:
+                rows = db.execute("""SELECT e.* FROM events e JOIN research r ON r.id=e.research_id
+                    WHERE e.research_id=? AND e.research_run_id=r.active_run_id
+                    ORDER BY e.id DESC LIMIT ?""", (research_id, limit)).fetchall()
         return [_event_envelope(self._decode(row, ("payload",))) for row in reversed(rows)]
 
     def create_decision(self, data: dict[str, Any]) -> dict:
         with self._lock, self.connection() as db:
+            run_id = data.get("research_run_id") or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (data["research_id"],)
+            ).fetchone()[0]
             db.execute("""INSERT INTO decisions
                 (id,research_id,experiment_id,intent,reason,proposal_json,risk,status,created_at,
-                 source,evidence_ids_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                  source,evidence_ids_json,research_run_id)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], data.get("experiment_id"), data["intent"],
                  data["reason"], json.dumps(data["proposal"]), data["risk"],
                  data["status"], utc_now(), data.get("source", "HUMAN"),
-                 json.dumps(data.get("evidence_ids", []))))
+                  json.dumps(data.get("evidence_ids", [])), run_id))
         return self.get_decision(data["id"])
 
     def get_decision(self, decision_id: str) -> dict | None:
@@ -388,10 +532,15 @@ class ResearchStateStore:
             row = db.execute("SELECT * FROM decisions WHERE id=?", (decision_id,)).fetchone()
         return self._decode(row, ("proposal", "evidence_ids"))
 
-    def list_decisions(self, research_id: str) -> list[dict]:
+    def list_decisions(self, research_id: str, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("""SELECT * FROM decisions WHERE research_id=?
-                ORDER BY created_at, rowid""", (research_id,)).fetchall()
+            if include_archived:
+                rows = db.execute("""SELECT * FROM decisions WHERE research_id=?
+                    ORDER BY created_at, rowid""", (research_id,)).fetchall()
+            else:
+                rows = db.execute("""SELECT d.* FROM decisions d JOIN research r ON r.id=d.research_id
+                    WHERE d.research_id=? AND d.research_run_id=r.active_run_id
+                    ORDER BY d.created_at, d.rowid""", (research_id,)).fetchall()
         return [self._decode(row, ("proposal", "evidence_ids")) for row in rows]
 
     def resolve_decision_if_pending(self, decision_id: str, status: str) -> bool:
@@ -424,12 +573,15 @@ class ResearchStateStore:
     def create_proposal(self, data: dict[str, Any]) -> dict:
         now = utc_now()
         with self._lock, self.connection() as db:
+            run_id = data.get("research_run_id") or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (data["research_id"],)
+            ).fetchone()[0]
             db.execute("""INSERT INTO proposals
                 (id,research_id,intent,purpose,fidelity,backend,parameters_json,estimated_cost,
                  risk,safety_status,approval_required,source_experiment,controlled_factors_json,
                  status,experiment_id,created_at,updated_at,decision_source,intent_source,
-                 policy_version,model,provider,session_id,evidence_ids_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  policy_version,model,provider,session_id,evidence_ids_json,research_run_id)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], data["intent"], data["purpose"],
                  data["fidelity"], data["backend"], json.dumps(data["parameters"]),
                  data["estimated_cost"], data["risk"], data["safety_status"],
@@ -438,7 +590,7 @@ class ResearchStateStore:
                  data.get("experiment_id"), now, now, data.get("decision_source", "HUMAN"),
                  data.get("intent_source", "HUMAN"), data.get("policy_version", "v6-intent-compiler-1"),
                  data.get("model"), data.get("provider"), data.get("session_id"),
-                 json.dumps(data.get("evidence_ids", []))))
+                  json.dumps(data.get("evidence_ids", [])), run_id))
         return self.get_proposal(data["id"])
 
     def get_proposal(self, proposal_id: str) -> dict | None:
@@ -446,10 +598,15 @@ class ResearchStateStore:
             row = db.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()
         return self._decode(row, ("parameters", "controlled_factors", "evidence_ids"))
 
-    def list_proposals(self, research_id: str) -> list[dict]:
+    def list_proposals(self, research_id: str, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("SELECT * FROM proposals WHERE research_id=? ORDER BY created_at",
-                              (research_id,)).fetchall()
+            if include_archived:
+                rows = db.execute("SELECT * FROM proposals WHERE research_id=? ORDER BY created_at",
+                                  (research_id,)).fetchall()
+            else:
+                rows = db.execute("""SELECT p.* FROM proposals p JOIN research r ON r.id=p.research_id
+                    WHERE p.research_id=? AND p.research_run_id=r.active_run_id ORDER BY p.created_at""",
+                    (research_id,)).fetchall()
         return [self._decode(row, ("parameters", "controlled_factors", "evidence_ids")) for row in rows]
 
     def update_proposal(self, proposal_id: str, **fields: Any) -> dict:
@@ -507,15 +664,18 @@ class ResearchStateStore:
 
     def create_subagent_task(self, data: dict[str, Any]) -> dict:
         with self._lock, self.connection() as db:
+            run_id = data.get("research_run_id") or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (data["research_id"],)
+            ).fetchone()[0]
             db.execute("""INSERT INTO subagent_tasks
                 (id,research_id,role,objective,status,evidence_ids_json,proposal_id,session_id,
-                 result_json,error,created_at,started_at,completed_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  result_json,error,created_at,started_at,completed_at,research_run_id)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], data["role"], data["objective"],
                  data.get("status", "QUEUED"), json.dumps(data.get("evidence_ids", [])),
                  data.get("proposal_id"), data.get("session_id"),
                  json.dumps(data.get("result", {}), default=_json_default), data.get("error"),
-                 data.get("created_at", utc_now()), data.get("started_at"), data.get("completed_at")))
+                  data.get("created_at", utc_now()), data.get("started_at"), data.get("completed_at"), run_id))
         return self.get_subagent_task(data["id"])
 
     def get_subagent_task(self, task_id: str) -> dict | None:
@@ -523,10 +683,15 @@ class ResearchStateStore:
             row = db.execute("SELECT * FROM subagent_tasks WHERE id=?", (task_id,)).fetchone()
         return self._decode(row, ("evidence_ids", "result"))
 
-    def list_subagent_tasks(self, research_id: str) -> list[dict]:
+    def list_subagent_tasks(self, research_id: str, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("""SELECT * FROM subagent_tasks WHERE research_id=?
-                ORDER BY created_at""", (research_id,)).fetchall()
+            if include_archived:
+                rows = db.execute("""SELECT * FROM subagent_tasks WHERE research_id=?
+                    ORDER BY created_at""", (research_id,)).fetchall()
+            else:
+                rows = db.execute("""SELECT s.* FROM subagent_tasks s JOIN research r ON r.id=s.research_id
+                    WHERE s.research_id=? AND s.research_run_id=r.active_run_id ORDER BY s.created_at""",
+                    (research_id,)).fetchall()
         return [self._decode(row, ("evidence_ids", "result")) for row in rows]
 
     def update_subagent_task(self, task_id: str, **fields: Any) -> dict:
@@ -547,13 +712,16 @@ class ResearchStateStore:
 
     def create_hypothesis(self, data: dict[str, Any]) -> dict:
         with self._lock, self.connection() as db:
+            run_id = data.get("research_run_id") or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (data["research_id"],)
+            ).fetchone()[0]
             db.execute("""INSERT INTO hypotheses
                 (id,research_id,round_number,statement,competing_json,evidence_ids_json,
-                 source,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                  source,status,created_at,research_run_id) VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], int(data.get("round_number", 1)),
                  data["statement"], json.dumps(data.get("competing", [])),
                  json.dumps(data.get("evidence_ids", [])), data.get("source", "PI_AGENT"),
-                 data.get("status", "ACTIVE"), utc_now()))
+                  data.get("status", "ACTIVE"), utc_now(), run_id))
         return self.get_hypothesis(data["id"])
 
     def get_hypothesis(self, hypothesis_id: str) -> dict | None:
@@ -561,20 +729,28 @@ class ResearchStateStore:
             row = db.execute("SELECT * FROM hypotheses WHERE id=?", (hypothesis_id,)).fetchone()
         return self._decode(row, ("competing", "evidence_ids"))
 
-    def list_hypotheses(self, research_id: str) -> list[dict]:
+    def list_hypotheses(self, research_id: str, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("SELECT * FROM hypotheses WHERE research_id=? ORDER BY created_at",
-                              (research_id,)).fetchall()
+            if include_archived:
+                rows = db.execute("SELECT * FROM hypotheses WHERE research_id=? ORDER BY created_at",
+                                  (research_id,)).fetchall()
+            else:
+                rows = db.execute("""SELECT h.* FROM hypotheses h JOIN research r ON r.id=h.research_id
+                    WHERE h.research_id=? AND h.research_run_id=r.active_run_id ORDER BY h.created_at""",
+                    (research_id,)).fetchall()
         return [self._decode(row, ("competing", "evidence_ids")) for row in rows]
 
     def create_artifact(self, data: dict[str, Any]) -> dict:
         with self._lock, self.connection() as db:
+            run_id = data.get("research_run_id") or db.execute(
+                "SELECT active_run_id FROM research WHERE id=?", (data["research_id"],)
+            ).fetchone()[0]
             db.execute("""INSERT INTO artifact_lineage
-                (id,research_id,experiment_id,artifact_type,path,sha256,parents_json,metadata_json,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (id,research_id,experiment_id,artifact_type,path,sha256,parents_json,metadata_json,created_at,research_run_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (data["id"], data["research_id"], data.get("experiment_id"), data["artifact_type"],
                  data.get("path"), data.get("sha256"), json.dumps(data.get("parents", [])),
-                 json.dumps(data.get("metadata", {}), default=_json_default), utc_now()))
+                  json.dumps(data.get("metadata", {}), default=_json_default), utc_now(), run_id))
         return self.get_artifact(data["id"])
 
     def get_artifact(self, artifact_id: str) -> dict | None:
@@ -582,11 +758,41 @@ class ResearchStateStore:
             row = db.execute("SELECT * FROM artifact_lineage WHERE id=?", (artifact_id,)).fetchone()
         return self._decode(row, ("parents", "metadata"))
 
-    def list_artifacts(self, research_id: str) -> list[dict]:
+    def list_artifacts(self, research_id: str, *, include_archived: bool = False) -> list[dict]:
         with self.connection() as db:
-            rows = db.execute("SELECT * FROM artifact_lineage WHERE research_id=? ORDER BY created_at",
-                              (research_id,)).fetchall()
+            if include_archived:
+                rows = db.execute("SELECT * FROM artifact_lineage WHERE research_id=? ORDER BY created_at",
+                                  (research_id,)).fetchall()
+            else:
+                rows = db.execute("""SELECT a.* FROM artifact_lineage a JOIN research r ON r.id=a.research_id
+                    WHERE a.research_id=? AND a.research_run_id=r.active_run_id ORDER BY a.created_at""",
+                    (research_id,)).fetchall()
         return [self._decode(row, ("parents", "metadata")) for row in rows]
+
+    def get_suggestion_extraction(self, research_id: str, source_id: str) -> dict | None:
+        with self.connection() as db:
+            row = db.execute(
+                """SELECT reply, actions_json, created_at FROM research_suggestion_extractions
+                WHERE research_id=? AND source_id=?""",
+                (research_id, source_id),
+            ).fetchone()
+        if not row:
+            return None
+        return {"reply": row["reply"], "actions": json.loads(row["actions_json"] or "[]"),
+                "sourceId": source_id, "createdAt": row["created_at"]}
+
+    def save_suggestion_extraction(self, research_id: str, source_id: str,
+                                   reply: str, actions: list[dict[str, Any]]) -> dict:
+        with self._lock, self.connection() as db:
+            db.execute(
+                """INSERT INTO research_suggestion_extractions
+                (research_id,source_id,reply,actions_json,created_at) VALUES (?,?,?,?,?)
+                ON CONFLICT(research_id,source_id) DO NOTHING""",
+                (research_id, source_id, reply, json.dumps(actions, default=_json_default), utc_now()),
+            )
+        return self.get_suggestion_extraction(research_id, source_id) or {
+            "reply": reply, "actions": actions, "sourceId": source_id,
+        }
 
     def get_app_settings(self) -> dict | None:
         with self.connection() as db:

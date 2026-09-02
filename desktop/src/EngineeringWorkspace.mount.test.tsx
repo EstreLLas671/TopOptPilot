@@ -112,7 +112,7 @@ describe("EngineeringWorkspace mount", () => {
     });
 
     await userEvent.click(screen.getByRole("button", { name: "打开参数配置" }));
-    expect(await screen.findByText("MATLAB R2024b 可用")).toBeTruthy();
+    expect(await screen.findByText("MATLAB R2024b 已就绪")).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "重新检测 MATLAB" }));
     await waitFor(() => expect(apiMocks.engineeringInstallations).toHaveBeenCalledTimes(2));
   });
@@ -185,5 +185,16 @@ describe("EngineeringWorkspace mount", () => {
     }
     await userEvent.click(screen.getByRole("tab", { name: "制品" }));
     expect(screen.getByText("本次运行制品")).toBeTruthy();
+  });
+
+  it("keeps the chat mounted and creates a selected blank history without reloading it", async () => {
+    render(<EngineeringWorkspace health={null} onError={() => undefined} onResearchBaseline={async () => undefined}/>);
+    await waitFor(() => expect(apiMocks.conversationList).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("tab", { name: "代码" }));
+    await userEvent.click(screen.getByRole("tab", { name: "历史对话" }));
+    await userEvent.click(screen.getByRole("button", { name: "新建历史对话" }));
+    await waitFor(() => expect(apiMocks.conversationMessages).toHaveBeenCalledWith("conversation-1"));
+    expect(apiMocks.conversationList).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tab", { name: "聊天" }).getAttribute("aria-selected")).toBe("true");
   });
 });

@@ -51,18 +51,85 @@ def test_research_archive_is_reversible_and_filtered_from_active_list(
     assert research["id"] in {item["id"] for item in service.list_research()}
 
 
-def test_research_archive_rejects_running_state_and_pending_work(
+def test_research_archive_cancels_running_state_and_pending_work_without_blocking(
     service: ResearchService,
 ) -> None:
     research = _research(service)
     service.store.update_research(research["id"], status="RUNNING")
-    with pytest.raises(ValueError, match="运行任务或待审批"):
-        service.archive_research(research["id"])
+    started = time.perf_counter()
+    archived = service.archive_research(research["id"])
+    assert time.perf_counter() - started < 1
+    assert archived["archived_at"] is not None
+    assert archived["status"] == "STOPPED"
 
-    service.store.update_research(research["id"], status=research["status"])
-    service.create_experiment(research["id"], ExperimentCreate())
-    with pytest.raises(ValueError, match="运行任务或待审批"):
-        service.archive_research(research["id"])
+    pending_research = _research(service)
+    experiment = service.create_experiment(
+        pending_research["id"], ExperimentCreate(requires_approval=True),
+    )
+    archived = service.archive_research(pending_research["id"])
+    assert archived["archived_at"] is not None
+    assert service.store.get_experiment(experiment["id"])["status"] == "CANCELLED"
+    assert service.store.get_decision(experiment["decision_id"])["status"] == "REJECTED"
+
+
+def test_stop_autonomous_cancels_full_chain_and_next_start_archives_active_run(
+    service: ResearchService, monkeypatch,
+) -> None:
+    research = _research(service)
+    service.store.update_research(
+        research["id"], goal="保留目标", hypothesis="保留假设", status="RUNNING", budget_used=2,
+    )
+    service.store.update_research_json(
+        research["id"], defaults={"optimization_config": {"penal": 3.0},
+                                  "engineering_scheme_baseline": {"schemeId": "scheme-1"}},
+    )
+    experiment = service.create_experiment(
+        research["id"], ExperimentCreate(fidelity="F0 — Python 2D", backend="python"),
+    )
+    service.store.update_experiment(experiment["id"], status="RUNNING", run_id="run-python-stop")
+    task = service.store.create_subagent_task({
+        "id": "TASK-STOP", "research_id": research["id"], "role": "HYPOTHESIS",
+        "objective": "bounded review", "status": "RUNNING",
+    })
+    cancelled: list[str] = []
+    monkeypatch.setattr(service.queue, "cancel", lambda run_id: cancelled.append(run_id) or True)
+    monkeypatch.setattr(service.queue, "wait_for_stop", lambda _run_id, timeout=10: True)
+
+    class _Pi:
+        def __init__(self): self.calls: list[str] = []
+        def cancel(self, research_id): self.calls.append("cancel:" + research_id); return True
+        def release(self, research_id): self.calls.append("release:" + research_id)
+        def close(self): return None
+
+    pi = _Pi()
+    service.pi_runtime = pi
+    stopped = service.stop_autonomous_research(research["id"])
+    assert stopped["status"] == "STOPPING"
+    assert service.stop_autonomous_research(research["id"])["status"] in {"STOPPING", "STOPPED"}
+    deadline = time.monotonic() + 3
+    while service.get_research(research["id"])["status"] == "STOPPING" and time.monotonic() < deadline:
+        time.sleep(.02)
+    stopped = service.get_research(research["id"])
+    assert stopped["status"] == "STOPPED"
+    assert stopped["termination_reason"] == "USER_STOPPED"
+    assert cancelled == ["run-python-stop"]
+    assert pi.calls == ["cancel:" + research["id"], "release:" + research["id"]]
+    assert service.store.get_experiment(experiment["id"])["status"] == "CANCELLED"
+    assert service.store.get_subagent_task(task["id"])["status"] == "CANCELLED"
+
+    old_run = stopped["active_run_id"]
+    monkeypatch.setattr(service, "_send_pi_or_fallback", lambda *_args, **_kwargs: None)
+    restarted = service.start_autonomous_research(research["id"])
+    assert restarted["active_run_id"] != old_run
+    assert restarted["experiments"] == []
+    assert restarted["budget_used"] == 0
+    assert restarted["current_round"] == 0
+    assert restarted["goal"] == "保留目标"
+    assert restarted["hypothesis"] == "保留假设"
+    assert restarted["defaults"]["engineering_scheme_baseline"]["schemeId"] == "scheme-1"
+    assert len(service.store.list_experiments(research["id"], include_archived=True)) == 1
+    runs = service.store.list_research_runs(research["id"])
+    assert [item["status"] for item in runs] == ["ARCHIVED", "RUNNING"]
 
 
 
@@ -115,6 +182,28 @@ class _RecordingMatlabWorker:
 
     def close(self) -> None:
         return None
+
+
+def test_f3_fixed_density_reuses_the_f2_grid_when_geometry_has_no_explicit_mesh(
+    service: ResearchService, monkeypatch,
+) -> None:
+    density = [[[0.5 for _ in range(4)] for _ in range(3)] for _ in range(2)]
+    source = {"result": {"artifacts": {"density": density}}}
+    monkeypatch.setattr(
+        service.store, "get_experiment",
+        lambda experiment_id: source if experiment_id == "E01" else None,
+    )
+    experiment = {
+        "id": "E02", "fidelity": "F3 — MATLAB 3D", "mesh_level": "fine3d",
+        "backend": "matlab", "parameters": {"volfrac": 0.4}, "warm_start": "E01",
+    }
+    research = {"id": "MBB-001", "geometry": {"dimensions": [3, 1, 0.75]}, "contract": {}}
+
+    task, _, _ = service._prepare_claimed_experiment(experiment, research)
+
+    assert task["params"]["verification_mode"] == "fixed_density"
+    assert task["params"]["initial_density"] == density
+    assert task["params"]["grid3d"] == [3, 2, 4]
 
 
 def test_f3_requires_approved_research_state_before_run_or_command(

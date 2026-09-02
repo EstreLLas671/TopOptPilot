@@ -156,9 +156,19 @@ _CONFIG_KEYS = {
     "dimensions", "unit", "cellSizeMeters",
 }
 _MATERIAL_KEYS = {"preset", "name", "youngsModulusGPa", "poissonRatio", "densityKgM3", "yieldStrengthMPa"}
+_DEFAULT_OPTIMIZATION_CONFIG: dict[str, Any] = {
+    "dimension": "3d", "bcType": "cantilever", "accuracy": "standard",
+    "nelx": 24, "nely": 8, "nelz": 6, "volfrac": 0.4, "penal": 3.0,
+    "rmin": 1.5, "maxIterations": 60, "minIterations": 10,
+    "filterStrategy": "fixed", "dimensions": [6, 2, 1.5], "unit": "m",
+    "cellSizeMeters": 0.25,
+    "material": {"preset": "normalized", "name": "归一化参考材料",
+                 "youngsModulusGPa": 1.0, "poissonRatio": 0.3,
+                 "densityKgM3": 1.0, "yieldStrengthMPa": 1.0},
+}
 
 
-def _validated_optimization_action(content: str) -> dict[str, Any] | None:
+def _validated_optimization_action(content: str, base_config: dict[str, Any] | None = None) -> dict[str, Any] | None:
     match = re.search(r"<topoptpilot-action>\s*([\s\S]*?)\s*</topoptpilot-action>", content, re.IGNORECASE)
     if not match:
         return None
@@ -168,8 +178,16 @@ def _validated_optimization_action(content: str) -> dict[str, Any] | None:
         return None
     if not isinstance(raw, dict) or raw.get("type") != "apply_optimization_config":
         return None
-    config = raw.get("config")
-    if not isinstance(config, dict) or set(config) != _CONFIG_KEYS:
+    patch = raw.get("config")
+    if not isinstance(patch, dict) or not patch or not set(patch).issubset(_CONFIG_KEYS):
+        return None
+    base = {**_DEFAULT_OPTIMIZATION_CONFIG, **(base_config or {})}
+    if isinstance((base_config or {}).get("material"), dict):
+        base["material"] = {**_DEFAULT_OPTIMIZATION_CONFIG["material"], **base_config["material"]}
+    config = {**base, **patch}
+    if isinstance(base.get("material"), dict) and isinstance(patch.get("material"), dict):
+        config["material"] = {**base["material"], **patch["material"]}
+    if set(config) != _CONFIG_KEYS:
         return None
     material = config.get("material")
     if not isinstance(material, dict) or set(material) != _MATERIAL_KEYS:
@@ -201,7 +219,7 @@ def _validated_optimization_action(content: str) -> dict[str, Any] | None:
             return None
     except (TypeError, ValueError):
         return None
-    changed = raw.get("changedFields", [])
+    changed = raw.get("changedFields", list(patch))
     if not isinstance(changed, list) or not all(isinstance(item, str) and item in _CONFIG_KEYS for item in changed):
         return None
     action: dict[str, Any] = {"type": "apply_optimization_config", "config": config, "changedFields": changed}
@@ -211,15 +229,14 @@ def _validated_optimization_action(content: str) -> dict[str, Any] | None:
 
 
 def _extract_engineering_action(reply: str, context: dict[str, Any],
-                                chat: Callable[[list[dict[str, Any]]], dict[str, Any]]) -> dict[str, Any] | None:
-    """Perform one constrained extraction when a recommendation omitted its action."""
-    if not re.search(r"(建议|推荐|参数配置|体积分数|惩罚因子|滤波半径|网格|材料|工况)", reply):
-        return None
+                                 chat: Callable[[list[dict[str, Any]]], dict[str, Any]]) -> dict[str, Any] | None:
+    """Inspect every reply once when a concrete recommendation omitted its action."""
     extraction = chat([
         {"role": "system", "content": (
             "你是 TopOptPilot 受限动作提取器。只输出一个 "
             "<topoptpilot-action>JSON</topoptpilot-action> 或空文本。"
-            "动作必须是 apply_optimization_config，config 必须是完整合法配置，"
+            "动作必须是 apply_optimization_config。config 可以只包含回复中明确建议的字段，"
+            "缺失字段由当前工程配置补齐，"
             "不得包含命令、路径、代码或自动运行字段。"
         )},
         {"role": "user", "content": "当前工程配置：" + json.dumps(context, ensure_ascii=False, default=str)
@@ -227,7 +244,10 @@ def _extract_engineering_action(reply: str, context: dict[str, Any],
     ])
     if not extraction.get("success"):
         return None
-    return _validated_optimization_action(str(extraction.get("content") or ""))
+    return _validated_optimization_action(
+        str(extraction.get("content") or ""),
+        context.get("parameters") if isinstance(context.get("parameters"), dict) else None,
+    )
 
 def generate_engineering_chat(
     request: EngineeringChatRequest,
@@ -266,8 +286,8 @@ def generate_engineering_chat(
                 "你是 TopOptPilot 工程开发助手。只回答工程开发、拓扑优化参数、"
                 "MATLAB/Python 求解、结果制品和运行诊断问题。不要修改文件，不要编造求解结果，"
                 "不要把工程运行自动解释为科研结论。若用户要求改代码，只说明需要进入 PatchProposal 审批流程。"
-                "只有在用户明确要求调整优化参数且你能给出完整合法配置时，才可在回复末尾附加"
-                "<topoptpilot-action>{\"type\":\"apply_optimization_config\",\"config\":完整配置,"
+                "只要回复中出现可填入的优化参数建议，就必须在回复末尾附加"
+                "<topoptpilot-action>{\"type\":\"apply_optimization_config\",\"config\":建议字段,"
                 "\"changedFields\":[字段名],\"rationale\":\"简短原因\"}</topoptpilot-action>；不要在动作中加入命令、路径或自动运行字段。"
             ),
         },
@@ -280,7 +300,8 @@ def generate_engineering_chat(
             contextDigest=digest,
         )
     content = str(response.get("content") or "")
-    action = _validated_optimization_action(content)
+    base_config = context.get("parameters") if isinstance(context.get("parameters"), dict) else None
+    action = _validated_optimization_action(content, base_config)
     if action is None:
         action = _extract_engineering_action(reply=content, context=context, chat=chat)
     reply = re.sub(
