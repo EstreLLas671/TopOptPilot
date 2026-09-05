@@ -129,7 +129,10 @@ def test_stop_autonomous_cancels_full_chain_and_next_start_archives_active_run(
     assert restarted["defaults"]["engineering_scheme_baseline"]["schemeId"] == "scheme-1"
     assert len(service.store.list_experiments(research["id"], include_archived=True)) == 1
     runs = service.store.list_research_runs(research["id"])
-    assert [item["status"] for item in runs] == ["ARCHIVED", "RUNNING"]
+    assert [item["status"] for item in runs] == ["ARCHIVED", "READY"]
+    candidate_plan = restarted["defaults"]["autonomous_workflow"]["candidate_plan"]
+    assert candidate_plan["status"] == "AWAITING_CONFIRMATION"
+    assert len(candidate_plan["proposal_ids"]) == 3
 
 
 

@@ -50,12 +50,17 @@ class CommandRequest(BaseModel):
 class FidelityStageDecisionRequest(BaseModel):
     action: Literal["REPEAT_STAGE", "ADVANCE_STAGE", "APPROVE_FINAL"] | None = None
     advance: bool | None = None
+    selectedExperimentId: str | None = Field(default=None, min_length=1, max_length=160)
 
     @model_validator(mode="after")
     def require_decision(self) -> "FidelityStageDecisionRequest":
         if self.action is None and self.advance is None:
             raise ValueError("action or advance is required")
         return self
+
+
+class CandidatePlanConfirmRequest(BaseModel):
+    preferredProposalId: str = Field(min_length=1, max_length=160)
 
 
 class DecisionEditRequest(BaseModel):
@@ -164,6 +169,32 @@ def stop_autonomous(research_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/research/{research_id}/candidate-plan/confirm")
+def confirm_candidate_plan(research_id: str, request: CandidatePlanConfirmRequest):
+    try:
+        return service.confirm_candidate_plan(research_id, request.preferredProposalId)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/research/{research_id}/finish")
+def finish_research(research_id: str):
+    try:
+        return service.finish_research(research_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/research/{research_id}/reports/preview")
+def preview_research_report(research_id: str):
+    try:
+        return service.report_preview(research_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/research/{research_id}/runs")
 def list_research_runs(research_id: str):
     service._require_research(research_id)
@@ -173,7 +204,9 @@ def list_research_runs(research_id: str):
 @app.post("/api/research/{research_id}/fidelity-stage-decision")
 def decide_fidelity_stage(research_id: str, request: FidelityStageDecisionRequest):
     try:
-        return service.decide_fidelity_stage(research_id, request.action if request.action else request.advance)
+        return service.decide_fidelity_stage(
+            research_id, request.action if request.action else request.advance,
+            selected_experiment_id=request.selectedExperimentId)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

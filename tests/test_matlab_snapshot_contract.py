@@ -31,6 +31,18 @@ def test_matlab_final_result_exports_viewer_payloads() -> None:
     assert "result_manifest.json" in source
 
 
+def test_step4_research_lane_watches_engineering_snapshots_and_publishes_3d_density() -> None:
+    root = Path(__file__).parents[1]
+    service = (root / "topoptpilot" / "service" / "research_service.py").read_text(encoding="utf-8")
+    workspace = (root / "desktop" / "src" / "features" / "research" / "ResearchWorkspace.tsx").read_text(encoding="utf-8")
+    assert 'run_matlab_batch(' in service
+    assert 'snapshots_dir.glob("iter_*_density.bin")' in service
+    assert '"density_3d_live": density_3d' in service
+    assert "artifacts.density_3d_live ?? artifacts.density" in workspace
+    assert 'const densityIs3d' in workspace
+    assert '<InteractiveVolumeView density={resultView.liveVolume' in workspace
+
+
 def test_matlab_binary_writer_closes_each_payload_exactly_once() -> None:
     source = (Path(__file__).parents[1] / "matlab" / "engineering" / "run_topopt_job.m").read_text(encoding="utf-8")
     writer = source.split("function write_single_payload", maxsplit=1)[1].split(

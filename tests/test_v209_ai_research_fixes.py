@@ -319,7 +319,7 @@ def test_python_f2_supports_every_visible_3d_load_case(load_case, canonical) -> 
     assert (force != 0).sum() == 1
 
 
-def test_only_matching_matlab_f3_evidence_can_be_finally_approved(tmp_path) -> None:
+def test_user_can_finish_without_a_step4_parameter_match_gate(tmp_path) -> None:
     service = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
     research = _research_state()
     try:
@@ -360,12 +360,11 @@ def test_only_matching_matlab_f3_evidence_can_be_finally_approved(tmp_path) -> N
             **result["solver"]["executed_config"], "move_start": 0.5,
         }}}
         service.store.update_experiment("E04", result=tampered)
-        with pytest.raises(ValueError, match="参数匹配"):
-            service.decide_fidelity_stage(research["id"], "APPROVE_FINAL")
-        service.store.update_experiment("E04", result=result)
         approved = service.decide_fidelity_stage(research["id"], "APPROVE_FINAL")
         assert approved["status"] == "STOPPED"
-        assert approved["termination_reason"] == "FINAL_RESULT_APPROVED"
+        assert approved["termination_reason"] == "USER_FINISHED"
+        preview = service.report_preview(research["id"])
+        assert "不能宣称设计成功" in preview["markdown"]
     finally:
         service.close()
 

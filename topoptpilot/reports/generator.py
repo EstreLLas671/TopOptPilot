@@ -189,6 +189,7 @@ class ResearchReportGenerator:
         best_by_step = _best_experiments_by_step(research, experiments)
         final_step4 = best_by_step.get("STEP4")
         failed = [e for e in experiments if e.get("status") == "FAILED"]
+        cancelled = [e for e in experiments if e.get("status") == "CANCELLED"]
         abnormal = bool(failed) and not completed
         current_round = round_number or research.get("current_round", 0)
         generated = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -217,10 +218,12 @@ class ResearchReportGenerator:
                 "volfrac", constraints.get("volume_fraction")
             )
         user_prompt = contract.get("description") or missing
-        summary = (("本次迭代异常终止，没有产生有效对比结果。" if zh else "The iteration terminated abnormally without valid comparison results.") if abnormal else
+        user_finished_incomplete = research.get("termination_reason") == "USER_FINISHED" and not final_step4
+        summary = (("用户决定提前结束研究；未完成步骤、取消或失败实验及缺失指标均按 Research State 如实记录，不得据此宣称研究成功。" if zh else "The user ended the research early. Incomplete steps, cancelled or failed experiments, and missing metrics are recorded from Research State; research success must not be claimed.") if user_finished_incomplete else
+                   (("本次迭代异常终止，没有产生有效对比结果。" if zh else "The iteration terminated abnormally without valid comparison results.") if abnormal else
                    (("尚无成功的 Step4 MATLAB 3D 最终优化结果，不能用较低步骤结果替代最终结论。" if zh else "No successful Step4 MATLAB 3D final result is available; earlier-step evidence cannot replace it.") if not final_step4 else
                    (("Evaluator 已确认 Step4 最终结果可行；结论仍限于已记录工况与约束。" if zh else "The evaluator marked the Step4 final result feasible; the conclusion remains limited to recorded cases and constraints.") if ((final_step4.get("result") or {}).get("evaluation") or {}).get("success") else
-                   ("Step4 最终结果尚未被 Evaluator 判定为可行，不能宣称设计成功。" if zh else "The Step4 final result is not evaluator-feasible; design success cannot be claimed."))))
+                   ("Step4 最终结果尚未被 Evaluator 判定为可行，不能宣称设计成功。" if zh else "The Step4 final result is not evaluator-feasible; design success cannot be claimed.")))))
         lines = ["# TopOptPilot 智能体分析报告" if zh else "# TopOptPilot Agent Analysis Report", "",
             f"**{'报告编号' if zh else 'Report No.'}**：TOP-{str(generated)[:10].replace('-','')}-{research['id']}",
             f"**{'任务标题' if zh else 'Task title'}**：{research.get('name') or missing}", f"**{'生成时间' if zh else 'Generated'}**：{generated}",
@@ -271,7 +274,7 @@ class ResearchReportGenerator:
             "| 灵敏度或密度滤波 | 抑制棋盘格与网格依赖 | 取值来自实验参数 |",
             "| OC 更新 | 约束下更新单元密度 | 使用求解器真实迭代 |",
             "| 确定性评估器 | 校验真实结果 | 不使用模型生成指标 |", "",
-            "融合逻辑：每个 Step 的单次方案经 Policy 与安全校验后进入真实 FEM 求解；每次求解结束立即暂停，由实验者决定留在当前 Step 或进入下一 Step。", "",
+            "融合逻辑：Step1–Step3 每轮运行三个经 Policy 与安全校验的不同方向候选，确定性评估器仅依据真实结果标记推荐方案；Step4 每轮运行一个 MATLAB 验证实验。每轮结束后均由实验者决定重复、推进或结束。", "",
             "### 3.4 后处理与可制造化流程（必填）", "", "| 步骤 | 操作 | 说明/参数 |",
             "| :--- | :--- | :--- |", "| 1 | 密度阈值化 | 等值阈值仅用于结果呈现 |",
             "| 2 | 连通性检查 | 基于真实密度场计算连通分量 |",
@@ -282,10 +285,10 @@ class ResearchReportGenerator:
             "柔度变化满足求解器收敛阈值，或达到最大迭代次数；",
             "可行性仅由确定性评估器依据已配置约束判定。", "```", "",
             "### 3.6 运行环境与复现信息", "",
-            "| 实验 | 保真度 | 参数摘要 | 求解器变体 | 任务/求解器 SHA-256 |",
-            "| :--- | :--- | :--- | :--- | :--- |"]
+            "| 实验 | 状态 | 保真度 | 参数摘要 | 求解器变体 | 任务/求解器 SHA-256 |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |"]
         for e in experiments:
-            solver=(e.get("result") or {}).get("solver") or {}; lines.append(f"| {e['id']} | {e.get('fidelity') or missing} | {shown(e.get('parameters'), missing)} | {e.get('solver_variant') or solver.get('solver_variant') or missing} | {e.get('task_hash') or solver.get('task_sha256') or missing} / {e.get('solver_sha256') or solver.get('solver_entry_sha256') or missing} |")
+            solver=(e.get("result") or {}).get("solver") or {}; lines.append(f"| {e['id']} | {e.get('status') or missing} | {e.get('fidelity') or missing} | {shown(e.get('parameters'), missing)} | {e.get('solver_variant') or solver.get('solver_variant') or missing} | {e.get('task_hash') or solver.get('task_sha256') or missing} / {e.get('solver_sha256') or solver.get('solver_entry_sha256') or missing} |")
         lines += ["", "## **第四章：核心优化结果对比**" if zh else "## **Chapter 4: Core result comparison**", ""]
         best=final_step4 or {}; br=best.get("result") or {}; be=br.get("evaluation") or {}
         if abnormal:
@@ -341,6 +344,11 @@ class ResearchReportGenerator:
                       f"| 体积分数校验 | ≤ {shown(constraints.get('volume_fraction'),missing)} | {shown((br.get('constraints') or {}).get('volume_fraction'),missing)} | {shown((be.get('checks') or {}).get('volume'),missing)} |",
                       f"| 连通性检查 | {shown(constraints.get('connected'),missing)} | {shown(best_quality.get('connected_components'),missing)} | {shown((be.get('checks') or {}).get('connected'),missing)} |",
                       "| 可制造性检查 | 未配置完整制造约束 | 未计算 | 未判定 |", ""]
+        if cancelled:
+            lines += ["### 4.7 用户取消的实验", "",
+                      "以下实验因用户结束研究而取消，不生成或补齐求解指标：", ""]
+            lines += [f"- {item['id']}：{item.get('error') or '用户结束研究'}" for item in cancelled]
+            lines.append("")
         lines += ["", "*本报告由 TopOptPilot 智能体依据 Research State 与真实求解证据自动生成。*", ""]
         return "\n".join(lines)
 

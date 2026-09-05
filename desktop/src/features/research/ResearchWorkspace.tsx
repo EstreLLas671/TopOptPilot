@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArchiveRestore, Bot, CheckCircle2, ChevronRight, FileJson2, FlaskConical, FolderOpen, ImagePlus, LoaderCircle, MessageCircle, Play, Plus, Send, Settings2, ShieldCheck, Square, Trash2, X } from "lucide-react";
 import { api } from "../../api";
-import type { ConversationAttachment, ConversationMessage, EngineeringComparisonScheme, Experiment, Research, ResearchStageGate, ResearchStateAction, ResearchWorkflowProgress } from "../../types";
+import type { ConversationAttachment, ConversationMessage, EngineeringComparisonScheme, Experiment, Research, ResearchProposal, ResearchStageGate, ResearchStateAction, ResearchWorkflowProgress } from "../../types";
 import { DEFAULT_OPTIMIZATION_CONFIG, normalizeOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 import type { EngineeringSolverLane } from "../../engineering-workspace";
 import { solverLaneLabel } from "../../workspace";
@@ -79,6 +79,8 @@ export default function ResearchWorkspace(props: Props) {
   const [schemeImportBusy, setSchemeImportBusy] = useState(false);
   const [workflowProgress, setWorkflowProgress] = useState<ResearchWorkflowProgress | null>(selected?.workflow || null);
   const [stageDecisionBusy, setStageDecisionBusy] = useState(false);
+  const [candidatePlanBusy, setCandidatePlanBusy] = useState(false);
+  const [finishBusy, setFinishBusy] = useState(false);
   const [resultExperiment, setResultExperiment] = useState<Experiment | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportName, setReportName] = useState("");
@@ -86,6 +88,7 @@ export default function ResearchWorkspace(props: Props) {
   const [reportOverwrite, setReportOverwrite] = useState(false);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportStatus, setReportStatus] = useState("");
+  const [reportPreview, setReportPreview] = useState<{markdown:string;markdownPath:string;pdfPath:string}|null>(null);
   const [visualizationManifest, setVisualizationManifest] = useState<import("../../types").ResearchVisualizationManifest | null>(null);
   const [densityVolume, setDensityVolume] = useState<MatlabVolume | null>(null);
   const [gateVisualization, setGateVisualization] = useState<{ manifest: import("../../types").ResearchVisualizationManifest; densityVolume: MatlabVolume | null } | null>(null);
@@ -121,6 +124,30 @@ export default function ResearchWorkspace(props: Props) {
     queuedSuggestionSources.current.add(sourceId);
     setSuggestedActions(queue => [...queue, ...actions.map(action => ({ ...action, messageId }))]);
   }, []);
+  const handleExtractedActions = useCallback((sourceId:string, actions:ResearchStateAction[], messageId:string) => {
+    for (const action of actions) {
+      const stateFields = action.changedFields.filter(field => field === "goal" || field === "hypothesis");
+      if (stateFields.length) {
+        const details = [
+          stateFields.includes("goal") ? `研究目标：${action.goal || ""}` : "",
+          stateFields.includes("hypothesis") ? `研究假设：${action.hypothesis || ""}` : "",
+        ].filter(Boolean).join("\n\n");
+        if (window.confirm(`Agent 已从方案中识别出研究目标或研究假设。是否覆盖右侧未保存内容？\n\n${details}`)) {
+          if (stateFields.includes("goal") && action.goal) {
+            setGoalDraft(action.goal); cacheDraft({ goal: action.goal }, { goal: true });
+          }
+          if (stateFields.includes("hypothesis") && action.hypothesis) {
+            setHypothesisDraft(action.hypothesis); cacheDraft({ hypothesis: action.hypothesis }, { hypothesis: true });
+          }
+        }
+      }
+      if (action.changedFields.includes("optimizationConfig")) {
+        enqueueSuggestions(sourceId, [{
+          ...action, changedFields: ["optimizationConfig"], goal: undefined, hypothesis: undefined,
+        }], messageId);
+      }
+    }
+  }, [cacheDraft, enqueueSuggestions]);
   const metrics = useMemo(() => ({
     compliance: active?.result?.objective?.compliance,
     gray: active?.result?.quality?.gray_ratio,
@@ -129,7 +156,9 @@ export default function ResearchWorkspace(props: Props) {
   }), [active]);
   const resultView = useMemo(() => {
     const artifacts = (active?.result?.artifacts ?? {}) as Record<string, unknown>;
-    const rawDensity = artifacts.density;
+    // MATLAB progress publishes the full 3D cube separately from its 2D
+    // mid-plane preview. Prefer the live cube for the Step4 volume viewer.
+    const rawDensity = artifacts.density_3d_live ?? artifacts.density;
     const densityIs3d = Array.isArray(rawDensity) && rawDensity.length > 0
       && Array.isArray(rawDensity[0]) && Array.isArray((rawDensity[0] as unknown[])[0]);
     return {
@@ -156,6 +185,15 @@ export default function ResearchWorkspace(props: Props) {
       result: payload.result && typeof payload.result === "object" ? payload.result as Record<string, unknown> : {},
     };
   }, [selected?.events]);
+  const pendingCandidatePlan = useMemo(() => {
+    const workflow = ((selected?.defaults || {}).autonomous_workflow || {}) as Record<string,unknown>;
+    const plan = (workflow.candidate_plan || {}) as Record<string,unknown>;
+    if (plan.status !== "AWAITING_CONFIRMATION") return null;
+    const ids = Array.isArray(plan.proposal_ids) ? plan.proposal_ids.map(String) : [];
+    const proposals = ids.map(id => selected?.proposals?.find(item => item.id === id)).filter(Boolean) as ResearchProposal[];
+    if (proposals.length !== 3) return null;
+    return { proposals, recommendedProposalId:String(plan.recommended_proposal_id || ids[0]) };
+  }, [selected?.defaults, selected?.proposals]);
 
   const persistAssistant = useCallback(async (content: string, source = "qwen", targetConversationId = conversationId) => {
     if (!targetConversationId || !content.trim()) return null;
@@ -300,7 +338,7 @@ export default function ResearchWorkspace(props: Props) {
           const sourceId = `event:${id}`;
           void api.researchSuggestionExtract(selected.id, sourceId, body).then(async extraction => {
             const assistant = await persistAssistant(extraction.reply || body, "pi");
-            if (assistant) enqueueSuggestions(sourceId, extraction.actions || [], assistant.id);
+            if (assistant) handleExtractedActions(sourceId, extraction.actions || [], assistant.id);
           }).catch(() => { void persistAssistant(body, "pi"); });
         }
       }
@@ -353,12 +391,14 @@ export default function ResearchWorkspace(props: Props) {
       window.clearInterval(pollTimer);
       socket?.close();
     };
-  }, [selected?.id, onSelect, onError, persistAssistant, enqueueSuggestions]);
+  }, [selected?.id, onSelect, onError, persistAssistant, handleExtractedActions]);
 
   async function autonomous() {
     if (!selected) return;
-    if (!selected.goal?.trim()) {
-      onError("请先填写研究目标，再启动三方案比较与诊断流程。");
+    const savedGoal = Boolean(selected.goal?.trim()) && goalDraft.trim() === selected.goal.trim();
+    const savedHypothesis = Boolean(selected.hypothesis?.trim()) && hypothesisDraft.trim() === String(selected.hypothesis).trim();
+    if (!savedGoal || !savedHypothesis) {
+      onError("请先保存研究目标和研究假设");
       return;
     }
     setAutonomousBusy(true);
@@ -375,12 +415,45 @@ export default function ResearchWorkspace(props: Props) {
     catch (reason) { onError(String(reason)); }
     finally { setStopBusy(false); }
   }
-  async function decideStage(action: "REPEAT_STAGE" | "ADVANCE_STAGE" | "APPROVE_FINAL") {
+  async function confirmCandidatePlan(preferredProposalId:string) {
+    if (!selected || candidatePlanBusy) return;
+    setCandidatePlanBusy(true);
+    try { await api.confirmResearchCandidatePlan(selected.id, preferredProposalId); await onSelect(selected.id); }
+    catch (reason) { onError(String(reason)); }
+    finally { setCandidatePlanBusy(false); }
+  }
+  async function decideStage(action: "REPEAT_STAGE" | "ADVANCE_STAGE" | "APPROVE_FINAL", selectedExperimentId?:string) {
     if (!selected || !pendingStageGate || stageDecisionBusy) return;
     setStageDecisionBusy(true);
-    try { await api.researchFidelityStageDecision(selected.id, action); await onSelect(selected.id); }
+    try { await api.researchFidelityStageDecision(selected.id, action, selectedExperimentId); await onSelect(selected.id); }
     catch (reason) { onError(String(reason)); }
     finally { setStageDecisionBusy(false); }
+  }
+  async function showFinalReport() {
+    if (!selected) return;
+    const preview = await api.researchReportPreview(selected.id);
+    setReportPreview(preview);
+  }
+  async function finishResearch() {
+    if (!selected || finishBusy) return;
+    const hasActiveWork = canStopAutonomous || Boolean(runningExperiment);
+    const prompt = hasActiveWork
+      ? "当前仍有研究任务运行。确认后将先停止全部任务，再结束研究并生成报告。是否继续？"
+      : "确认结束当前研究并生成最终报告？未完成步骤、失败结果和缺失指标会如实保留。";
+    if (!window.confirm(prompt)) return;
+    setFinishBusy(true);
+    try {
+      let state = await api.finishResearch(selected.id);
+      for (let attempt = 0; String(state.status).toUpperCase() === "STOPPING" && attempt < 120; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 500));
+        state = await api.getResearch(selected.id);
+      }
+      if (String(state.status).toUpperCase() === "STOP_FAILED") throw new Error("后台任务未能完全停止，请重试结束实验。");
+      if (String(state.status).toUpperCase() === "STOPPING") throw new Error("停止任务超时，请稍后重试结束实验。");
+      await onSelect(selected.id);
+      await showFinalReport();
+    } catch (reason) { onError(String(reason)); }
+    finally { setFinishBusy(false); }
   }
   async function compare() {
     if (!selected || experiments.length < 2) return;
@@ -520,7 +593,7 @@ export default function ResearchWorkspace(props: Props) {
         const response = await api.researchVisionChat(selected.id, value, attachmentIds);
         const reply = response.reply || (response.actions?.length ? "已生成可确认的研究状态建议。" : response.source === "not_configured" ? "当前未配置可用的 Qwen 凭据。" : "当前模型无法处理该附件，草稿已保留。");
         const assistant = await persistAssistant(reply, response.source, targetConversationId);
-        if (assistant) enqueueSuggestions(`message:${assistant.id}`, response.actions || [], assistant.id);
+        if (assistant) handleExtractedActions(`message:${assistant.id}`, response.actions || [], assistant.id);
       } else if (!value.startsWith("/")) {
         setProgressText("正在读取 Research State 并生成真实回复");
         const response = await api.researchChat(selected.id, value, active?.id);
@@ -530,7 +603,7 @@ export default function ResearchWorkspace(props: Props) {
             ? "当前未配置 Qwen 凭据。科研对话已保留，但不会生成伪造回复。"
             : "当前模型不可用，科研对话已保留。");
         const assistant = await persistAssistant(reply, response.source, targetConversationId);
-        if (assistant) enqueueSuggestions(`message:${assistant.id}`, response.actions || [], assistant.id);
+        if (assistant) handleExtractedActions(`message:${assistant.id}`, response.actions || [], assistant.id);
       } else {
         setProgressText("正在理解目标并读取 Research State");
         const response = await onCommand(value);
@@ -646,27 +719,32 @@ export default function ResearchWorkspace(props: Props) {
     </>;
   const runningExperiment = experiments.find(item => ["RUNNING", "WAITING", "QUEUED"].includes(String(item.status).toUpperCase()));
   const pendingDecision = selected?.decisions?.find(decision => decision.status === "PENDING");
+  const researchStateSaved = Boolean(selected?.goal?.trim() && selected?.hypothesis?.trim()
+    && goalDraft.trim() === String(selected?.goal).trim()
+    && hypothesisDraft.trim() === String(selected?.hypothesis).trim());
   const stage = stoppingAutonomous ? "正在停止自主研究" : runningExperiment ? progressText : pendingDecision ? "等待 Policy 审核" : pendingStageGate ? "等待当前 Step 人工审批" : streamText ? "正在分析结果并生成回复" : autonomousBusy ? "正在制定实验方案" : "等待下一条科研指令";
 
   return <>
-    {pendingStageGate ? <FidelityStageResultDialog gate={pendingStageGate} experiment={experiments.find(item => item.id === pendingStageGate.bestExperimentId) || null} constraints={selected?.constraints || {}} manifest={gateVisualization && gateVisualization.manifest.dimension === "3d" ? gateVisualization.manifest : null} densityVolume={gateVisualization?.densityVolume ?? null} history={active?.id === pendingStageGate.bestExperimentId ? resultView.history : []} busy={stageDecisionBusy} onDecision={decideStage}/> : null}
+    {pendingCandidatePlan ? <CandidatePlanDialog proposals={pendingCandidatePlan.proposals} recommendedProposalId={pendingCandidatePlan.recommendedProposalId} busy={candidatePlanBusy} onConfirm={confirmCandidatePlan} onFinish={finishResearch}/> : null}
+    {pendingStageGate ? <FidelityStageResultDialog gate={pendingStageGate} experiments={experiments.filter(item => pendingStageGate.experimentIds.includes(item.id))} constraints={selected?.constraints || {}} manifest={gateVisualization && gateVisualization.manifest.dimension === "3d" ? gateVisualization.manifest : null} densityVolume={gateVisualization?.densityVolume ?? null} history={active?.id === pendingStageGate.bestExperimentId ? resultView.history : []} busy={stageDecisionBusy || finishBusy} onDecision={decideStage} onFinish={finishResearch}/> : null}
     <ParameterConfigurationDialog open={configOpen} config={researchConfig} lane={researchLane} busy={Boolean(runningExperiment)} matlabDiagnostic="科研 MATLAB 任务将通过 Policy、审批和 MATLAB MCP 执行。" runtimeDiagnostic="Runtime 为可选工程链路，不替代科研审批。" onClose={() => setConfigOpen(false)} onApply={(config, lane) => void saveConfig(config, lane)}/>
     <ResearchResultDialog researchId={selected?.id || ""} experiment={resultExperiment} onClose={() => setResultExperiment(null)}/>
     {schemePickerOpen ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="engineering-scheme-import-dialog suggestion-dialog" role="dialog" aria-modal="true" aria-label="导入工程方案"><header><b>导入工程方案</b><button className="dialog-icon-button" title="关闭" aria-label="关闭工程方案导入" onClick={() => setSchemePickerOpen(false)}><X size={14}/></button></header>{engineeringSchemes.length ? <div className="engineering-scheme-import-list">{engineeringSchemes.map(item => <label className={selectedSchemeId === item.id ? "active" : ""} key={item.id}><input type="radio" name="engineering-scheme" checked={selectedSchemeId === item.id} onChange={() => setSelectedSchemeId(item.id)}/><span><b>{item.name}</b><small>Run {item.runId} · {String(item.config.dimension || "3d").toUpperCase()} · {String(item.run?.provenance.backend || item.run?.lane || "solver")}</small><small>柔度 {item.run?.metrics.compliance?.toFixed?.(4) ?? "—"} · 体积分数 {item.run?.metrics.volumeFraction?.toFixed?.(4) ?? "—"} · 灰度率 {item.run?.metrics.grayRatio?.toFixed?.(4) ?? "—"}</small></span></label>)}</div> : <p>没有完整性已验证且运行完成的工程方案。</p>}<footer><button className="outline-button" onClick={() => setSchemePickerOpen(false)}>取消</button><button className="primary-button" disabled={!selectedSchemeId || schemeImportBusy} onClick={() => void importEngineeringScheme()}>{schemeImportBusy ? "导入中…" : "导入并填入"}</button></footer></section></div> : null}
     {reportOpen ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-report-dialog suggestion-dialog" role="dialog" aria-modal="true" aria-label="导出科研报告"><header><b>导出科研报告</b><button className="dialog-icon-button" title="关闭" aria-label="关闭科研报告导出" onClick={() => setReportOpen(false)}><X size={14}/></button></header><label>报告名称<input maxLength={120} value={reportName} onChange={event => setReportName(event.target.value)}/></label><label>生成位置<div className="report-directory-field"><input value={reportDirectory} placeholder="输入完整目录，或点击右侧选择文件夹" onChange={event => setReportDirectory(event.target.value)}/><button className="dialog-icon-button" title="选择文件夹" aria-label="选择报告生成文件夹" onClick={() => void chooseReportDirectory()}><FolderOpen size={15}/></button></div></label><p>默认同时生成 Markdown、PDF 和配套黑白图像资源。</p><label className="report-overwrite-confirm"><input type="checkbox" checked={reportOverwrite} onChange={event => setReportOverwrite(event.target.checked)}/>覆盖同名报告和资源目录</label>{reportStatus ? <div className="report-export-status">{reportStatus}</div> : null}<footer><button className="outline-button" disabled={reportBusy} onClick={() => setReportOpen(false)}>关闭</button><button className="primary-button" disabled={reportBusy || !reportName.trim() || !reportDirectory.trim()} onClick={() => void exportResearchReport()}>{reportBusy ? <LoaderCircle className="spin" size={14}/> : null}{reportBusy ? "生成中…" : "生成报告"}</button></footer></section></div> : null}
+    {reportPreview ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-report-preview suggestion-dialog" role="dialog" aria-modal="true" aria-label="最终科研报告"><header><b>最终科研报告</b><button className="dialog-icon-button" title="关闭" aria-label="关闭最终科研报告" onClick={() => setReportPreview(null)}><X size={14}/></button></header><small>报告依据当前 Research State 自动生成；未完成步骤和缺失指标不会被补造。</small><pre>{reportPreview.markdown}</pre><footer><button className="outline-button" onClick={() => setReportPreview(null)}>关闭</button><button className="primary-button" onClick={() => { setReportPreview(null); openReportExport(); }}>导出 Markdown/PDF</button></footer></section></div> : null}
     <ResizableWorkspaceLayout mode="deep-optimization"
       activitySignal={runningExperiment ? "research-" + (selected?.id || "none") + "-" + runningExperiment.id : autonomousBusy ? "research-planning-" + (selected?.id || "none") : ""}
       completionSignal={completionSignal}
       leftRail={<div className="left-rail-icons"><button aria-label="研究项目" title="研究项目"><FlaskConical size={15}/></button><button aria-label="科研对话" title="科研对话" onClick={() => setCenterTab("chat")}><MessageCircle size={15}/></button><button aria-label="科研审批" title="科研审批" onClick={() => setCenterTab("audit")}><ShieldCheck size={15}/></button></div>}
       left={leftPane}
       center={<section className="v2-center research-center research-chat-workspace">
-        <div className="research-header"><div><h1>{selected?.name || "选择一个 Research"}</h1></div><div className="research-header-actions"><button className="primary-button" disabled={!selected || autonomousBusy || stopBusy || stoppingAutonomous || (!canStopAutonomous && (Boolean(runningExperiment) || Boolean(pendingStageGate)))} onClick={() => void (canStopAutonomous ? stopAutonomous() : autonomous())}>{stoppingAutonomous || stopBusy ? <LoaderCircle className="spin"/> : canStopAutonomous ? <Square size={13}/> : <Play size={14}/>} {stoppingAutonomous || stopBusy ? "正在停止…" : canStopAutonomous ? "停止自主研究" : "运行自主研究"}</button></div></div>
+        <div className="research-header"><div><h1>{selected?.name || "选择一个 Research"}</h1></div><div className="research-header-actions"><button className="outline-button" disabled={!selected || finishBusy || stoppingAutonomous} onClick={() => void finishResearch()}>{finishBusy ? <LoaderCircle className="spin" size={14}/> : <Square size={13}/>} {finishBusy ? "正在结束…" : "结束实验"}</button><button className="primary-button" data-unsaved-research-state={Boolean(selected) && !researchStateSaved ? "true" : undefined} title={Boolean(selected) && !researchStateSaved ? "请先保存研究目标和研究假设" : undefined} disabled={!selected || autonomousBusy || stopBusy || stoppingAutonomous || Boolean(pendingCandidatePlan) || (!canStopAutonomous && (Boolean(runningExperiment) || Boolean(pendingStageGate)))} onClick={() => void (canStopAutonomous ? stopAutonomous() : autonomous())}>{stoppingAutonomous || stopBusy ? <LoaderCircle className="spin"/> : canStopAutonomous ? <Square size={13}/> : <Play size={14}/>} {stoppingAutonomous || stopBusy ? "正在停止…" : canStopAutonomous ? "停止自主研究" : "运行自主研究"}</button></div></div>
         <nav className="v2-tabs research-center-tabs" role="tablist"><button role="tab" aria-selected={centerTab === "chat"} className={"tab" + (centerTab === "chat" ? " active" : "")} onClick={() => setCenterTab("chat")}><MessageCircle size={14}/>科研对话</button><button role="tab" aria-selected={centerTab === "audit"} className={"tab" + (centerTab === "audit" ? " active" : "")} onClick={() => setCenterTab("audit")}><ShieldCheck size={14}/>过程 / 审计</button></nav>
         <div className="research-stage-strip"><span className="connection-dot"/><b>{stage}</b><small>{agentEvent}</small></div>
         {workflowProgress && workflowProgress.stage !== "idle" ? <section className="research-workflow-progress" aria-label="自主研究阶段进度"><header><b>第 {workflowProgress.round} 轮</b><span>{workflowProgress.percent}%</span></header><div className="research-workflow-track"><i style={{ width: `${workflowProgress.percent}%` }}/></div><small>{workflowProgress.steps.find(item => item.status === "active")?.label || (workflowProgress.percent === 100 ? "本轮已完成" : "等待下一阶段")}</small></section> : null}
         {centerTab === "chat" ? <div ref={dropZone} className={"research-chat-main chat-drop-zone" + (dragActive ? " drag-active" : "")} {...dropHandlers}>
           {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
-          <div ref={messageList} className="chat-message-list research-message-list" onScroll={() => { const node = messageList.current; if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State；每个 Step 只运行一次实验并在结束后等待人工审批。</span></div> : null}{active ? <section className="research-result-panel"><header><span>当前优化结果 · {active.id}</span><small>{stepLabel(active.fidelity)} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4 className="field-heading"><span>密度场</span></h4>{(visualizationManifest?.dimension === "3d" && densityVolume) || resultView.liveVolume ? <InteractiveVolumeView density={resultView.liveVolume ?? densityVolume!} field={resultView.liveVolume ?? densityVolume!} mode="density" viewState={volumeViewState} onViewStateChange={setVolumeViewState} surfaceOnly/> : <ScalarMap values={resultView.density} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}<div ref={messageEnd} className="chat-message-end" aria-hidden="true"/></div>
+          <div ref={messageList} className="chat-message-list research-message-list" onScroll={() => { const node = messageList.current; if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State；Step1–Step3 每轮运行三个不同方向候选，Step4 运行一个 MATLAB 验证实验，结束后均等待人工决定。</span></div> : null}{active ? <section className="research-result-panel"><header><span>当前优化结果 · {active.id}</span><small>{stepLabel(active.fidelity)} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4 className="field-heading"><span>密度场</span></h4>{(visualizationManifest?.dimension === "3d" && densityVolume) || resultView.liveVolume ? <InteractiveVolumeView density={resultView.liveVolume ?? densityVolume!} field={resultView.liveVolume ?? densityVolume!} mode="density" viewState={volumeViewState} onViewStateChange={setVolumeViewState} surfaceOnly/> : <ScalarMap values={resultView.density} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}<div ref={messageEnd} className="chat-message-end" aria-hidden="true"/></div>
           {suggestedActions[0] ? <ResearchSuggestionCard action={suggestedActions[0]} currentGoal={selected?.goal || ""} currentHypothesis={selected?.hypothesis || ""} currentConfig={researchConfig} onApply={(action) => void applySuggestion(action)} onCancel={() => setSuggestedActions(queue => queue.slice(1))} /> : null}
           <footer className="chat-composer research-chat-composer">{attachments.length ? <div className="chat-attachment-preview">{attachments.map(item => <figure key={item.id}>{item.preview ? <img src={item.preview} alt={item.fileName || "待发送附件"}/> : <span className="attachment-file-name">{item.fileName || "附件"}</span>}<button aria-label="移除附件" onClick={() => setAttachments(values => values.filter(value => value.id !== item.id))}><X size={12}/></button></figure>)}</div> : null}<div><button type="button" className="chat-composer-action scheme-import-button" aria-label="导入工程方案" title="导入工程方案" onClick={() => void openSchemePicker()} disabled={!selected || sending || schemeImportBusy}><Plus size={15}/></button><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf,.docx,.xlsx,.txt,.md,.csv" multiple onChange={event => void uploadFiles(event.target.files)}/><button type="button" className="chat-composer-action" aria-label="上传科研附件" title="上传附件" onClick={() => fileInput.current?.click()} disabled={sending}><ImagePlus size={15}/></button><textarea value={command} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendResearchMessage(); } }} placeholder="描述目标、询问证据或提出下一项实验…"/><button className="chat-composer-action" aria-label="发送科研消息" title="发送" onClick={() => void sendResearchMessage()} disabled={(!command.trim() && !attachments.length) || sending || busy}>{sending || busy ? <LoaderCircle className="spin" size={15}/> : <Send size={15}/>}</button></div></footer>
         </div> : <div className="research-audit-main">{selected?.events?.slice(-30).map(event => <article className="timeline-item" key={event.id}><span className="timeline-icon"><CheckCircle2 size={14}/></span><div><small>{event.kind} · {new Date(event.created_at).toLocaleTimeString()}</small><h3>{event.title}</h3><p>{event.body}</p></div></article>)}{selected?.decisions?.filter(decision => decision.status === "PENDING").map(decision => <article className="decision-card" key={decision.id}><header><ShieldCheck size={14}/>Policy 审批 <span>{decision.risk}</span></header><h3>{decision.proposal?.fidelity || "实验提案"}</h3><p>{decision.reason}</p><div><button className="approve" onClick={() => onDecision(decision.id, "approve")}>批准并提交</button><button onClick={() => onDecision(decision.id, "reject")}>拒绝</button></div></article>)}</div>}
@@ -712,21 +790,30 @@ export default function ResearchWorkspace(props: Props) {
   </>;
 }
 
-function FidelityStageResultDialog({ gate, experiment, constraints, manifest, densityVolume, history, busy, onDecision }: { gate: ResearchStageGate; experiment:Experiment|null; constraints:Record<string,unknown>; manifest:import("../../types").ResearchVisualizationManifest|null; densityVolume:MatlabVolume|null; history:Array<{iteration:number;compliance:number}>; busy:boolean; onDecision:(action:"REPEAT_STAGE"|"ADVANCE_STAGE"|"APPROVE_FINAL")=>void }) {
-  const successful = Number(gate.result.successful || 0);
+function CandidatePlanDialog({proposals,recommendedProposalId,busy,onConfirm,onFinish}:{proposals:ResearchProposal[];recommendedProposalId:string;busy:boolean;onConfirm:(id:string)=>void;onFinish:()=>void}) {
+  const [selectedId,setSelectedId]=useState(recommendedProposalId);
+  useEffect(()=>setSelectedId(recommendedProposalId),[recommendedProposalId]);
+  return <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-suggestion-card suggestion-dialog candidate-plan-dialog" role="dialog" aria-modal="true" aria-label="Step1 候选方案"><header><b>Step1 · 三候选方案</b><span>求解前确认</span></header><p>以下方案均已通过 Policy 编译，但尚未运行 FEM。“Agent 推荐”只表示规划偏好，不代表实验最优。</p><div className="candidate-plan-list">{proposals.map((proposal,index)=><label key={proposal.id} className={selectedId===proposal.id?"active":""}><input type="radio" name="step1-candidate" checked={selectedId===proposal.id} onChange={()=>setSelectedId(proposal.id)}/><span><b>方案 {index+1}{proposal.id===recommendedProposalId?<em>Agent 推荐</em>:null}</b><small>{proposal.purpose}</small><small>研究方向：{proposal.intent} · 受控因素：{proposal.controlled_factors?.join("、")||"基线"}</small><small>风险：{proposal.risk} · 后端：{proposal.backend}</small></span></label>)}</div><footer><button className="outline-button" disabled={busy} onClick={onFinish}>结束实验并生成报告</button><button className="primary-button" disabled={busy||!selectedId} onClick={()=>onConfirm(selectedId)}>{busy?<LoaderCircle className="spin" size={14}/>:null}确认偏好并运行全部三方案</button></footer></section></div>;
+}
+
+function FidelityStageResultDialog({ gate, experiments, constraints, manifest, densityVolume, history, busy, onDecision, onFinish }: { gate: ResearchStageGate; experiments:Experiment[]; constraints:Record<string,unknown>; manifest:import("../../types").ResearchVisualizationManifest|null; densityVolume:MatlabVolume|null; history:Array<{iteration:number;compliance:number}>; busy:boolean; onDecision:(action:"REPEAT_STAGE"|"ADVANCE_STAGE"|"APPROVE_FINAL",selectedExperimentId?:string)=>void; onFinish:()=>void }) {
   const failed = Number(gate.result.failed || 0);
   const compliance = gate.result.best_compliance;
   const weakPoints = Array.isArray(gate.result.weak_points) ? gate.result.weak_points.map(String) : [];
   const finalStage = gate.stageCode === "STEP4";
-  const artifacts = (experiment?.result?.artifacts || {}) as Record<string,unknown>;
+  const recommended = experiments.find(item=>item.id===gate.bestExperimentId)||null;
+  const [selectedId,setSelectedId]=useState(gate.bestExperimentId||"");
+  useEffect(()=>setSelectedId(gate.bestExperimentId||""),[gate.eventId,gate.bestExperimentId]);
+  const selectedExperiment=experiments.find(item=>item.id===selectedId)||null;
+  const artifacts = (recommended?.result?.artifacts || {}) as Record<string,unknown>;
   const density2d = normalizeResearchField(artifacts.density);
-  const volume = experiment?.result?.constraints?.volume_fraction;
-  const gray = experiment?.result?.quality?.gray_ratio;
-  const connected = experiment?.result?.quality?.connected_components;
+  const volume = recommended?.result?.constraints?.volume_fraction;
+  const gray = recommended?.result?.quality?.gray_ratio;
+  const connected = recommended?.result?.quality?.connected_components;
   const targetVolume = constraints.volume_fraction ?? constraints.volfrac;
   const targetGray = constraints.gray_max;
-  const valid = successful > 0 && Boolean(gate.bestExperimentId) && Boolean(experiment?.result);
-  return <div className="suggestion-dialog-backdrop" role="presentation"><section className={"research-suggestion-card suggestion-dialog fidelity-stage-dialog" + (manifest?.dimension === "3d" ? " fidelity-stage-wide" : "")} role="dialog" aria-modal="true" aria-label={`${stepLabel(gate.stageCode)} 阶段结果`}><header><b>{stepLabel(gate.stageCode)} 阶段结果</b><span>第 {gate.round} 轮</span></header><p>{finalStage ? "Step4 MATLAB 真实网格 3D 已完成；请选择继续当前流程一轮或结束实验。" : `本轮候选方案已完成真实求解与对比，以下为智能体选出的最优方案。选“否”将不以该方案为基线、重新生成三套对比方案；选“是”则以它为基线进入下一阶段。`}</p><div className="stage-result-summary"><b>本轮最优方案</b><span>{gate.bestExperimentId || `无有效结果（${failed} 次失败）`}</span><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "柔度不可用"}</strong></div>{experiment?.result ? <><div className="stage-result-visuals"><section><h4>当前拓扑</h4>{manifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={densityVolume} mode="density" surfaceOnly/> : <ScalarMap values={density2d} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={history.length ? history : normalizeResearchHistory(artifacts.history)}/></section></div><div className="stage-target-comparison"><MetricCompare label="体积分数" current={volume} target={targetVolume}/><MetricCompare label="灰度率" current={gray} target={targetGray}/><MetricCompare label="连通分量" current={connected} target={constraints.connected === true ? 1 : undefined}/><MetricCompare label="柔度" current={compliance} target={constraints.compliance_target}/></div></> : <div className="error-card">本次运行没有可审查的有效制品，只能继续当前流程一轮。</div>}{weakPoints.length ? <div className="stage-diagnosis"><b>当前诊断</b><span>{weakPoints.join("；")}</span></div> : null}<footer><button className="outline-button" disabled={busy} onClick={() => onDecision("REPEAT_STAGE")}>否，重新生成三套对比方案</button><button className="primary-button" disabled={busy || !valid} title={!valid ? "必须先得到可读取的有效结果" : ""} onClick={() => onDecision(finalStage ? "APPROVE_FINAL" : "ADVANCE_STAGE")}>{busy ? <LoaderCircle className="spin" size={14}/> : null}{finalStage ? "结束实验" : "是，以最优方案为基线进入下一阶段"}</button></footer></section></div>;
+  const usable = Boolean(selectedExperiment && selectedExperiment.status==="SUCCESS" && typeof selectedExperiment.result?.objective?.compliance==="number");
+  return <div className="suggestion-dialog-backdrop" role="presentation"><section className={"research-suggestion-card suggestion-dialog fidelity-stage-dialog" + (manifest?.dimension === "3d" ? " fidelity-stage-wide" : "")} role="dialog" aria-modal="true" aria-label={`${stepLabel(gate.stageCode)} 阶段结果`}><header><b>{stepLabel(gate.stageCode)} 阶段结果</b><span>第 {gate.round} 轮</span></header><p>{finalStage ? "Step4 MATLAB 真实网格 3D 已完成。指标只用于审查，是否结束由你决定。" : "本轮三个候选均已到达终态。确定性评估器给出推荐方案，你也可以选择其他具有可用真实结果的方案作为下一 Step 基线。"}</p><div className="stage-candidate-results">{experiments.map(item=>{const itemCompliance=item.result?.objective?.compliance;const itemUsable=item.status==="SUCCESS"&&typeof itemCompliance==="number";return <label key={item.id} className={(selectedId===item.id?"active ":"")+(item.id===gate.bestExperimentId?"recommended":"")}><input type="radio" name="stage-result-candidate" disabled={!itemUsable||finalStage} checked={selectedId===item.id} onChange={()=>setSelectedId(item.id)}/><span><b>{item.id}{item.id===gate.bestExperimentId?<em>评估器推荐</em>:null}</b><small>{item.status} · 柔度 {typeof itemCompliance==="number"?itemCompliance.toFixed(4):"不可用"}</small><small>灰度率 {typeof item.result?.quality?.gray_ratio==="number"?item.result.quality.gray_ratio.toFixed(4):"不可用"} · 连通分量 {item.result?.quality?.connected_components??"不可用"}</small>{item.error?<small className="error-text">{item.error}</small>:null}</span></label>})}</div><div className="stage-result-summary"><b>确定性评估器推荐</b><span>{gate.bestExperimentId || `无可用结果（${failed} 次失败）`}</span><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "柔度不可用"}</strong></div>{recommended?.result ? <><div className="stage-result-visuals"><section><h4>推荐方案拓扑</h4>{manifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={densityVolume} mode="density" surfaceOnly/> : <ScalarMap values={density2d} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={history.length ? history : normalizeResearchHistory(artifacts.history)}/></section></div><div className="stage-target-comparison"><MetricCompare label="体积分数" current={volume} target={targetVolume}/><MetricCompare label="灰度率" current={gray} target={targetGray}/><MetricCompare label="连通分量" current={connected} target={constraints.connected === true ? 1 : undefined}/><MetricCompare label="柔度" current={compliance} target={constraints.compliance_target}/></div></> : <div className="error-card">本轮没有可审查的有效制品。你仍可重复当前 Step 或结束研究。</div>}{weakPoints.length ? <div className="stage-diagnosis"><b>当前诊断</b><span>{weakPoints.join("；")}</span></div> : null}<footer><button className="outline-button" disabled={busy} onClick={() => onDecision("REPEAT_STAGE")}>{finalStage?"继续 Step4 一轮":"重新生成三套对比方案"}</button><button className="outline-button" disabled={busy} onClick={onFinish}>{busy?<LoaderCircle className="spin" size={14}/>:null}结束实验并生成报告</button>{!finalStage?<button className="primary-button" disabled={busy||!usable} title={!usable?"请选择具有可用真实结果的方案":""} onClick={()=>onDecision("ADVANCE_STAGE",selectedId)}>以所选方案进入下一 Step</button>:null}</footer></section></div>;
 }
 
 function MetricCompare({label,current,target}:{label:string;current:unknown;target:unknown}) {
