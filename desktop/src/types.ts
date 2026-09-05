@@ -32,11 +32,16 @@ export interface Experiment {
   error?: string;
 }
 export interface Decision { id: string; status: string; reason: string; risk: string; source?:string; evidence_ids?:string[]; experiment_id?: string; proposal: { parameters?: Record<string, unknown>; fidelity?: string } }
+export interface ResearchProposal {
+  id:string; intent:string; purpose:string; fidelity:string; backend:string;
+  parameters:Record<string,unknown>; estimated_cost?:number; risk:string;
+  safety_status:string; controlled_factors:string[]; status:string; experiment_id?:string|null;
+}
 export interface Research {
   id: string; name: string; goal: string; hypothesis?: string | null; locale: Locale; status: string; mode: string;
   constraints: Record<string, any>; archived_at?: string | null; geometry?:Record<string,any>; material?:Record<string,any>; loads?:Record<string,any>[]; boundary_conditions?:Record<string,any>;
   contract?:Record<string,any>; defaults?:Record<string,any>; budgets?:Record<string,number>; current_round?:number; budget_total: number; budget_used: number;
-  experiments: Experiment[]; events: EventRecord[]; decisions: Decision[];
+  experiments: Experiment[]; events: EventRecord[]; decisions: Decision[]; proposals?:ResearchProposal[];
   subagent_tasks?:SubagentTask[]; hypotheses?:Hypothesis[]; artifact_lineage?:ArtifactLineage[];
   best_experiment?: Experiment; termination_reason?: string; active_run_id?:string;
   workflow?: ResearchWorkflowProgress;

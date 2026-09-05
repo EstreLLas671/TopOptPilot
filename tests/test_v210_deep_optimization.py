@@ -1,6 +1,8 @@
 import threading
 import sqlite3
 
+import pytest
+
 from topoptpilot.evaluator.evaluator import evaluate_result
 from topoptpilot.fidelity.manager import FidelityManager
 from topoptpilot.nomenclature import normalize_mode, normalize_stage, stage_label
@@ -116,9 +118,13 @@ def test_step1_authorization_covers_a_three_direction_round(tmp_path, monkeypatc
     monkeypatch.setattr(service, "_send_pi_or_fallback", lambda *_args: None)
     monkeypatch.setattr(service, "run_experiment", lambda _id: None)
     try:
-        research = service.create_research({"name":"Compare","goal":"Human controlled","mode":"DEEP_OPTIMIZATION"})
-        service.start_autonomous_research(research["id"])
-        created = [service.create_experiment(research["id"], _experiment("STEP1")) for _ in range(3)]
+        research = service.create_research({"name":"Compare","goal":"Human controlled","hypothesis":"三个方向会产生可比较证据","mode":"DEEP_OPTIMIZATION"})
+        planned = service.start_autonomous_research(research["id"])
+        plan = planned["defaults"]["autonomous_workflow"]["candidate_plan"]
+        assert len(plan["proposal_ids"]) == 3
+        assert service.store.list_experiments(research["id"]) == []
+        service.confirm_candidate_plan(research["id"], plan["recommended_proposal_id"])
+        created = service.store.list_experiments(research["id"])
         assert all(item["fidelity"].startswith("Step1") for item in created)
         try:
             service.create_experiment(research["id"], _experiment("STEP1"))
@@ -128,7 +134,7 @@ def test_step1_authorization_covers_a_three_direction_round(tmp_path, monkeypatc
             raise AssertionError("a single human authorization created more than three Step1 candidates")
     finally: service.close()
 
-def test_failed_but_real_result_can_advance(tmp_path):
+def test_failed_result_with_partial_metrics_cannot_advance(tmp_path):
     service = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
     try:
         research = service.create_research({"name":"Coarse","goal":"Screen first","mode":"DEEP_OPTIMIZATION"})
@@ -136,10 +142,10 @@ def test_failed_but_real_result_can_advance(tmp_path):
         service.store.update_experiment("E01", result={"objective":{"compliance":3.99},"constraints":{"volume_fraction":.4},"quality":{"gray_ratio":.93,"connected_components":2},"artifacts":{"density":[[1.]],"history":[{"iteration":1,"compliance":3.99}]}})
         service.store.append_event(research["id"],"HUMAN","FIDELITY_STAGE_AWAITING_DECISION","Step1 complete",payload={"stage_code":"STEP1","internal_fidelity":"STEP1","round":1,"experiment_ids":["E01"],"best_experiment_id":None,"result":{"successful":0,"failed":1}})
         service._send_pi_or_fallback = lambda *_args: None
-        decided = service.decide_fidelity_stage(research["id"], "ADVANCE_STAGE")
-        assert decided["defaults"]["autonomous_workflow"]["active_fidelity"] == "STEP2"
-        authorization = decided["defaults"]["autonomous_workflow"]["step_authorization"]
-        assert authorization["candidates_limit"] == 3 and authorization["experiment_ids"] == []
+        with pytest.raises(ValueError, match="没有有效真实结果"):
+            service.decide_fidelity_stage(research["id"], "ADVANCE_STAGE")
+        decided = service.decide_fidelity_stage(research["id"], "REPEAT_STAGE")
+        assert decided["defaults"]["autonomous_workflow"]["active_fidelity"] == "STEP1"
     finally: service.close()
 
 def test_advance_blocked_until_a_usable_result_exists(tmp_path):
@@ -325,7 +331,7 @@ def test_start_resumes_unconsumed_step4_authorization(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_send_pi_or_fallback", lambda *_args: None)
     monkeypatch.setattr(service, "run_experiment", lambda _id: None)
     try:
-        research = service.create_research({"name":"Resume","goal":"从Step4恢复","mode":"DEEP_OPTIMIZATION"})
+        research = service.create_research({"name":"Resume","goal":"从Step4恢复","hypothesis":"Step4 会复核 Step3 基线","mode":"DEEP_OPTIMIZATION"})
         defaults = dict(research.get("defaults") or {})
         defaults["autonomous_workflow"] = {"active_fidelity":"STEP4",
             "step_authorization":{"stage":"STEP4","gate_event_id":"3","consumed":False,
@@ -375,3 +381,74 @@ def test_legacy_database_is_backed_up_and_names_are_migrated(tmp_path):
         with sqlite3.connect(db_path) as db:
             assert db.execute("PRAGMA user_version").fetchone()[0] == 210
     finally: reopened.close()
+
+
+def test_autonomous_start_requires_persisted_goal_and_hypothesis(tmp_path):
+    service = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    try:
+        research = service.create_research({
+            "name": "Missing hypothesis", "goal": "降低柔度",
+            "mode": "DEEP_OPTIMIZATION",
+        })
+        with pytest.raises(ValueError, match="保存研究目标和研究假设"):
+            service.start_autonomous_research(research["id"])
+        assert service.store.list_experiments(research["id"]) == []
+    finally:
+        service.close()
+
+
+def test_user_selected_usable_candidate_becomes_next_step_baseline(tmp_path, monkeypatch):
+    service = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    monkeypatch.setattr(service, "_send_pi_or_fallback", lambda *_args: None)
+    try:
+        research = service.create_research({
+            "name": "Human choice", "goal": "比较候选",
+            "hypothesis": "不同受控方向会产生不同结果", "mode": "DEEP_OPTIMIZATION",
+        })
+        for experiment_id, compliance in (("E01", 1.0), ("E02", 2.0), ("E03", 3.0)):
+            service.store.create_experiment({
+                **_experiment("STEP1"), "id": experiment_id,
+                "research_id": research["id"], "status": "SUCCESS", "round_number": 1,
+            })
+            service.store.update_experiment(experiment_id, result={
+                "objective": {"compliance": compliance},
+                "constraints": {"volume_fraction": .4},
+                "quality": {"gray_ratio": .02, "connected_components": 1},
+                "artifacts": {},
+            })
+        service.store.append_event(
+            research["id"], "HUMAN", "FIDELITY_STAGE_AWAITING_DECISION", "Step1 complete",
+            payload={"stage_code": "STEP1", "round": 1,
+                     "experiment_ids": ["E01", "E02", "E03"],
+                     "best_experiment_id": "E01", "result": {"successful": 3, "failed": 0}},
+        )
+        decided = service.decide_fidelity_stage(
+            research["id"], "ADVANCE_STAGE", selected_experiment_id="E02")
+        authorization = decided["defaults"]["autonomous_workflow"]["step_authorization"]
+        assert authorization["baseline_experiment_id"] == "E02"
+    finally:
+        service.close()
+
+
+def test_failed_partial_result_is_evidence_but_not_a_usable_baseline():
+    assert not ResearchService._has_usable_stage_result({
+        "status": "FAILED",
+        "result": {"objective": {"compliance": 12.5}},
+    })
+
+
+def test_user_can_finish_before_step4_and_preview_truthful_report(tmp_path):
+    service = ResearchService(data_dir=tmp_path, enable_agent_runtime=False)
+    try:
+        research = service.create_research({
+            "name": "Early finish", "goal": "检查流程",
+            "hypothesis": "当前证据可能不足", "mode": "DEEP_OPTIMIZATION",
+        })
+        finished = service.finish_research(research["id"])
+        assert finished["status"] == "STOPPED"
+        assert finished["termination_reason"] == "USER_FINISHED"
+        preview = service.report_preview(research["id"])
+        assert "用户决定提前结束研究" in preview["markdown"]
+        assert "不得据此宣称研究成功" in preview["markdown"]
+    finally:
+        service.close()

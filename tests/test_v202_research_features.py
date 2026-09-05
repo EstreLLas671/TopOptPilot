@@ -173,7 +173,7 @@ def test_workflow_progress_reports_no_successful_route_without_inventing_a_best(
     }
     workflow = ResearchService._workflow_progress(research)
     selection = next(item for item in workflow["steps"] if item["id"] == "selection")
-    assert selection["result"] == "本轮没有真实成功方案"
+    assert selection["result"] == "本轮没有可推荐的真实成功方案"
     assert selection["reflection"] == "无成功结果时不指定最优方案。"
     assert selection["evidenceIds"] == ["E01", "E02", "E03"]
 

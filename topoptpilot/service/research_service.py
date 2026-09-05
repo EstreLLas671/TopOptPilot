@@ -522,6 +522,8 @@ class ResearchService:
     def start_autonomous_research(self, research_id: str) -> dict[str, Any]:
         """Start (or resume) the deep-optimization loop; every completed step waits for the user's decision."""
         research = self._require_research(research_id)
+        if not str(research.get("goal") or "").strip() or not str(research.get("hypothesis") or "").strip():
+            raise ValueError("请先保存研究目标和研究假设")
         if self._pending_fidelity_stage_gate(research_id):
             raise ValueError("当前 Step 结果仍在等待人工审批，请先在弹窗中作出选择")
         status = str(research.get("status") or "").upper()
@@ -534,6 +536,8 @@ class ResearchService:
             research = self._require_research(research_id)
         defaults = dict(research.get("defaults") or {})
         workflow = dict(defaults.get("autonomous_workflow") or {})
+        if dict(workflow.get("candidate_plan") or {}).get("status") == "AWAITING_CONFIRMATION":
+            return self.get_research(research_id)
         # 存在未消费的 Step 授权时从该 Step 恢复（例如上一轮回退线程异常
         # 中断后遗留的 STEP4 验证授权），而不是把用户硬拽回 Step1。
         existing_authorization = dict(workflow.get("step_authorization") or {})
@@ -588,6 +592,9 @@ class ResearchService:
             payload={"workflow_step": "planning", "status": "active", "required_plans": 3},
             source="RESEARCH_ORCHESTRATOR",
         )
+        if normalize_stage(workflow.get("active_fidelity")) == "STEP1":
+            self._safe_mode_plan_round(self._require_research(research_id), preview_only=True)
+            return self.get_research(research_id)
         language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
         prompt = (
             "You are the primary Pi Research Agent. Begin at Step1. "
@@ -610,6 +617,106 @@ class ResearchService:
         threading.Thread(target=self._send_pi_or_fallback,
                          args=(research_id, prompt, "experiment-planning"), daemon=True).start()
         return self.get_research(research_id)
+
+    def confirm_candidate_plan(self, research_id: str, preferred_proposal_id: str) -> dict[str, Any]:
+        """Record the user's preferred Step1 plan, then submit all three previews."""
+        research = self._require_research(research_id)
+        defaults = dict(research.get("defaults") or {})
+        workflow = dict(defaults.get("autonomous_workflow") or {})
+        plan = dict(workflow.get("candidate_plan") or {})
+        proposal_ids = [str(item) for item in (plan.get("proposal_ids") or [])]
+        if plan.get("status") != "AWAITING_CONFIRMATION" or len(proposal_ids) != 3:
+            raise ValueError("当前没有等待确认的 Step1 三候选方案")
+        if preferred_proposal_id not in proposal_ids:
+            raise ValueError("偏好方案不属于当前 Step1 候选组")
+        proposals = [self.store.get_proposal(item) for item in proposal_ids]
+        if any(not item or item.get("status") != "PREVIEW" for item in proposals):
+            raise ValueError("Step1 候选方案已失效，请重新规划")
+        plan.update({"status": "CONFIRMED", "preferred_proposal_id": preferred_proposal_id})
+        workflow["candidate_plan"] = plan
+        defaults["autonomous_workflow"] = workflow
+        self.store.update_research_json(research_id, defaults=defaults)
+        self.store.update_research(research_id, status="RUNNING", termination_reason=None)
+        self.store.append_event(
+            research_id, EventKind.HUMAN.value, "CANDIDATE_PLAN_CONFIRMED",
+            "用户已选择偏好方案；本轮三个候选将全部进行真实求解。",
+            payload={"preferred_proposal_id": preferred_proposal_id,
+                     "proposal_ids": proposal_ids}, source="USER")
+        submitted: list[str] = []
+        for proposal_id in proposal_ids:
+            submitted.append(self.submit_proposal(research_id, proposal_id)["experiment"]["id"])
+        self.store.append_event(
+            research_id, EventKind.SYSTEM.value, "ROUND_STARTED",
+            f"Step1 三候选已提交：{submitted}",
+            payload={"stage": "STEP1", "required_plans": 3,
+                     "preferred_proposal_id": preferred_proposal_id,
+                     "experiment_ids": submitted}, source="RESEARCH_ORCHESTRATOR")
+        return self.get_research(research_id)
+
+    def _finalize_user_finish(self, research_id: str) -> dict[str, Any]:
+        """Finish by human decision without turning target metrics into a gate."""
+        research = self._require_research(research_id)
+        gate = self._pending_fidelity_stage_gate(research_id)
+        if gate:
+            self.store.append_event(
+                research_id, EventKind.HUMAN.value, "FIDELITY_STAGE_DECISION",
+                "用户选择结束研究；未完成步骤和目标差距保留在报告中。",
+                payload={"gate_event_id": str(gate.get("id")),
+                         "stage_code": (gate.get("payload") or {}).get("stage_code"),
+                         "decision": "FINISH_RESEARCH"}, source="USER")
+        for proposal in self.store.list_proposals(research_id):
+            if str(proposal.get("status") or "").upper() == "PREVIEW":
+                self.store.update_proposal(proposal["id"], status="CANCELLED")
+        defaults = dict(research.get("defaults") or {})
+        workflow = dict(defaults.get("autonomous_workflow") or {})
+        if workflow.get("candidate_plan"):
+            workflow["candidate_plan"] = {
+                **dict(workflow["candidate_plan"]), "status": "CANCELLED"}
+        workflow["finish_requested"] = False
+        defaults["autonomous_workflow"] = workflow
+        self.store.update_research_json(research_id, defaults=defaults)
+        self.store.update_research(
+            research_id, status="STOPPED", termination_reason="USER_FINISHED")
+        self.store.append_event(
+            research_id, EventKind.HUMAN.value, "USER_FINISHED_RESEARCH",
+            "用户决定结束研究；报告将如实记录未完成步骤、失败结果和缺失指标。",
+            source="USER")
+        try:
+            paths = self.report_generator.generate(self.get_research(research_id))
+            self.store.append_event(
+                research_id, EventKind.SYSTEM.value, "FINAL REPORT READY",
+                str(paths["markdown"]),
+                payload={key: str(value) for key, value in paths.items()},
+                source="REPORT_WRITER", event_type="REPORT_READY")
+        except Exception as report_error:
+            self.store.append_event(
+                research_id, EventKind.SYSTEM.value, "FINAL REPORT FAILED",
+                str(report_error))
+        return self.get_research(research_id)
+
+    def finish_research(self, research_id: str) -> dict[str, Any]:
+        """End at any Step; active workers are reconciled before final reporting."""
+        research = self._require_research(research_id)
+        status = str(research.get("status") or "").upper()
+        active = any(str(item.get("status") or "").upper() in {
+            "WAITING", "QUEUED", "RUNNING", "PENDING"
+        } for item in self.store.list_experiments(research_id))
+        if active or status in {"RUNNING", "STOPPING", "STOP_FAILED"}:
+            defaults = dict(research.get("defaults") or {})
+            workflow = dict(defaults.get("autonomous_workflow") or {})
+            workflow["finish_requested"] = True
+            defaults["autonomous_workflow"] = workflow
+            self.store.update_research_json(research_id, defaults=defaults)
+            return self.stop_autonomous_research(research_id)
+        return self._finalize_user_finish(research_id)
+
+    def report_preview(self, research_id: str) -> dict[str, Any]:
+        paths = self.report_generator.generate(self.get_research(research_id))
+        return {
+            "markdown": paths["markdown"].read_text(encoding="utf-8"),
+            "markdownPath": str(paths["markdown"]),
+            "pdfPath": str(paths["pdf"]),
+        }
 
     def stop_autonomous_research(self, research_id: str) -> dict[str, Any]:
         """Stop every active autonomous child and expose STOPPED only after reconciliation."""
@@ -696,6 +803,11 @@ class ResearchService:
                             "自主研究后台链路已全部停止；下次运行将建立空白活动轮次。",
                             payload={"termination_reason": "USER_STOPPED"},
                         )
+                        refreshed = self._require_research(research_id)
+                        finish_requested = bool((((refreshed.get("defaults") or {}).get(
+                            "autonomous_workflow") or {}).get("finish_requested")))
+                        if finish_requested:
+                            self._finalize_user_finish(research_id)
                 except Exception:
                     self.store.update_research(research_id, status="STOP_FAILED")
 
@@ -736,10 +848,13 @@ class ResearchService:
 
     @staticmethod
     def _has_usable_stage_result(item: dict[str, Any]) -> bool:
-        """A screening Step may legally miss the final targets; any real FEM
-        metrics from the deterministic evaluator count as usable evidence."""
-        if item.get("status") == "SUCCESS" and item.get("result"):
-            return True
+        """Only a solver-valid result may become the next Step baseline.
+
+        Failed experiments remain scientific evidence, including any partial
+        metrics they contain, but are never selectable as a baseline.
+        """
+        if str(item.get("status") or "").upper() != "SUCCESS":
+            return False
         objective = (item.get("result") or {}).get("objective") or {}
         compliance = objective.get("compliance")
         return isinstance(compliance, (int, float)) and not isinstance(compliance, bool)
@@ -756,14 +871,17 @@ class ResearchService:
                 return event
         return None
 
-    def decide_fidelity_stage(self, research_id: str, decision: str | bool) -> dict[str, Any]:
+    def decide_fidelity_stage(self, research_id: str, decision: str | bool,
+                              selected_experiment_id: str | None = None) -> dict[str, Any]:
         # Gate lookup and consumption must be one critical section; otherwise
         # two windows can both act on the same pending stage event.
         with self._completion_lock:
-            return self._decide_fidelity_stage_locked(research_id, decision)
+            return self._decide_fidelity_stage_locked(
+                research_id, decision, selected_experiment_id=selected_experiment_id)
 
     def _decide_fidelity_stage_locked(self, research_id: str,
-                                      decision: str | bool) -> dict[str, Any]:
+                                      decision: str | bool,
+                                      selected_experiment_id: str | None = None) -> dict[str, Any]:
         research = self._require_research(research_id)
         gate = self._pending_fidelity_stage_gate(research_id)
         if not gate: raise ValueError('当前没有等待确认的保真度阶段结果')
@@ -775,44 +893,32 @@ class ResearchService:
         is_final = stage_code == 'STEP4'
         if action == 'APPROVE_FINAL':
             if not is_final: raise ValueError('当前阶段不是最终阶段')
-            ids = set(payload.get('experiment_ids') or [])
-            all_experiments = self.store.list_experiments(research_id)
-            usable_codes = {normalize_stage(item.get('fidelity'))
-                            for item in all_experiments if self._has_usable_stage_result(item)}
-            step3_ids = {item['id'] for item in all_experiments
-                         if normalize_stage(item.get('fidelity')) == 'STEP3'
-                         and self._has_usable_stage_result(item)}
-            if not {'STEP1', 'STEP2', 'STEP3', 'STEP4'}.issubset(usable_codes):
-                raise ValueError('结束实验前必须完成 Step1、Step2、Step3、Step4 全部真实有效流程')
-            successful = [item for item in all_experiments
-                          if item.get('status') == 'SUCCESS' and item.get('result')]
-            if not any(
-                item.get('id') in ids and item.get('warm_start') in step3_ids
-                and self._matches_authoritative_step4(item, research)
-                for item in successful
-            ):
-                raise ValueError('Step4 没有可结束且参数匹配的 MATLAB 真实成功结果')
             self.store.append_event(research_id, EventKind.HUMAN.value, 'FIDELITY_STAGE_DECISION', '用户批准最终阶段结果', payload={'gate_event_id': str(gate.get('id')), 'stage_code': stage_code, 'decision': action}, source='USER')
-            self.store.update_research(research_id, status='STOPPED', termination_reason='FINAL_RESULT_APPROVED')
-            return self.get_research(research_id)
+            return self._finalize_user_finish(research_id)
         if action == 'REPEAT_STAGE': target_stage = stage_code
         else:
             if is_final: raise ValueError('最终阶段必须使用 APPROVE_FINAL')
-            gate_ids = set(payload.get('experiment_ids') or [])
+            gate_ids = {str(item) for item in (payload.get('experiment_ids') or [])}
+            all_experiments = self.store.list_experiments(research_id)
+            chosen_id = str(selected_experiment_id or payload.get('best_experiment_id') or '')
+            if not chosen_id:
+                chosen_id = next((str(item['id']) for item in all_experiments
+                                  if item.get('id') in gate_ids
+                                  and self._has_usable_stage_result(item)), '')
             stage_result = any(
-                item.get('id') in gate_ids
+                item.get('id') == chosen_id and item.get('id') in gate_ids
                 and normalize_stage(item.get('fidelity')) == stage_code
                 and self._has_usable_stage_result(item)
-                for item in self.store.list_experiments(research_id)
+                for item in all_experiments
             )
             if not stage_result:
-                raise ValueError('当前阶段没有有效真实结果，暂不能推进；请重复本阶段或检查求解环境')
+                raise ValueError('当前阶段没有有效真实结果；所选方案不能作为下一 Step 基线')
             target_stage = f'STEP{rank[stage_code] + 2}'
-        self.store.append_event(research_id, EventKind.HUMAN.value, 'FIDELITY_STAGE_DECISION', f'{action}: {stage_code} -> {target_stage}', payload={'gate_event_id': str(gate.get('id')), 'stage_code': stage_code, 'decision': action}, source='USER')
+        self.store.append_event(research_id, EventKind.HUMAN.value, 'FIDELITY_STAGE_DECISION', f'{action}: {stage_code} -> {target_stage}', payload={'gate_event_id': str(gate.get('id')), 'stage_code': stage_code, 'decision': action, 'selected_experiment_id': selected_experiment_id}, source='USER')
         defaults = dict(research.get('defaults') or {})
         workflow = dict(defaults.get('autonomous_workflow') or {})
         workflow['active_fidelity'] = target_stage
-        baseline_id = str(payload.get('best_experiment_id') or '') if action == 'ADVANCE_STAGE' else ''
+        baseline_id = chosen_id if action == 'ADVANCE_STAGE' else ''
         workflow['step_authorization'] = {
             'stage': target_stage, 'gate_event_id': str(gate.get('id')),
             'consumed': False, 'authorized_by': action,
@@ -829,7 +935,7 @@ class ResearchService:
                 '(volfrac, beta, beta_max, projection, controller, move) and re-solve on the '
                 'MATLAB fine grid with the authoritative configuration.')
         elif action == 'ADVANCE_STAGE':
-            plan_instruction = (f'The user approved the round-best scheme {baseline_id or ""} as the '
+            plan_instruction = (f'The user selected scheme {baseline_id or ""} as the '
                 f'baseline. Run one comparison round at {target_stage}: derive exactly three '
                 'different-direction candidate plans from that baseline; each candidate may vary only '
                 'volfrac or one hidden whitelist factor (beta, beta_max, projection, controller, move), '
@@ -946,7 +1052,7 @@ class ResearchService:
                 return
         self._safe_mode_plan_round(research)
 
-    def _safe_mode_plan_round(self, research: dict[str, Any]) -> None:
+    def _safe_mode_plan_round(self, research: dict[str, Any], *, preview_only: bool = False) -> None:
         """Deterministic fallback for one authorized round.
 
         A round with an approved baseline derives its candidates from that
@@ -1061,6 +1167,29 @@ class ResearchService:
             self.store.append_event(research_id, EventKind.HUMAN.value,
                                     "DEEP_OPTIMIZATION_PLAN_AWAITING_ACTION",
                                     f"当前阶段没有可提交的新受控方案（{detail}）；研究保持未结束状态，等待用户调整或重试。")
+            return
+        if preview_only:
+            defaults = dict(self._require_research(research_id).get("defaults") or {})
+            workflow = dict(defaults.get("autonomous_workflow") or {})
+            proposal_ids = [str(item["id"]) for item in selected]
+            # Before any FEM evidence exists, recommendation is a planning
+            # preference only.  It must never be described as an optimum.
+            workflow["candidate_plan"] = {
+                "stage": active_stage,
+                "status": "AWAITING_CONFIRMATION",
+                "proposal_ids": proposal_ids,
+                "recommended_proposal_id": proposal_ids[0],
+            }
+            defaults["autonomous_workflow"] = workflow
+            self.store.update_research_json(research_id, defaults=defaults)
+            self.store.update_research(research_id, status="READY", termination_reason=None)
+            self.store.append_event(
+                research_id, EventKind.HUMAN.value,
+                "CANDIDATE_PLAN_AWAITING_CONFIRMATION",
+                "Step1 已生成三套受 Policy 约束的候选方案；Agent 推荐其中一套作为偏好，等待用户确认后再提交全部三套。",
+                payload={"stage": active_stage, "proposal_ids": proposal_ids,
+                         "recommended_proposal_id": proposal_ids[0]},
+                source="EXPERIMENT_PLANNER")
             return
         submitted = 0
         for proposal in selected:
@@ -1205,7 +1334,7 @@ class ResearchService:
             ("approval", "Policy 与安全校验"),
             ("experiments", "执行当前 Step 的一轮候选实验"),
             ("comparison", "整理当前真实结果"),
-            ("selection", "记录当前 Step 最佳有效结果"),
+            ("selection", "记录当前 Step 的评估器推荐结果"),
             ("diagnosis", "问题诊断与阶段反思"),
             ("next_round", "形成下一轮建议或终止结论"),
         ]
@@ -1249,11 +1378,22 @@ class ResearchService:
             if step_key:
                 reflections_by_step.setdefault(step_key, []).append(event)
         best = research.get("best_experiment") or {}
+        plan = ((research.get("defaults") or {}).get("autonomous_workflow") or {}).get("candidate_plan") or {}
+        plan_ids = {str(value) for value in (plan.get("proposal_ids") or [])}
+        planned_proposals = [
+            item for item in (research.get("proposals") or [])
+            if str(item.get("id") or "") in plan_ids
+        ]
+        awaiting_candidate_confirmation = str(plan.get("status") or "") == "AWAITING_CONFIRMATION"
 
         statuses: dict[str, str] = {key: "pending" for key, _ in labels}
         if "ROUND_STARTED" in titles or "WORKFLOW_CONTEXT_COMPLETED" in titles:
             statuses["context"] = "completed"
             statuses["planning"] = "active"
+        if awaiting_candidate_confirmation:
+            statuses["context"] = "completed"
+            statuses["planning"] = "completed"
+            statuses["approval"] = "active"
         if current_experiments or any(title == "THREE_PLAN_SUBMITTED" for title in titles):
             statuses["planning"] = "completed"
             statuses["approval"] = "active" if pending else "completed"
@@ -1273,7 +1413,9 @@ class ResearchService:
         percent = int(round(100 * completed_units / len(labels)))
         active_key = next((key for key, _ in labels if statuses[key] == "active"), None)
         stage = active_key or ("completed" if percent == 100 else "idle")
-        experiment_result = f"已完成 {len(terminal)} / {max(1, len(current_experiments))} 次当前 Step 实验"
+        plan_stage = normalize_stage(plan.get("stage") or "STEP1")
+        expected_experiments = 1 if plan_stage == "STEP4" else 3
+        experiment_result = f"已完成 {len(terminal)} / {max(expected_experiments, len(current_experiments))} 次当前 Step 实验"
         experiment_reflection = "；".join(
             str((event.get("payload") or {}).get("reflection") or event.get("body") or "")
             for event in reflections_by_step.get("experiments", [])[-3:]
@@ -1289,12 +1431,12 @@ class ResearchService:
                 reflection = "证据优先级：工程基线 → 当前真实实验 → 历史最优。"
                 next_action = "生成本轮受控候选方案组"
             elif key == "planning":
-                result = f"已形成 {len(current_experiments)} 个受控候选方案"
+                result = f"已形成 {len(planned_proposals) or len(current_experiments)} 个受控候选方案"
                 if reflections_by_step.get(key):
                     reflection = str((reflections_by_step[key][-1].get("payload") or {}).get("reflection") or "") or None
                 next_action = "进入 Policy 编译与审批"
             elif key == "approval":
-                result = f"待审批 {len(pending)} 项" if pending else ("审批边界已满足" if current_experiments else None)
+                result = "等待用户确认候选偏好" if awaiting_candidate_confirmation else (f"待审批 {len(pending)} 项" if pending else ("审批边界已满足" if current_experiments else None))
                 if reflections_by_step.get(key):
                     reflection = str((reflections_by_step[key][-1].get("payload") or {}).get("reflection") or "") or None
                 next_action = "批准后执行真实实验" if pending else "执行候选实验"
@@ -1307,12 +1449,12 @@ class ResearchService:
                 event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
                 reflection = str(((event or {}).get("payload") or {}).get("reflection") or "失败方案只保留失败原因，不补造指标。")
             elif key == "selection" and batch_complete:
-                result = f"当前最优：{best.get('id')}" if best else "本轮没有真实成功方案"
+                result = f"评估器推荐：{best.get('id')}" if best else "本轮没有可推荐的真实成功方案"
                 evidence_ids = [str(best.get("id"))] if best else current_ids
                 event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
                 reflection = str(((event or {}).get("payload") or {}).get("reflection") or "") or None
             elif key == "diagnosis" and batch_complete:
-                result = "已完成最优方案弱点诊断与逐方案反思"
+                result = "已完成推荐方案弱点诊断与逐方案反思"
                 event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
                 reflection = str(((event or {}).get("payload") or {}).get("reflection") or experiment_reflection or "诊断仅引用真实实验与工程基线。")
             elif key == "next_round" and statuses[key] == "completed":
@@ -1343,6 +1485,7 @@ class ResearchService:
         research["experiments"] = self.store.list_experiments(research_id)
         research["events"] = self.store.list_events(research_id)
         research["decisions"] = self.store.list_decisions(research_id)
+        research["proposals"] = self.store.list_proposals(research_id)
         research["subagent_tasks"] = self.store.list_subagent_tasks(research_id)
         research["hypotheses"] = self.store.list_hypotheses(research_id)
         research["artifact_lineage"] = self.store.list_artifacts(research_id)
