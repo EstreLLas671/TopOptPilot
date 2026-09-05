@@ -18,6 +18,14 @@ class EvidenceCaseRunner:
         self.service, self.timeout = service, timeout
         self.root = Path(__file__).resolve().parent
 
+    @staticmethod
+    def _met_targets(item: dict) -> bool:
+        """契约阈值是审查条件：达标与否看评估器结论，旧记录回退到状态。"""
+        evaluation = (item.get("result") or {}).get("evaluation") or {}
+        if "feasible" in evaluation:
+            return bool(evaluation["feasible"])
+        return item.get("status") == "SUCCESS"
+
     def run(self, case_id: str) -> dict:
         case_id = case_id.upper()
         definition = self._definition(case_id)
@@ -52,7 +60,7 @@ class EvidenceCaseRunner:
         budget_after_explore = 8 - 1 - len(explored)
         best_gray = float(best["result"]["quality"].get("gray_ratio", 1.0))
         for _ in range(budget_after_explore):
-            if best["status"] == "SUCCESS":
+            if self._met_targets(best):
                 break
             refined = self._intent(rid, "REDUCE_GRAYNESS", source_experiment=best["id"])
             if not refined: break
@@ -93,14 +101,14 @@ class EvidenceCaseRunner:
         baseline = self._intent(rid, "ESTABLISH_BASELINE")[0]
         explored = self._intent(rid, "EXPLORE_PARAMETER", factor="beta",
                                 source_experiment=baseline["id"])
-        feasible = [item for item in explored if item["status"] == "SUCCESS"]
+        feasible = [item for item in explored if self._met_targets(item)]
         current = (min(feasible, key=lambda item: item["result"]["objective"]["compliance"])
                    if feasible else min(explored, key=lambda item: (
                        item["result"]["quality"].get("connected_components", 1) != 1,
                        item["result"]["quality"].get("gray_ratio", 1))))
         budget_after_explore = 8 - 1 - len(explored)
         for _ in range(budget_after_explore):
-            if current["status"] == "SUCCESS": break
+            if self._met_targets(current): break
             refined = self._intent(rid, "REDUCE_GRAYNESS", source_experiment=current["id"])
             if not refined: break
             current = refined[0]

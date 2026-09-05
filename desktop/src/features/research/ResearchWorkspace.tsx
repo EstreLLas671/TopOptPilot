@@ -14,6 +14,13 @@ import ResizableWorkspaceLayout from "../../components/ResizableWorkspaceLayout"
 import { CHAT_IMAGE_MAX_COUNT, imageCandidateFromFile, useChatImageDrop, type DroppedImageCandidate } from "../../chat-image-drop";
 import ResearchResultDialog from "./ResearchResultDialog";
 
+const normalizeStep = (value: unknown): ResearchStageGate["stageCode"] => {
+  const code = String(value || "STEP1").toUpperCase().split(/\s+/)[0];
+  return ({ F0:"STEP1", F1:"STEP2", F2:"STEP3", F3:"STEP4" } as Record<string,ResearchStageGate["stageCode"]>)[code]
+    || (code as ResearchStageGate["stageCode"]);
+};
+const stepLabel = (value: unknown) => `Step${normalizeStep(value).replace("STEP", "")}`;
+
 type ArtifactIndex = { experiments: Array<{ experimentId: string; status: string; fidelity: string; backend: string; provenance: Record<string, string>; files: Array<{ relativePath: string; sizeBytes: number; sha256: string }>; metrics: Record<string, number | null> }> };
 type CommandResult = { ok: boolean; message: string; action: string; data: Record<string, unknown> };
 type Props = {
@@ -81,8 +88,7 @@ export default function ResearchWorkspace(props: Props) {
   const [reportStatus, setReportStatus] = useState("");
   const [visualizationManifest, setVisualizationManifest] = useState<import("../../types").ResearchVisualizationManifest | null>(null);
   const [densityVolume, setDensityVolume] = useState<MatlabVolume | null>(null);
-  const [stressVolume, setStressVolume] = useState<MatlabVolume | null>(null);
-  const [resultField, setResultField] = useState<"density" | "stress">("density");
+  const [gateVisualization, setGateVisualization] = useState<{ manifest: import("../../types").ResearchVisualizationManifest; densityVolume: MatlabVolume | null } | null>(null);
   const [volumeViewState, setVolumeViewState] = useState<ViewState | undefined>(undefined);
   const fileInput = useRef<HTMLInputElement>(null);
   const dropZone = useRef<HTMLDivElement>(null);
@@ -123,7 +129,17 @@ export default function ResearchWorkspace(props: Props) {
   }), [active]);
   const resultView = useMemo(() => {
     const artifacts = (active?.result?.artifacts ?? {}) as Record<string, unknown>;
-    return { density: normalizeResearchField(artifacts.density), history: normalizeResearchHistory(artifacts.history) };
+    const rawDensity = artifacts.density;
+    const densityIs3d = Array.isArray(rawDensity) && rawDensity.length > 0
+      && Array.isArray(rawDensity[0]) && Array.isArray((rawDensity[0] as unknown[])[0]);
+    return {
+      density: densityIs3d ? [] : normalizeResearchField(rawDensity),
+      history: normalizeResearchHistory(artifacts.history),
+      liveVolume: densityIs3d ? (() => {
+        const cube = rawDensity as number[][][];
+        return { shape: [cube.length, cube[0].length, cube[0][0].length] as [number, number, number], values: cube.flat(2) };
+      })() : null,
+    };
   }, [active]);
   const pendingStageGate = useMemo<ResearchStageGate | null>(() => {
     const events = selected?.events || [];
@@ -132,9 +148,9 @@ export default function ResearchWorkspace(props: Props) {
     const gate = [...events].reverse().find(event => event.title === "FIDELITY_STAGE_AWAITING_DECISION" && !resolved.has(String(event.id)));
     if (!gate) return null;
     const payload = gate.payload || {};
-    const stageCode = String(payload.stage_code || "F1") as ResearchStageGate["stageCode"];
+    const stageCode = normalizeStep(payload.stage_code || "STEP1");
     return {
-      eventId: String(gate.id), stageCode, internalFidelity: String(payload.internal_fidelity || "F0"),
+      eventId: String(gate.id), stageCode, internalFidelity: normalizeStep(payload.internal_fidelity || stageCode),
       round: Number(payload.round || 1), experimentIds: Array.isArray(payload.experiment_ids) ? payload.experiment_ids.map(String) : [],
       bestExperimentId: payload.best_experiment_id ? String(payload.best_experiment_id) : undefined,
       result: payload.result && typeof payload.result === "object" ? payload.result as Record<string, unknown> : {},
@@ -224,8 +240,6 @@ export default function ResearchWorkspace(props: Props) {
     let cancelled = false;
     setVisualizationManifest(null);
     setDensityVolume(null);
-    setStressVolume(null);
-    setResultField("density");
     if (!selected || !active) return;
     void api.researchVisualization(selected.id, active.id).then(async manifest => {
       if (cancelled) return;
@@ -234,16 +248,24 @@ export default function ResearchWorkspace(props: Props) {
       const density = asFortranVolume(readFloat32LittleEndian(await api.researchVisualizationField(selected.id, active.id, "density")), manifest.shape);
       if (cancelled) return;
       setDensityVolume(density);
-      if (manifest.hasStress) {
-        try {
-          const stress = asFortranVolume(readFloat32LittleEndian(await api.researchVisualizationField(selected.id, active.id, "stress")), manifest.shape);
-          if (!cancelled) setStressVolume(stress);
-        } catch { if (!cancelled) setStressVolume(null); }
-      }
     }).catch(() => { if (!cancelled) setVisualizationManifest(null); });
     return () => { cancelled = true; };
   }, [selected?.id, active?.id]);
   
+  useEffect(() => {
+    const bestId = pendingStageGate?.bestExperimentId;
+    if (!selected || !bestId) { setGateVisualization(null); return; }
+    let cancelled = false;
+    setGateVisualization(null);
+    void api.researchVisualization(selected.id, bestId).then(async manifest => {
+      if (cancelled) return;
+      if (manifest.dimension !== "3d") { setGateVisualization({ manifest, densityVolume: null }); return; }
+      const density = asFortranVolume(readFloat32LittleEndian(await api.researchVisualizationField(selected.id, bestId, "density")), manifest.shape);
+      if (!cancelled) setGateVisualization({ manifest, densityVolume: density });
+    }).catch(() => { if (!cancelled) setGateVisualization(null); });
+    return () => { cancelled = true; };
+  }, [selected?.id, pendingStageGate?.bestExperimentId]);
+
   useEffect(() => {
     if (centerTab !== "chat" || !followMessages.current) return;
     window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
@@ -309,7 +331,7 @@ export default function ResearchWorkspace(props: Props) {
           }
           if (type === "progress") {
             const running = ((payload.experiments || []) as Array<Record<string, unknown>>)[0];
-            if (running) setProgressText("MATLAB / MCP 实验 " + String(running.id || "") + " · 迭代 " + String(running.current_iteration || 0) + " · " + String(running.progress || 0) + "%");
+            if (running) setProgressText("MATLAB / MCP 实验 " + String(running.id || "") + " · 迭代 " + String(running.current_iteration || 0) + " · " + Math.round(Number(running.progress || 0) * 100) + "%");
           }
           if (type === "workflow_progress") setWorkflowProgress(payload.workflow as unknown as ResearchWorkflowProgress);
         } catch { setAgentEvent("收到无法解析的 Research 事件"); }
@@ -353,10 +375,10 @@ export default function ResearchWorkspace(props: Props) {
     catch (reason) { onError(String(reason)); }
     finally { setStopBusy(false); }
   }
-  async function decideStage(advance: boolean) {
+  async function decideStage(action: "REPEAT_STAGE" | "ADVANCE_STAGE" | "APPROVE_FINAL") {
     if (!selected || !pendingStageGate || stageDecisionBusy) return;
     setStageDecisionBusy(true);
-    try { await api.researchFidelityStageDecision(selected.id, advance); await onSelect(selected.id); }
+    try { await api.researchFidelityStageDecision(selected.id, action); await onSelect(selected.id); }
     catch (reason) { onError(String(reason)); }
     finally { setStageDecisionBusy(false); }
   }
@@ -621,18 +643,18 @@ export default function ResearchWorkspace(props: Props) {
   const leftPane = <><div className="v2-pane-title"><span>{trashOpen ? "回收站" : "Research"}</span><span className="count">{trashOpen ? archived.length : researches.length}</span><div className="research-list-actions"><button aria-label={trashOpen ? "返回 Research 列表" : "打开 Research 回收站"} title={trashOpen ? "返回 Research 列表" : "回收站"} onClick={() => void toggleTrash()}>{trashOpen ? <ChevronRight size={13}/> : <Trash2 size={13}/>}</button>{!trashOpen ? <button className="primary-button compact" onClick={onCreateResearch}><FlaskConical size={13}/>新建</button> : null}</div></div>
     <div className="research-list">{(trashOpen ? archived : researches).map(item => <div className={"research-row-shell " + (selected?.id === item.id && !trashOpen ? "active" : "")} key={item.id}><button className="research-row research-select" disabled={trashOpen} onClick={() => void onSelect(item.id)}><FlaskConical size={15}/><span><b>{item.name}</b><small>{item.status} · {item.id}</small></span><ChevronRight size={14}/></button><button className="research-row-action" disabled={researchActionBusy === item.id} aria-label={(trashOpen ? "恢复" : "删除") + item.name} title={trashOpen ? "恢复 Research" : "移入回收站"} onClick={() => void (trashOpen ? restore(item) : archive(item))}>{researchActionBusy === item.id ? <LoaderCircle className="spin" size={14}/> : trashOpen ? <ArchiveRestore size={14}/> : <Trash2 size={14}/>}</button></div>)}</div>
     {!((trashOpen ? archived : researches).length) ? <div className="research-list-empty">{trashOpen ? "回收站为空" : "尚无 Research"}</div> : null}
-    <div className="research-evidence"><h4>证据索引</h4><p>Research State 是唯一权威来源。移入回收站不会删除实验、审批、报告或制品。</p><div className="budget-line"><span>预算</span><b>{selected?.budget_used ?? 0}/{selected?.budget_total ?? 0}</b></div></div></>;
+    </>;
   const runningExperiment = experiments.find(item => ["RUNNING", "WAITING", "QUEUED"].includes(String(item.status).toUpperCase()));
   const pendingDecision = selected?.decisions?.find(decision => decision.status === "PENDING");
-  const stage = stoppingAutonomous ? "正在停止自主研究" : runningExperiment ? progressText : pendingDecision ? "等待 Policy / F0-F3 审批" : streamText ? "正在分析结果并生成回复" : autonomousBusy ? "正在制定实验方案" : "等待下一条科研指令";
+  const stage = stoppingAutonomous ? "正在停止自主研究" : runningExperiment ? progressText : pendingDecision ? "等待 Policy 审核" : pendingStageGate ? "等待当前 Step 人工审批" : streamText ? "正在分析结果并生成回复" : autonomousBusy ? "正在制定实验方案" : "等待下一条科研指令";
 
   return <>
-    {pendingStageGate ? <FidelityStageResultDialog gate={pendingStageGate} busy={stageDecisionBusy} onDecision={decideStage}/> : null}
+    {pendingStageGate ? <FidelityStageResultDialog gate={pendingStageGate} experiment={experiments.find(item => item.id === pendingStageGate.bestExperimentId) || null} constraints={selected?.constraints || {}} manifest={gateVisualization && gateVisualization.manifest.dimension === "3d" ? gateVisualization.manifest : null} densityVolume={gateVisualization?.densityVolume ?? null} history={active?.id === pendingStageGate.bestExperimentId ? resultView.history : []} busy={stageDecisionBusy} onDecision={decideStage}/> : null}
     <ParameterConfigurationDialog open={configOpen} config={researchConfig} lane={researchLane} busy={Boolean(runningExperiment)} matlabDiagnostic="科研 MATLAB 任务将通过 Policy、审批和 MATLAB MCP 执行。" runtimeDiagnostic="Runtime 为可选工程链路，不替代科研审批。" onClose={() => setConfigOpen(false)} onApply={(config, lane) => void saveConfig(config, lane)}/>
     <ResearchResultDialog researchId={selected?.id || ""} experiment={resultExperiment} onClose={() => setResultExperiment(null)}/>
     {schemePickerOpen ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="engineering-scheme-import-dialog suggestion-dialog" role="dialog" aria-modal="true" aria-label="导入工程方案"><header><b>导入工程方案</b><button className="dialog-icon-button" title="关闭" aria-label="关闭工程方案导入" onClick={() => setSchemePickerOpen(false)}><X size={14}/></button></header>{engineeringSchemes.length ? <div className="engineering-scheme-import-list">{engineeringSchemes.map(item => <label className={selectedSchemeId === item.id ? "active" : ""} key={item.id}><input type="radio" name="engineering-scheme" checked={selectedSchemeId === item.id} onChange={() => setSelectedSchemeId(item.id)}/><span><b>{item.name}</b><small>Run {item.runId} · {String(item.config.dimension || "3d").toUpperCase()} · {String(item.run?.provenance.backend || item.run?.lane || "solver")}</small><small>柔度 {item.run?.metrics.compliance?.toFixed?.(4) ?? "—"} · 体积分数 {item.run?.metrics.volumeFraction?.toFixed?.(4) ?? "—"} · 灰度率 {item.run?.metrics.grayRatio?.toFixed?.(4) ?? "—"}</small></span></label>)}</div> : <p>没有完整性已验证且运行完成的工程方案。</p>}<footer><button className="outline-button" onClick={() => setSchemePickerOpen(false)}>取消</button><button className="primary-button" disabled={!selectedSchemeId || schemeImportBusy} onClick={() => void importEngineeringScheme()}>{schemeImportBusy ? "导入中…" : "导入并填入"}</button></footer></section></div> : null}
     {reportOpen ? <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-report-dialog suggestion-dialog" role="dialog" aria-modal="true" aria-label="导出科研报告"><header><b>导出科研报告</b><button className="dialog-icon-button" title="关闭" aria-label="关闭科研报告导出" onClick={() => setReportOpen(false)}><X size={14}/></button></header><label>报告名称<input maxLength={120} value={reportName} onChange={event => setReportName(event.target.value)}/></label><label>生成位置<div className="report-directory-field"><input value={reportDirectory} placeholder="输入完整目录，或点击右侧选择文件夹" onChange={event => setReportDirectory(event.target.value)}/><button className="dialog-icon-button" title="选择文件夹" aria-label="选择报告生成文件夹" onClick={() => void chooseReportDirectory()}><FolderOpen size={15}/></button></div></label><p>默认同时生成 Markdown、PDF 和配套黑白图像资源。</p><label className="report-overwrite-confirm"><input type="checkbox" checked={reportOverwrite} onChange={event => setReportOverwrite(event.target.checked)}/>覆盖同名报告和资源目录</label>{reportStatus ? <div className="report-export-status">{reportStatus}</div> : null}<footer><button className="outline-button" disabled={reportBusy} onClick={() => setReportOpen(false)}>关闭</button><button className="primary-button" disabled={reportBusy || !reportName.trim() || !reportDirectory.trim()} onClick={() => void exportResearchReport()}>{reportBusy ? <LoaderCircle className="spin" size={14}/> : null}{reportBusy ? "生成中…" : "生成报告"}</button></footer></section></div> : null}
-    <ResizableWorkspaceLayout mode="research"
+    <ResizableWorkspaceLayout mode="deep-optimization"
       activitySignal={runningExperiment ? "research-" + (selected?.id || "none") + "-" + runningExperiment.id : autonomousBusy ? "research-planning-" + (selected?.id || "none") : ""}
       completionSignal={completionSignal}
       leftRail={<div className="left-rail-icons"><button aria-label="研究项目" title="研究项目"><FlaskConical size={15}/></button><button aria-label="科研对话" title="科研对话" onClick={() => setCenterTab("chat")}><MessageCircle size={15}/></button><button aria-label="科研审批" title="科研审批" onClick={() => setCenterTab("audit")}><ShieldCheck size={15}/></button></div>}
@@ -644,12 +666,12 @@ export default function ResearchWorkspace(props: Props) {
         {workflowProgress && workflowProgress.stage !== "idle" ? <section className="research-workflow-progress" aria-label="自主研究阶段进度"><header><b>第 {workflowProgress.round} 轮</b><span>{workflowProgress.percent}%</span></header><div className="research-workflow-track"><i style={{ width: `${workflowProgress.percent}%` }}/></div><small>{workflowProgress.steps.find(item => item.status === "active")?.label || (workflowProgress.percent === 100 ? "本轮已完成" : "等待下一阶段")}</small></section> : null}
         {centerTab === "chat" ? <div ref={dropZone} className={"research-chat-main chat-drop-zone" + (dragActive ? " drag-active" : "")} {...dropHandlers}>
           {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
-          <div ref={messageList} className="chat-message-list research-message-list" onScroll={() => { const node = messageList.current; if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State，提案仍需通过 Policy 与 F0-F3 审批。</span></div> : null}{active ? <section className="research-result-panel"><header><span>真实实验结果 · {active.id}</span><small>{active.fidelity} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4 className="field-heading"><span>{visualizationManifest?.dimension === "3d" ? "真实三维结果" : "密度场"}</span>{visualizationManifest?.dimension === "3d" ? <span className="field-switch"><button className={resultField === "density" ? "active" : ""} onClick={() => setResultField("density")}>密度</button><button className={resultField === "stress" ? "active" : ""} disabled={!stressVolume} onClick={() => setResultField("stress")}>应力</button></span> : null}</h4>{visualizationManifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={resultField === "stress" && stressVolume ? stressVolume : densityVolume} mode={resultField} viewState={volumeViewState} onViewStateChange={setVolumeViewState}/> : <ScalarMap values={resultView.density} mode="density"/>}</section><section><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}<div ref={messageEnd} className="chat-message-end" aria-hidden="true"/></div>
+          <div ref={messageList} className="chat-message-list research-message-list" onScroll={() => { const node = messageList.current; if (node) followMessages.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80; }}>{messages.map(item => <article className={"chat-message " + item.role} key={item.id}><span className="chat-avatar">{item.role === "assistant" ? <Bot size={14}/> : "你"}</span><div><p>{item.content}</p>{item.attachments?.length ? <small>{item.attachments.length} 个附件 · 已保存在该 Research 会话</small> : null}{item.source ? <small>{item.source}</small> : null}</div></article>)}{streamText ? <article className="chat-message assistant streaming"><span className="chat-avatar"><Bot size={14}/></span><div><p>{streamText}</p><small>Pi / Qwen 正在生成真实回复…</small></div></article> : null}{!messages.length && !streamText ? <div className="chat-empty"><Bot size={28}/><b>直接描述研究目标或下一项实验</b><span>AI 会读取 Research State；每个 Step 只运行一次实验并在结束后等待人工审批。</span></div> : null}{active ? <section className="research-result-panel"><header><span>当前优化结果 · {active.id}</span><small>{stepLabel(active.fidelity)} · {active.backend} · {active.status}</small></header><div className="result-plots"><section><h4 className="field-heading"><span>密度场</span></h4>{(visualizationManifest?.dimension === "3d" && densityVolume) || resultView.liveVolume ? <InteractiveVolumeView density={resultView.liveVolume ?? densityVolume!} field={resultView.liveVolume ?? densityVolume!} mode="density" viewState={volumeViewState} onViewStateChange={setVolumeViewState} surfaceOnly/> : <ScalarMap values={resultView.density} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={resultView.history}/></section></div></section> : null}<div ref={messageEnd} className="chat-message-end" aria-hidden="true"/></div>
           {suggestedActions[0] ? <ResearchSuggestionCard action={suggestedActions[0]} currentGoal={selected?.goal || ""} currentHypothesis={selected?.hypothesis || ""} currentConfig={researchConfig} onApply={(action) => void applySuggestion(action)} onCancel={() => setSuggestedActions(queue => queue.slice(1))} /> : null}
           <footer className="chat-composer research-chat-composer">{attachments.length ? <div className="chat-attachment-preview">{attachments.map(item => <figure key={item.id}>{item.preview ? <img src={item.preview} alt={item.fileName || "待发送附件"}/> : <span className="attachment-file-name">{item.fileName || "附件"}</span>}<button aria-label="移除附件" onClick={() => setAttachments(values => values.filter(value => value.id !== item.id))}><X size={12}/></button></figure>)}</div> : null}<div><button type="button" className="chat-composer-action scheme-import-button" aria-label="导入工程方案" title="导入工程方案" onClick={() => void openSchemePicker()} disabled={!selected || sending || schemeImportBusy}><Plus size={15}/></button><input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,application/pdf,.docx,.xlsx,.txt,.md,.csv" multiple onChange={event => void uploadFiles(event.target.files)}/><button type="button" className="chat-composer-action" aria-label="上传科研附件" title="上传附件" onClick={() => fileInput.current?.click()} disabled={sending}><ImagePlus size={15}/></button><textarea value={command} onChange={event => setCommand(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendResearchMessage(); } }} placeholder="描述目标、询问证据或提出下一项实验…"/><button className="chat-composer-action" aria-label="发送科研消息" title="发送" onClick={() => void sendResearchMessage()} disabled={(!command.trim() && !attachments.length) || sending || busy}>{sending || busy ? <LoaderCircle className="spin" size={15}/> : <Send size={15}/>}</button></div></footer>
         </div> : <div className="research-audit-main">{selected?.events?.slice(-30).map(event => <article className="timeline-item" key={event.id}><span className="timeline-icon"><CheckCircle2 size={14}/></span><div><small>{event.kind} · {new Date(event.created_at).toLocaleTimeString()}</small><h3>{event.title}</h3><p>{event.body}</p></div></article>)}{selected?.decisions?.filter(decision => decision.status === "PENDING").map(decision => <article className="decision-card" key={decision.id}><header><ShieldCheck size={14}/>Policy 审批 <span>{decision.risk}</span></header><h3>{decision.proposal?.fidelity || "实验提案"}</h3><p>{decision.reason}</p><div><button className="approve" onClick={() => onDecision(decision.id, "approve")}>批准并提交</button><button onClick={() => onDecision(decision.id, "reject")}>拒绝</button></div></article>)}</div>}
       </section>}
-      bottom={<section className="research-bottom-progress"><header><b>科研执行进度</b><span>{workflowProgress ? `第 ${workflowProgress.round} 轮 · ${workflowProgress.percent}%` : stage}</span></header><div className="research-workflow-steps">{(workflowProgress?.steps || []).map(step => <article className={"research-workflow-step " + step.status} key={step.id}><header><span className="workflow-step-state"/><b>{step.label}</b><small>{step.status === "completed" ? "已完成" : step.status === "active" ? "进行中" : step.status === "failed" ? "失败" : "等待"}</small></header>{step.result ? <p><strong>结果</strong>{step.result}</p> : null}{step.reflection ? <p><strong>反思</strong>{step.reflection}</p> : null}{step.evidenceIds.length ? <p><strong>证据</strong>{step.evidenceIds.join(" · ")}</p> : null}{step.nextAction ? <p><strong>下一步</strong>{step.nextAction}</p> : null}</article>)}{!workflowProgress ? <div className="research-progress-empty">尚未启动 F1 阶段。</div> : null}</div></section>}
+      bottom={<section className="research-bottom-progress"><header><b>科研执行进度</b><span>{workflowProgress ? `第 ${workflowProgress.round} 轮 · ${workflowProgress.percent}%` : stage}</span></header><div className="research-workflow-steps">{(workflowProgress?.steps || []).map(step => <article className={"research-workflow-step " + step.status} key={step.id}><header><span className="workflow-step-state"/><b>{step.label}</b><small>{step.status === "completed" ? "已完成" : step.status === "active" ? "进行中" : step.status === "failed" ? "失败" : "等待"}</small></header>{step.result ? <p><strong>结果</strong>{step.result}</p> : null}{step.reflection ? <p><strong>反思</strong>{step.reflection}</p> : null}{step.id !== "context" && step.evidenceIds.length ? <p><strong>证据</strong>{step.evidenceIds.join(" · ")}</p> : null}{step.nextAction ? <p><strong>下一步</strong>{step.nextAction}</p> : null}</article>)}{!workflowProgress ? <div className="research-progress-empty">尚未启动 Step1。</div> : null}</div></section>}
       right={<>
         <div className="v2-pane-title"><span>研究状态</span><span className="permission research">research</span></div>
         {selected ? <>
@@ -678,9 +700,9 @@ export default function ResearchWorkspace(props: Props) {
           <section className="inspector-card research-results-card">
             <h4 className="research-state-heading">结果呈现</h4>
             {active ? <><div className="run-heading"><div><h3>{active.id}</h3><small>{active.fidelity} · {active.backend}</small></div><span className={"status status-" + active.status.toLowerCase()}>{active.status}</span></div><div className="metric-cards"><Metric label="柔度" value={metrics.compliance}/><Metric label="灰度率" value={metrics.gray}/><Metric label={`最大应力（${metrics.stressUnit}）`} value={metrics.stress}/></div>{active.error ? <p className="error-text">{active.error}</p> : null}</> : <p className="inspector-empty-copy">尚无科研实验结果。</p>}
-            <div className="research-plan-flow" aria-label="三方案科研流程"><span className="active">1 · 三方案</span><span>2 · 真实实验比较</span><span>3 · 优选路线</span><span>4 · 问题诊断</span><span>5 · 下一轮建议</span></div>
+          <div className="research-plan-flow" aria-label="四步深度优化流程">{([["STEP1", "Step1 · Python 粗网格 2D"], ["STEP2", "Step2 · Python 自适应粗网格 2D"], ["STEP3", "Step3 · Python 粗网格 3D"], ["STEP4", "Step4 · MATLAB 真实网格 3D"]] as Array<[string, string]>).map(([code, label]) => <span key={code} className={normalizeStep(runningExperiment?.fidelity || active?.fidelity || "STEP1") === code ? "active" : ""}>{label}</span>)}</div>
             <div className="research-artifact-list">{artifactIndex.experiments.slice(-5).map(item => <div className="artifact-row" key={item.experimentId}><span><FileJson2 size={12}/>{item.experimentId} · {item.backend}</span><small>{item.files.length} 个文件 · {item.provenance.resultKind || "unknown"}</small></div>)}</div>
-            {experiments.length ? <div className="research-result-experiments"><h5>实验</h5>{experiments.slice(-8).map(experiment => <div className="experiment-row-shell" key={experiment.id}><button className={"experiment-row " + (active?.id === experiment.id ? "active" : "")} onClick={() => onSelectExperiment(experiment)}><span className="experiment-status"/><span>{experiment.id}<small>{solverLaneLabel(experiment.backend === "matlab" ? "matlab-mcp" : "python-fem")} · {experiment.fidelity}</small></span></button></div>)}</div> : null}
+            {experiments.length ? <div className="research-result-experiments"><h5>实验</h5><div className="research-experiment-scroll">{experiments.map(experiment => <div className="experiment-row-shell" key={experiment.id}><button className={"experiment-row " + (active?.id === experiment.id ? "active" : "")} onClick={() => onSelectExperiment(experiment)}><span className="experiment-status"/><span>{experiment.id}<small>{solverLaneLabel(experiment.backend === "matlab" ? "matlab-mcp" : "python-fem")} · {experiment.fidelity}</small></span></button></div>)}</div></div> : null}
             <button className="primary-button research-final-result-button" disabled={!selected?.best_experiment} title={selected?.best_experiment ? "查看最终方案" : "尚无真实最终方案"} onClick={() => setResultExperiment(selected?.best_experiment || null)}>查看最终方案</button>
             <div className="inspector-actions artifact-actions"><button className="outline-button" onClick={() => void pareto()}>查看 Pareto</button><button className="outline-button" disabled={experiments.length < 2} onClick={() => void compare()}>比较实验</button><button className="outline-button" onClick={openReportExport}>生成报告</button><button className="outline-button" onClick={() => void createResearchArtifact("/export")}>复现包</button></div>
           </section>
@@ -690,12 +712,26 @@ export default function ResearchWorkspace(props: Props) {
   </>;
 }
 
-function FidelityStageResultDialog({ gate, busy, onDecision }: { gate: ResearchStageGate; busy:boolean; onDecision:(advance:boolean)=>void }) {
+function FidelityStageResultDialog({ gate, experiment, constraints, manifest, densityVolume, history, busy, onDecision }: { gate: ResearchStageGate; experiment:Experiment|null; constraints:Record<string,unknown>; manifest:import("../../types").ResearchVisualizationManifest|null; densityVolume:MatlabVolume|null; history:Array<{iteration:number;compliance:number}>; busy:boolean; onDecision:(action:"REPEAT_STAGE"|"ADVANCE_STAGE"|"APPROVE_FINAL")=>void }) {
   const successful = Number(gate.result.successful || 0);
   const failed = Number(gate.result.failed || 0);
   const compliance = gate.result.best_compliance;
   const weakPoints = Array.isArray(gate.result.weak_points) ? gate.result.weak_points.map(String) : [];
-  return <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-suggestion-card suggestion-dialog fidelity-stage-dialog" role="dialog" aria-modal="true" aria-label={`${gate.stageCode} 阶段结果`}><header><b>{gate.stageCode} 阶段结果</b><span>第 {gate.round} 轮</span></header><p>本阶段已完成，是否进入下一流程？选择“否”会留在 {gate.stageCode} 再进行一轮。</p><div className="optimization-action-diff"><div><b>真实实验</b><span>{gate.experimentIds.length} 个</span><i>·</i><strong>{successful} 成功 / {failed} 失败</strong></div><div><b>当前最优</b><span>{gate.bestExperimentId || "无可用方案"}</span><i>·</i><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "暂无可信柔度"}</strong></div>{weakPoints.length ? <div><b>阶段诊断</b><span>{weakPoints.join("；")}</span><i>·</i><strong>可在本阶段继续优化</strong></div> : null}</div><footer><button className="outline-button" disabled={busy} onClick={() => onDecision(false)}>否，继续本流程一轮</button><button className="primary-button" disabled={busy} onClick={() => onDecision(true)}>{busy ? <LoaderCircle className="spin" size={14}/> : null}{gate.stageCode === "F4" ? "是，完成流程" : "是，进入下一流程"}</button></footer></section></div>;
+  const finalStage = gate.stageCode === "STEP4";
+  const artifacts = (experiment?.result?.artifacts || {}) as Record<string,unknown>;
+  const density2d = normalizeResearchField(artifacts.density);
+  const volume = experiment?.result?.constraints?.volume_fraction;
+  const gray = experiment?.result?.quality?.gray_ratio;
+  const connected = experiment?.result?.quality?.connected_components;
+  const targetVolume = constraints.volume_fraction ?? constraints.volfrac;
+  const targetGray = constraints.gray_max;
+  const valid = successful > 0 && Boolean(gate.bestExperimentId) && Boolean(experiment?.result);
+  return <div className="suggestion-dialog-backdrop" role="presentation"><section className={"research-suggestion-card suggestion-dialog fidelity-stage-dialog" + (manifest?.dimension === "3d" ? " fidelity-stage-wide" : "")} role="dialog" aria-modal="true" aria-label={`${stepLabel(gate.stageCode)} 阶段结果`}><header><b>{stepLabel(gate.stageCode)} 阶段结果</b><span>第 {gate.round} 轮</span></header><p>{finalStage ? "Step4 MATLAB 真实网格 3D 已完成；请选择继续当前流程一轮或结束实验。" : `本轮候选方案已完成真实求解与对比，以下为智能体选出的最优方案。选“否”将不以该方案为基线、重新生成三套对比方案；选“是”则以它为基线进入下一阶段。`}</p><div className="stage-result-summary"><b>本轮最优方案</b><span>{gate.bestExperimentId || `无有效结果（${failed} 次失败）`}</span><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "柔度不可用"}</strong></div>{experiment?.result ? <><div className="stage-result-visuals"><section><h4>当前拓扑</h4>{manifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={densityVolume} mode="density" surfaceOnly/> : <ScalarMap values={density2d} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={history.length ? history : normalizeResearchHistory(artifacts.history)}/></section></div><div className="stage-target-comparison"><MetricCompare label="体积分数" current={volume} target={targetVolume}/><MetricCompare label="灰度率" current={gray} target={targetGray}/><MetricCompare label="连通分量" current={connected} target={constraints.connected === true ? 1 : undefined}/><MetricCompare label="柔度" current={compliance} target={constraints.compliance_target}/></div></> : <div className="error-card">本次运行没有可审查的有效制品，只能继续当前流程一轮。</div>}{weakPoints.length ? <div className="stage-diagnosis"><b>当前诊断</b><span>{weakPoints.join("；")}</span></div> : null}<footer><button className="outline-button" disabled={busy} onClick={() => onDecision("REPEAT_STAGE")}>否，重新生成三套对比方案</button><button className="primary-button" disabled={busy || !valid} title={!valid ? "必须先得到可读取的有效结果" : ""} onClick={() => onDecision(finalStage ? "APPROVE_FINAL" : "ADVANCE_STAGE")}>{busy ? <LoaderCircle className="spin" size={14}/> : null}{finalStage ? "结束实验" : "是，以最优方案为基线进入下一阶段"}</button></footer></section></div>;
+}
+
+function MetricCompare({label,current,target}:{label:string;current:unknown;target:unknown}) {
+  const shownValue=(value:unknown)=>typeof value === "number" ? value.toFixed(4) : value === undefined || value === null ? "未设定目标值" : String(value);
+  return <div><small>{label}</small><b>{shownValue(current)}</b><span>目标：{shownValue(target)}</span></div>;
 }
 
 function ResearchSuggestionCard({ action, currentGoal, currentHypothesis, currentConfig, onApply, onCancel }: {

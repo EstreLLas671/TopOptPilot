@@ -1,3 +1,3 @@
 """TopOptPilot unified desktop services."""
 
-__version__ = "2.0.7"
+from topoptpilot.version import __version__

@@ -3,7 +3,7 @@
 
 def coarse_beta_sweep(volfrac: float = 0.4) -> list[dict]:
     return [
-        {"purpose": f"Coarse beta={beta} screening", "fidelity": "F0 — 2D Coarse",
+        {"purpose": f"Coarse beta={beta} screening", "fidelity": "Step1 — Python 2D 粗网络",
          "mesh_level": "coarse", "parameters": {
              "volfrac": volfrac, "rmin": 1.5, "penal": 3, "beta": beta, "max_iter": 60,
          }}
@@ -37,7 +37,7 @@ def discriminating_experiments(template: str, control: dict) -> list[dict]:
              "parameters": {**control, "projection": "none"},
              "controlled_factors": ["projection"]},
             {"purpose": "Test controller explanation for oscillation",
-             "parameters": {**control, "controller": "joint_feedback_controller"},
+             "parameters": {**control, "controller": "periodic_controller"},
              "controlled_factors": ["controller"]},
         ]
     raise ValueError(f"Unknown DOE template: {template}")

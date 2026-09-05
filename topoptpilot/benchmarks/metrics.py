@@ -16,11 +16,19 @@ def _finite_compliance(experiment: dict) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _met_targets(experiment: dict) -> bool:
+    """契约阈值是审查条件：以评估器的 feasible 结论为准；旧记录回退到状态。"""
+    evaluation = (experiment.get("result") or {}).get("evaluation") or {}
+    if "feasible" in evaluation:
+        return bool(evaluation["feasible"])
+    return experiment.get("status") == "SUCCESS"
+
+
 def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
                      decisions: list[dict] | None = None, reference_best: float | None = None) -> dict:
     events, decisions = events or [], decisions or []
     completed = [item for item in experiments if item.get("result")]
-    feasible = [item for item in completed if item["status"] == "SUCCESS"]
+    feasible = [item for item in completed if _met_targets(item)]
     rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
     highest = max((rank.get(str(item.get("fidelity", "F0")).split()[0], 0)
                    for item in feasible), default=0)
@@ -35,7 +43,7 @@ def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
     best_gray_raw = min((item["result"]["quality"].get("gray_ratio", 1)
                          for item in completed), default=None)
     first_feasible = next((index for index, item in enumerate(completed, 1)
-                           if item["status"] == "SUCCESS"), None)
+                           if _met_targets(item)), None)
     high_fidelity = sum(str(item.get("fidelity", "F0")).startswith(("F2", "F3"))
                         for item in completed)
     costs = sum(FidelityManager.estimated_cost(str(item.get("fidelity", "F0")).split()[0])
@@ -53,7 +61,7 @@ def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
     invalid = [item for item in events if item.get("title") == "INVALID INTENT"]
     upgrades_without_success = sum(
         str(item.get("fidelity", "F0")).startswith(("F2", "F3"))
-        and not any(previous["status"] == "SUCCESS" for previous in completed[:index])
+        and not any(_met_targets(previous) for previous in completed[:index])
         for index, item in enumerate(completed)
     )
     return {
@@ -61,7 +69,7 @@ def campaign_metrics(experiments: list[dict], events: list[dict] | None = None,
         "experiments_to_feasible": first_feasible,
         "high_fidelity_runs": high_fidelity,
         "constraint_violation_rate": (None if not completed else
-                                      sum(item["status"] != "SUCCESS" for item in completed) / len(completed)),
+                                      sum(not _met_targets(item) for item in completed) / len(completed)),
         # Secondary metrics stay informative even if a short fixed budget never
         # reaches the complete feasibility definition. The primary metric above
         # remains strictly feasibility-gated.

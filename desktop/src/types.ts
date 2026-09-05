@@ -58,7 +58,7 @@ export interface ResearchRun {
   created_at:string; stopped_at?:string|null; archived_at?:string|null;
 }
 export interface ResearchStageGate {
-  eventId:string; stageCode:"F1"|"F2"|"F3"|"F4"; internalFidelity:string; round:number;
+  eventId:string; stageCode:"STEP1"|"STEP2"|"STEP3"|"STEP4"; internalFidelity:string; round:number;
   experimentIds:string[]; bestExperimentId?:string; result:Record<string,unknown>;
 }
 export interface ImportedEngineeringBaseline {

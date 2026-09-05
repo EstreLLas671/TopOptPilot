@@ -283,7 +283,7 @@ def generate_engineering_chat(
         {
             "role": "system",
             "content": (
-                "你是 TopOptPilot 工程开发助手。只回答工程开发、拓扑优化参数、"
+                "你是 TopOptPilot 基础实现助手。只回答基础实现、拓扑优化参数、"
                 "MATLAB/Python 求解、结果制品和运行诊断问题。不要修改文件，不要编造求解结果，"
                 "不要把工程运行自动解释为科研结论。若用户要求改代码，只说明需要进入 PatchProposal 审批流程。"
                 "只要回复中出现可填入的优化参数建议，就必须在回复末尾附加"

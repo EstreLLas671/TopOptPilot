@@ -29,5 +29,5 @@ def test_research_baseline_does_not_submit_an_experiment(monkeypatch, tmp_path) 
     assert response.status_code == 201
     research = response.json()
     assert research["constraints"]["engineering_baseline"]["runId"] == created["runId"]
-    assert research["budget_total"] == 8
+    assert research["budget_total"] == 1  # compatibility field; no longer a gate
     assert research["experiments"] == []

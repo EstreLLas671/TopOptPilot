@@ -43,12 +43,12 @@ describe("workspace layout state", () => {
     const storage = new MemoryStorage();
     const engineering = { ...DEFAULT_LAYOUT, leftWidth: 330 };
     const research = { ...DEFAULT_LAYOUT, rightOpen: false };
-    saveWorkspaceLayout("engineering", engineering, storage);
-    saveWorkspaceLayout("research", research, storage);
-    expect(storage.getItem(LAYOUT_STORAGE_KEYS.engineering)).toContain("330");
-    expect(loadWorkspaceLayout("engineering", storage)).toMatchObject(engineering);
-    expect(loadWorkspaceLayout("research", storage)).toMatchObject(research);
-    expect(loadWorkspaceLayout("engineering", storage)).not.toMatchObject(research);
+    saveWorkspaceLayout("basic-implementation", engineering, storage);
+    saveWorkspaceLayout("deep-optimization", research, storage);
+    expect(storage.getItem(LAYOUT_STORAGE_KEYS["basic-implementation"])).toContain("330");
+    expect(loadWorkspaceLayout("basic-implementation", storage)).toMatchObject(engineering);
+    expect(loadWorkspaceLayout("deep-optimization", storage)).toMatchObject(research);
+    expect(loadWorkspaceLayout("basic-implementation", storage)).not.toMatchObject(research);
   });
 
   it("migrates the engineering v3 sidebars once while preserving bottom state", () => {
@@ -62,7 +62,7 @@ describe("workspace layout state", () => {
       bottomHeight: 360,
     }));
 
-    const migrated = loadWorkspaceLayout("engineering", storage);
+    const migrated = loadWorkspaceLayout("basic-implementation", storage);
     expect(migrated).toEqual({
       leftOpen: true,
       rightOpen: false,
@@ -71,28 +71,28 @@ describe("workspace layout state", () => {
       rightWidth: 320,
       bottomHeight: 360,
     });
-    expect(JSON.parse(storage.getItem(LAYOUT_STORAGE_KEYS.engineering) || "{}")).toEqual(migrated);
+    expect(JSON.parse(storage.getItem(LAYOUT_STORAGE_KEYS["basic-implementation"]) || "{}")).toEqual(migrated);
 
     storage.setItem(LEGACY_ENGINEERING_LAYOUT_KEY, JSON.stringify({ leftOpen: true, rightOpen: true, leftWidth: 420, rightWidth: 240 }));
-    expect(loadWorkspaceLayout("engineering", storage)).toEqual(migrated);
+    expect(loadWorkspaceLayout("basic-implementation", storage)).toEqual(migrated);
   });
 
   it("keeps the independent research v3 layout unchanged", () => {
     const storage = new MemoryStorage();
     const research = { ...DEFAULT_LAYOUT, leftOpen: false, rightWidth: 505, bottomOpen: true };
-    storage.setItem(LAYOUT_STORAGE_KEYS.research, JSON.stringify(research));
-    expect(loadWorkspaceLayout("research", storage)).toEqual(research);
-    expect(LAYOUT_STORAGE_KEYS.research).toBe("topoptpilot.layout.research.v3");
+    storage.setItem("topoptpilot.layout.research.v3", JSON.stringify(research));
+    expect(loadWorkspaceLayout("deep-optimization", storage)).toEqual(research);
+    expect(LAYOUT_STORAGE_KEYS["deep-optimization"]).toBe("topoptpilot.layout.deep-optimization.v1");
   });
   it("ignores malformed or narrow-screen layouts and can reset to defaults", () => {
     const storage = new MemoryStorage();
-    storage.setItem(LAYOUT_STORAGE_KEYS.engineering, "not-json");
-    expect(loadWorkspaceLayout("engineering", storage)).toEqual(DEFAULT_LAYOUT);
+    storage.setItem(LAYOUT_STORAGE_KEYS["basic-implementation"], "not-json");
+    expect(loadWorkspaceLayout("basic-implementation", storage)).toEqual(DEFAULT_LAYOUT);
     const narrow: WorkspaceLayout = { ...DEFAULT_LAYOUT, leftWidth: 100, rightWidth: 100, bottomHeight: 50 };
     expect(clampLayout(narrow, { viewportWidth: 600 })).toMatchObject({ leftWidth: 240, rightWidth: 320, bottomHeight: 180 });
-    saveWorkspaceLayout("engineering", { ...DEFAULT_LAYOUT, leftWidth: 340 }, storage);
-    expect(resetWorkspaceLayout("engineering", storage)).toEqual(DEFAULT_LAYOUT);
-    expect(loadWorkspaceLayout("engineering", storage)).toEqual(DEFAULT_LAYOUT);
+    saveWorkspaceLayout("basic-implementation", { ...DEFAULT_LAYOUT, leftWidth: 340 }, storage);
+    expect(resetWorkspaceLayout("basic-implementation", storage)).toEqual(DEFAULT_LAYOUT);
+    expect(loadWorkspaceLayout("basic-implementation", storage)).toEqual(DEFAULT_LAYOUT);
   });
 });
 

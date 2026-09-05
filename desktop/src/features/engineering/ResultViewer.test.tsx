@@ -22,8 +22,8 @@ describe("engineering results metrics and convergence", () => {
     expect(screen.getByText("迭代")).toBeTruthy();
     expect(screen.getByText("柔度")).toBeTruthy();
     const points = container.querySelector(".chart-line")?.getAttribute("points") || "";
-    expect(points).toContain("14,");
-    expect(points).toContain("96,");
+    expect(points).toContain("72,");
+    expect(points).toContain("490,");
   });
 
   it("restores the true gray ratio in the result summary", () => {

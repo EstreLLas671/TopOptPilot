@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from topoptpilot.nomenclature import normalize_stage
 
 
 def evaluate_safety(parameters: dict[str, Any], fidelity: str = "") -> dict[str, str | bool]:
@@ -30,22 +31,20 @@ def evaluate_safety(parameters: dict[str, Any], fidelity: str = "") -> dict[str,
         violations.append("max_iter must be within [1, 500]")
     if projection not in {"none", "heaviside_projection"}:
         violations.append("projection is not allowlisted")
-    if controller not in {"fixed_controller", "periodic_controller", "gray_feedback_controller",
-                          "joint_feedback_controller"}:
+    if controller not in {"fixed_controller", "periodic_controller"}:
         violations.append("controller is not allowlisted")
     if filter_name not in {"sensitivity_filter", "density_filter"}:
         violations.append("filter is not allowlisted")
     if beta >= 16 and rmin < 2.0:
         risk = "MEDIUM"
         reasons.append("High beta with a narrow filter radius can increase disconnection risk.")
-    fidelity_code = str(fidelity).upper().split()[0] if fidelity else ""
-    if fidelity_code == "F3":
+    fidelity_code = normalize_stage(fidelity) if fidelity else ""
+    if fidelity_code == "STEP4":
         risk = "HIGH"
-        requires_approval = True
-        reasons.append("MATLAB high-fidelity execution consumes protected compute budget.")
-    elif fidelity_code == "F2" or max_iter > 250:
+        reasons.append("MATLAB 真实网络执行需要较长时间；完成后必须人工审阅结果。")
+    elif fidelity_code == "STEP3" or max_iter > 250:
         risk = "MEDIUM"
-        reasons.append("3D or long execution consumes protected compute budget.")
+        reasons.append("3D 或长迭代执行需要较长时间。")
     return {
         "risk": risk,
         "safe": not violations,

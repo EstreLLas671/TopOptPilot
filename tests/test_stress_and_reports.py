@@ -159,8 +159,12 @@ def test_report_follows_chapter_order_uses_chinese_fields_and_abnormal_branch(tm
     images = _report_images(tmp_path / "figures")
     generator = ResearchReportGenerator(tmp_path)
     markdown = generator.render_markdown(_report_research(images))
-    headings = [markdown.index(f"第{chapter}章") for chapter in ("一", "二", "三", "四", "五", "六")]
+    headings = [markdown.index(f"第{chapter}章") for chapter in ("一", "二", "三", "四")]
     assert headings == sorted(headings)
+    for chapter in ("五", "六", "七"):
+        assert f"第{chapter}章" not in markdown
+    for chapter in (5, 6, 7):
+        assert f"Chapter {chapter}" not in markdown
     assert "体积分数" in markdown and "灰度率" in markdown and "最大应力" in markdown
     html = generator._markdown_to_html(markdown, tmp_path)
     assert html.count("<figure") == 3 and html.count("<figcaption>") == 3
@@ -186,7 +190,7 @@ def test_report_export_is_atomic_relative_and_requires_explicit_overwrite(tmp_pa
                                 formats=["markdown", "pdf"], overwrite=False)
     markdown = exported["markdown"].read_text(encoding="utf-8")
     assert "专业科研报告_assets/" in markdown
-    assert "![最终拓扑构型]" in markdown
+    assert "![Step4 拓扑构型]" in markdown
     assert exported["pdf"].is_file() and exported["pdf"].stat().st_size > 0
     assert len(list(exported["assets"].glob("*.png"))) == 3
     with pytest.raises(FileExistsError):
@@ -200,10 +204,11 @@ def test_report_export_is_atomic_relative_and_requires_explicit_overwrite(tmp_pa
     assert not list((tmp_path / "reports").glob(".专业科研报告.*-*"))
 
 
-def test_report_never_substitutes_a_lower_fidelity_figure_for_f3(tmp_path: Path) -> None:
+def test_report_includes_best_valid_result_from_each_available_step(tmp_path: Path) -> None:
     images = _report_images(tmp_path / "figures")
     research = _report_research(images)
     research["experiments"][0]["fidelity"] = "F2"
     markdown = ResearchReportGenerator(tmp_path).render_markdown(research)
-    assert "尚无成功的 F3 最终优化结果" in markdown
-    assert "![最终拓扑构型]" not in markdown
+    assert "尚无成功的 Step4 MATLAB 3D 最终优化结果" in markdown
+    assert "![Step3 拓扑构型]" in markdown
+    assert "![Step4 拓扑构型]" not in markdown

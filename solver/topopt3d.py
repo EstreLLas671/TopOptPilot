@@ -57,6 +57,70 @@ def _connectivity(nx: int, ny: int, nz: int) -> np.ndarray:
     return np.asarray(elements, dtype=int)
 
 
+def _node_id(i: int, j: int, k: int, nx: int, ny: int) -> int:
+    return (k * (ny + 1) + j) * (nx + 1) + i
+
+
+def _boundary_conditions_3d(
+    nx: int, ny: int, nz: int, load_case: str, load_scale: float,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    case = str(load_case or "cantilever").strip().lower().replace("_", "-")
+    ndof = 3 * (nx + 1) * (ny + 1) * (nz + 1)
+    force = np.zeros(ndof)
+    if case == "mbb":
+        fixed = [3 * _node_id(0, j, k, nx, ny)
+                 for k in range(nz + 1) for j in range(ny + 1)]
+        support_a = _node_id(nx, 0, 0, nx, ny)
+        support_b = _node_id(nx, ny, 0, nx, ny)
+        fixed.extend([3 * support_a + 1, 3 * support_a + 2, 3 * support_b + 2])
+        load_node = _node_id(0, ny, round(nz / 2), nx, ny)
+        canonical = "MBB"
+    elif case == "simply-supported":
+        left = _node_id(0, 0, 0, nx, ny)
+        right = _node_id(nx, 0, 0, nx, ny)
+        back = _node_id(0, 0, nz, nx, ny)
+        fixed = [3 * left, 3 * left + 1, 3 * left + 2,
+                 3 * right + 1, 3 * right + 2, 3 * back + 1]
+        load_node = _node_id(round(nx / 2), ny, round(nz / 2), nx, ny)
+        canonical = "simply_supported"
+    elif case == "l-bracket":
+        fixed = [3 * _node_id(0, j, k, nx, ny) + direction
+                 for k in range(nz + 1) for j in range(ny + 1)
+                 for direction in range(3)]
+        load_node = _node_id(nx, 0, round(nz / 2), nx, ny)
+        canonical = "L-bracket"
+    elif case == "cantilever":
+        fixed = [3 * _node_id(0, j, k, nx, ny) + direction
+                 for k in range(nz + 1) for j in range(ny + 1)
+                 for direction in range(3)]
+        load_node = _node_id(nx, round(ny / 2), round(nz / 2), nx, ny)
+        canonical = "cantilever"
+    else:
+        raise ValueError(
+            f"Unsupported Python 3D load case {load_case!r}; "
+            "expected MBB, cantilever, simply_supported or L-bracket"
+        )
+    force[3 * load_node + 1] = -float(load_scale)
+    fixed_array = np.unique(np.asarray(fixed, dtype=int))
+    free = np.setdiff1d(np.arange(ndof), fixed_array)
+    return fixed_array, force, canonical
+
+
+def _domain_mask_3d(nx: int, ny: int, nz: int, load_case: str,
+                    geometry: dict | None = None) -> np.ndarray:
+    mask = np.ones((nz, ny, nx), dtype=bool)
+    if str(load_case).strip().lower().replace("_", "-") != "l-bracket":
+        return mask
+    geometry = geometry or {}
+    cut_width = max(1, min(nx - 1, round(float(geometry.get("cut_width_ratio", 0.5)) * nx)))
+    cut_height = max(1, min(ny - 1, round(float(geometry.get("cut_height_ratio", 0.5)) * ny)))
+    corner = str(geometry.get("cut_corner", "upper_right")).lower()
+    row_slice = slice(ny - cut_height, ny) if corner.startswith("upper") else slice(0, cut_height)
+    column_slice = slice(nx - cut_width, nx) if corner.endswith("right") else slice(0, cut_width)
+    mask[:, row_slice, column_slice] = False
+    return mask
+
+
 def _filter_kernel(rmin: float) -> np.ndarray:
     radius = max(1, int(np.ceil(rmin)) - 1)
     coords = np.indices((2 * radius + 1,) * 3) - radius
@@ -85,23 +149,27 @@ def run_topopt3d(task: dict, progress=None) -> dict:
     nx, ny, nz = map(int, grid)
     volfrac = float(params.get("volfrac", 0.4))
     penal = float(params.get("penal", 3.0))
-    beta = float(params.get("beta", params.get("beta_max", 1.0)))
-    projected = beta > 1 and task.get("projection") == "heaviside_projection"
+    beta = float(params.get("beta", 1.0))
+    beta_max = float(params.get("beta_max", beta))
+    controller = str(task.get("controller") or params.get("controller") or "fixed_controller")
+    projected = task.get("projection") == "heaviside_projection"
     rmin = float(params.get("rmin", 1.5))
-    max_iter = min(int(params.get("max_iter", 40)), 80)
+    max_iter = int(params.get("max_iter", 40))
+    min_iter = min(int(params.get("min_iter", 1)), max_iter)
     E0, Emin, nu = float(params.get("E", 1.0)), 1e-6, float(params.get("nu", 0.3))
     start = time.time()
     ke, edof = _hex8_stiffness(1.0, nu), _connectivity(nx, ny, nz)
     ndof = 3 * (nx + 1) * (ny + 1) * (nz + 1)
     rows = np.repeat(edof, 24, axis=1).ravel()
     cols = np.tile(edof, (1, 24)).ravel()
-    fixed_nodes = [(k * (ny + 1) + j) * (nx + 1)
-                   for k in range(nz + 1) for j in range(ny + 1)]
-    fixed = np.array([[3*n, 3*n+1, 3*n+2] for n in fixed_nodes]).ravel()
+    load_scale = float((task.get("bc_config") or {}).get("load_scale", 1.0))
+    fixed, force, canonical_case = _boundary_conditions_3d(
+        nx, ny, nz, str(task.get("load_case") or "cantilever"), load_scale,
+    )
     free = np.setdiff1d(np.arange(ndof), fixed)
-    load_node = ((nz // 2) * (ny + 1) + ny // 2) * (nx + 1) + nx
-    force = np.zeros(ndof)
-    force[3 * load_node + 1] = -float((task.get("bc_config") or {}).get("load_scale", 1.0))
+    domain_mask = _domain_mask_3d(
+        nx, ny, nz, canonical_case, dict(task.get("geometry") or {}),
+    )
     initial = params.get("initial_density")
     if initial is not None:
         initial = np.asarray(initial, dtype=float)
@@ -113,12 +181,19 @@ def run_topopt3d(task: dict, progress=None) -> dict:
         density = np.clip(density * volfrac / max(float(density.mean()), 1e-12), 1e-3, 1.0)
     else:
         density = np.full((nz, ny, nx), volfrac)
+    density[~domain_mask] = 1e-3
     kernel = _filter_kernel(rmin); denom = ndimage.convolve(np.ones_like(density), kernel, mode="constant")
     history, U = [], np.zeros(ndof)
     relative_residual, change = 0.0, 1.0
+    target_beta = beta_max if controller == "periodic_controller" and projected else beta
+    status = "max_iter"
     for iteration in range(1, max_iter + 1):
-        beta_current = (min(beta, 2.0 ** max(0, (iteration - 1) // 20))
-                        if projected else 1.0)
+        if not projected:
+            beta_current = 1.0
+        elif controller == "periodic_controller":
+            beta_current = min(beta_max, beta * 2.0 ** max(0, (iteration - 1) // 20))
+        else:
+            beta_current = beta
         filtered = ndimage.convolve(density, kernel, mode="constant") / denom
         physical = _project(filtered, beta_current) if projected else density
         flat = physical.ravel()
@@ -139,14 +214,17 @@ def run_topopt3d(task: dict, progress=None) -> dict:
             dc = ndimage.convolve((dc_physical * derivative) / denom, kernel, mode="constant")
             dv = ndimage.convolve(derivative / denom, kernel, mode="constant")
             volume_fn = lambda value: float(_project(
-                ndimage.convolve(value, kernel, mode="constant") / denom, beta_current).mean())
+                ndimage.convolve(value, kernel, mode="constant") / denom,
+                beta_current)[domain_mask].mean())
         else:
             dc = (ndimage.convolve(density * dc_physical, kernel, mode="constant") /
                   np.maximum(density * denom, 1e-9))
             dv = np.ones_like(density)
-            volume_fn = lambda value: float(value.mean())
+            volume_fn = lambda value: float(value[domain_mask].mean())
         low, high = 0.0, 1e9
-        move = .2 if beta_current <= 2 else (.1 if beta_current <= 4 else .05)
+        move = float(params.get(
+            "move", .2 if beta_current <= 2 else (.1 if beta_current <= 4 else .05)
+        ))
         while (high - low) / (high + low + 1e-12) > 1e-4:
             mid = 0.5 * (low + high)
             candidate = np.maximum(1e-3, np.maximum(density - move,
@@ -154,6 +232,7 @@ def run_topopt3d(task: dict, progress=None) -> dict:
                     density * np.sqrt(np.maximum(0, -dc / np.maximum(dv * mid, 1e-30)))))))
             if volume_fn(candidate) > volfrac: low = mid
             else: high = mid
+        candidate[~domain_mask] = 1e-3
         change = float(np.max(np.abs(candidate - density))); density = candidate
         candidate_filtered = ndimage.convolve(density, kernel, mode="constant") / denom
         candidate_physical = _project(candidate_filtered, beta_current) if projected else density
@@ -164,7 +243,9 @@ def run_topopt3d(task: dict, progress=None) -> dict:
                 "penal": penal, "residual": relative_residual}
         history.append(item)
         if progress: progress(iteration, item)
-        if change < 1e-3 and beta_current >= beta: break
+        if iteration >= min_iter and change < 1e-3 and beta_current >= target_beta:
+            status = "converged"
+            break
     final_beta = float(history[-1]["beta"]) if history else 1.0
     filtered = ndimage.convolve(density, kernel, mode="constant") / denom
     physical = _project(filtered, final_beta) if projected else density
@@ -179,12 +260,14 @@ def run_topopt3d(task: dict, progress=None) -> dict:
     ce = np.einsum("ei,ij,ej->e", ue, ke, ue)
     compliance = float(np.sum(scale * ce))
     spec = {**task, "nelx": nx, "nely": ny, "nelz": nz, "volfrac": volfrac,
-            "max_iter": max_iter, "bc_type": "cantilever3d", "controller": "fixed_controller",
+            "max_iter": max_iter, "min_iter": min_iter, "bc_type": canonical_case,
+            "controller": controller,
             "projection": "heaviside_projection" if projected else "none"}
-    result = build_result(task_spec=spec, status="converged", compliance=compliance,
+    result = build_result(task_spec=spec, status=status, compliance=compliance,
                         xPhys=physical, U=U, history=history, iterations=len(history),
                         final_change=change, relative_residual=relative_residual,
                         solve_time=time.time() - start, backend="python3d", density_design=density)
-    result["solver"]["target_beta"] = beta
-    result["solver"]["continuation_complete"] = final_beta >= beta
+    target_beta = beta_max if controller == "periodic_controller" and projected else beta
+    result["solver"]["target_beta"] = target_beta
+    result["solver"]["continuation_complete"] = final_beta >= target_beta
     return result

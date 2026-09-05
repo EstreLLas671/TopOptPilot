@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 import zipfile
 import hashlib
@@ -24,6 +25,7 @@ from topoptpilot.memory.research_state import utc_now
 from topoptpilot.knowledge import KnowledgeBase
 from topoptpilot.fidelity import FidelityManager
 from topoptpilot.orchestrator import ResearchOrchestrator
+from solver.result_schema import connected_components, gray_ratio as density_gray_ratio
 from topoptpilot.policy.approval_policy import requires_human_approval
 from topoptpilot.schemas import (
     DecisionStatus, EventKind, ExperimentCreate, ExperimentStatus,
@@ -33,6 +35,8 @@ from topoptpilot.schemas.models import AppSettings
 from topoptpilot.tools import ResearchTools
 from topoptpilot.agent_runtime import PiBridge
 from topoptpilot.reports import ResearchReportGenerator
+from topoptpilot.nomenclature import normalize_mode, normalize_stage, stage_label
+from topoptpilot.version import __version__
 from topoptpilot.security import (delete_qwen_api_key, get_qwen_api_key,
                                   qwen_api_key_source, set_qwen_api_key)
 from agent.llm.client import PiAgentClient
@@ -135,11 +139,11 @@ def _validate_fidelity_backend(fidelity: str, backend: str) -> str:
     value = str(backend)
     if value == "simulate":
         raise ValueError("backend=simulate is forbidden for formal experiments")
-    code = str(fidelity).strip().split(maxsplit=1)[0]
+    code = normalize_stage(fidelity)
     try:
         expected = FidelityManager.backend_for(code)
     except (KeyError, ValueError) as exc:
-        raise ValueError("fidelity must start with F0, F1, F2, or F3") from exc
+        raise ValueError("fidelity must start with Step1, Step2, Step3, or Step4") from exc
     if value != expected:
         raise ValueError(
             f"{code} requires backend={expected}; received backend={value}"
@@ -161,6 +165,7 @@ class ResearchService:
         self.store = ResearchStateStore(self.data_dir / "research.db")
         self.knowledge = KnowledgeBase(self.store, self.project_root / "topoptpilot/knowledge/documents")
         self.queue = ExperimentQueue(self.data_dir / "progress", max_workers=max_workers)
+        self._matlab_eng_cancels: dict[str, threading.Event] = {}
         self.matlab_worker = MatlabMcpWorker(self.data_dir, self.project_root)
         self._autonomous_stop_lock = threading.RLock()
         self._cache_dir_lock = threading.RLock()
@@ -181,6 +186,7 @@ class ResearchService:
         else:
             self.pi_runtime_error = "disabled"
         self._completion_lock = threading.RLock()
+        self._experiment_creation_lock = threading.RLock()
         self._matlab_restart = {"running": False, "last_error": None, "updated_at": None}
         self._qwen_validation = {"status": "CONFIGURED" if get_qwen_api_key()
                                  else "NOT_CONFIGURED", "checked_at": None, "error": None}
@@ -355,7 +361,7 @@ class ResearchService:
                 "database": str(self.store.db_path), "cache_dir": str(self.cache_dir),
                 "cache_bytes": directory_size(self.cache_dir),
                 "log_dir": str(self.data_dir / "logs"), "free_disk_bytes": disk.free,
-                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": "2.0.7"}
+                "sidecar_port": os.getenv("TOPPILOT_SIDECAR_PORT"), "version": __version__}
 
     def export_diagnostics(self) -> Path:
         output = self.data_dir / "diagnostics" / f"topoptpilot-diagnostics-{uuid.uuid4().hex[:8]}.zip"
@@ -397,8 +403,8 @@ class ResearchService:
                        "model": runtime.get("model"), "last_error": runtime.get("last_error")},
             "qwen_api": {**self._qwen_validation, "provider": "dashscope",
                          "model": self.get_settings()["agent"]["model"]},
-            "matlab_2d": {"status": matlab_state, "backend": "MATLAB MCP", "fidelities": "F0/F1"},
-            "matlab_3d": {"status": matlab_state, "backend": "MATLAB MCP", "fidelities": "F2/F3"},
+            "matlab_2d": {"status": matlab_state, "backend": "MATLAB MCP", "steps": "Step1/Step2"},
+            "matlab_3d": {"status": matlab_state, "backend": "MATLAB MCP", "steps": "Step3/Step4"},
             "python_dev": {"status": "CONFIGURED", "backend": "development regression only"},
             # Kept for V5 diagnostics consumers only; the V6 Workspace does not
             # present these as formal experiment backends.
@@ -408,9 +414,9 @@ class ResearchService:
             "matlab": {"status": matlab_state, "version": matlab_mcp.get("matlab_version"),
                        "root": matlab_mcp.get("matlab_root")},
             "sidecar": {"status": "VERIFIED", "port": os.getenv("TOPPILOT_SIDECAR_PORT"),
-                        "version": "2.0.7"},
+                        "version": __version__},
         }
-        return {"status": "ok", "version": "2.0.7", "components": components,
+        return {"status": "ok", "version": __version__, "components": components,
                 "solver_2d": matlab_state in {"READY", "VERIFIED"}, "solver_3d": matlab_state in {"READY", "VERIFIED"},
                 "matlab": matlab_mcp["state"] != "UNAVAILABLE", "matlab_mcp": matlab_mcp,
                 "database": str(self.store.db_path),
@@ -468,17 +474,20 @@ class ResearchService:
             return {"proposal": proposal, "experiment": self.get_experiment(proposal["experiment_id"])}
         if proposal["safety_status"] == "REJECTED":
             raise ValueError("Safety Policy rejected this proposal")
-        budget = FidelityManager.budget(research, self.store.list_experiments(research_id))
         fidelity = str(proposal["fidelity"])
-        if budget["remaining"]["total"] <= 0 or budget["remaining"].get(fidelity, 0) <= 0:
-            raise ValueError(f"No remaining {fidelity} budget")
-        if budget["time_remaining"] is not None and budget["time_remaining"] <= 0:
-            raise ValueError("Research time budget is exhausted")
-        if fidelity == "F3" and self.pi_runtime:
-            self.pi_runtime.subagents.dispatch(
-                research_id, "INDEPENDENT_REVIEWER",
-                "Audit this F3 fidelity upgrade for evidence sufficiency, controlled comparison, "
-                "budget value and safety. Do not submit it.", proposal.get("evidence_ids", []), proposal_id)
+        if normalize_stage(fidelity) == "STEP4" and self.pi_runtime:
+            # 独立评审是辅助审计，不是提交门禁：Pi RPC 不可用时记录并继续，
+            # 绝不能让评审派发失败阻断 Step4 验证实验的提交。
+            try:
+                self.pi_runtime.subagents.dispatch(
+                    research_id, "INDEPENDENT_REVIEWER",
+                    "Audit this Step4 upgrade for evidence sufficiency, controlled comparison and safety. "
+                    "Do not submit it.", proposal.get("evidence_ids", []), proposal_id)
+            except Exception as dispatch_error:
+                self.store.append_event(
+                    research_id, EventKind.SYSTEM.value, "INDEPENDENT_REVIEWER_UNAVAILABLE",
+                    f"独立评审子代理暂不可用（{dispatch_error}）；Step4 提交继续，"
+                    "人工阶段审批仍是唯一门禁。", proposal_id)
         knowledge_ids: list[str] = []
         for event in reversed(self.store.list_events(research_id)):
             for knowledge_id in (event.get("payload") or {}).get("knowledge_ids", []):
@@ -490,9 +499,8 @@ class ResearchService:
                          if item.get("proposal_id") == proposal_id][-8:]
         request = ExperimentCreate(
             purpose=proposal["purpose"], fidelity={
-                "F0": "F0 — Python 2D Coarse", "F1": "F1 — Python 2D Fine",
-                "F2": "F2 — Python 3D Target", "F3": "F3 — MATLAB 3D Formal",
-            }[fidelity], mesh_level=FidelityManager.mesh_level(fidelity),
+                step: stage_label(step) for step in FidelityManager.CODES
+            }[normalize_stage(fidelity)], mesh_level=FidelityManager.mesh_level(fidelity),
             backend=proposal["backend"], parameters=proposal["parameters"],
             warm_start=proposal.get("source_experiment"),
             requires_approval=bool(proposal["approval_required"]),
@@ -512,8 +520,10 @@ class ResearchService:
                 "experiment": self.get_experiment(experiment["id"])}
 
     def start_autonomous_research(self, research_id: str) -> dict[str, Any]:
-        """Start F1; every completed fidelity stage waits for the user's decision."""
+        """Start (or resume) the deep-optimization loop; every completed step waits for the user's decision."""
         research = self._require_research(research_id)
+        if self._pending_fidelity_stage_gate(research_id):
+            raise ValueError("当前 Step 结果仍在等待人工审批，请先在弹窗中作出选择")
         status = str(research.get("status") or "").upper()
         if status in {"RUNNING", "STOPPING"}:
             raise ValueError("自主研究仍在运行或停止中")
@@ -522,15 +532,40 @@ class ResearchService:
         if str(research.get("termination_reason") or "").upper() == "USER_STOPPED":
             self.store.create_next_research_run(research_id)
             research = self._require_research(research_id)
-        self.store.update_research(research_id, mode="AUTONOMOUS", status="RUNNING")
+        defaults = dict(research.get("defaults") or {})
+        workflow = dict(defaults.get("autonomous_workflow") or {})
+        # 存在未消费的 Step 授权时从该 Step 恢复（例如上一轮回退线程异常
+        # 中断后遗留的 STEP4 验证授权），而不是把用户硬拽回 Step1。
+        existing_authorization = dict(workflow.get("step_authorization") or {})
+        existing_ids = [str(item) for item in (existing_authorization.get("experiment_ids") or [])]
+        resumable = bool(
+            existing_authorization
+            and not existing_authorization.get("consumed")
+            and not existing_ids
+            and normalize_stage(existing_authorization.get("stage")) in {"STEP1", "STEP2", "STEP3", "STEP4"}
+            and normalize_stage(workflow.get("active_fidelity") or "") == normalize_stage(existing_authorization.get("stage"))
+        )
+        if resumable:
+            workflow["active_fidelity"] = normalize_stage(existing_authorization.get("stage"))
+        else:
+            workflow["active_fidelity"] = "STEP1"
+            workflow["step_authorization"] = {
+                "stage": "STEP1", "source": "START_DEEP_OPTIMIZATION", "consumed": False,
+                "candidates_limit": 3, "experiment_ids": [],
+                "baseline_experiment_id": None,
+            }
+        defaults["autonomous_workflow"] = workflow
+        self.store.update_research_json(research_id, defaults=defaults)
+        self.store.update_research(research_id, mode="DEEP_OPTIMIZATION", status="RUNNING",
+                                   termination_reason=None)
         self.store.append_event(research_id, EventKind.SYSTEM.value, "ROUND_STARTED",
                                 f"Autonomous round {int(research.get('current_round', 0)) + 1} started.")
         self.store.append_event(
             research_id,
             EventKind.SYSTEM.value,
-            "THREE_PLAN_STAGE_STARTED",
-            "本轮将先生成三套不同角度的候选方案，再比较、优选并进行问题诊断。",
-            payload={"stage": "three_plan_compare_diagnose", "required_plans": 3},
+            "ONE_STEP_RUN_STARTED",
+            "本轮将在当前 Step 生成三个不同方向的受控候选（Step4 为单一验证实验）并全部真实求解，完成后立即等待人工选择。",
+            payload={"stage": "one_step_one_run", "required_plans": 3},
             source="RESEARCH_ORCHESTRATOR",
         )
         baseline = (research.get("defaults") or {}).get("engineering_scheme_baseline")
@@ -539,35 +574,38 @@ class ResearchService:
         ] if value]
         self.store.append_event(
             research_id, EventKind.SYSTEM.value, "WORKFLOW_CONTEXT_COMPLETED",
-            "已读取研究目标、假设、预算和可用真实基线。",
+            "已读取研究目标、假设和可用真实基线。",
             payload={
                 "workflow_step": "context", "status": "completed",
                 "reflection": "优先采用已导入工程方案；其后才使用当前 Research 的真实实验和历史最优结果。",
-                "evidence_ids": baseline_ids, "next_action": "生成三套不同角度的候选方案",
+                "evidence_ids": baseline_ids, "next_action": "生成本轮受控候选方案组",
             },
             source="RESEARCH_ORCHESTRATOR",
         )
         self.store.append_event(
             research_id, EventKind.SYSTEM.value, "WORKFLOW_PLANNING_STARTED",
-            "正在生成三套受 Policy 约束的候选方案。",
+            "正在生成当前 Step 的受 Policy 约束候选方案组（Step1–Step3 三个方向，Step4 单一验证）。",
             payload={"workflow_step": "planning", "status": "active", "required_plans": 3},
             source="RESEARCH_ORCHESTRATOR",
         )
         language = "Simplified Chinese" if research.get("locale", "zh-CN") == "zh-CN" else "English"
         prompt = (
-            "You are the primary Pi Research Agent. Begin workflow F1, which maps to internal fidelity F0. "
-            "First call research_get_context, research_get_budget, "
+            "You are the primary Pi Research Agent. Begin at Step1. "
+            "First call research_get_context, "
             "solver_get_capabilities and knowledge_search. Dispatch the HYPOTHESIS and "
-            "EXPERIMENT_PLANNER Subagents when their bounded review is needed. For every round, first "
-            "propose exactly three complete candidate plans from meaningfully different improvement angles "
-            "(for example penalty/filter strategy, mesh/volume constraints, and load/material/connectivity). "
-            "Compile each plan through policy_compile_intent, keep all three plans at internal fidelity F0, "
-            "preview every returned proposal, and submit "
-            "the safe bounded batch only within the available budget. Wait for real FEM evidence from all "
-            "submitted candidates, compare compliance, volume fraction, gray ratio and connectivity, then "
+            "EXPERIMENT_PLANNER Subagents when their bounded review is needed. For the authorized "
+            "Step1-Step3 round, propose exactly three different-direction candidate plans against the "
+            "same baseline: each candidate may vary only volfrac or one hidden whitelist factor "
+            "(beta, beta_max, projection, controller, move), and the three candidates must not repeat "
+            "the same controlled factor or intent. Compile every candidate through "
+            "policy_compile_intent, keep all of them at the authorized Step, preview and submit all "
+            "three. For a Step4 round, propose and submit exactly one verification experiment instead. "
+            "Wait for their real FEM evidence, then "
             "select the best route, record a diagnosis of its weaknesses, and formulate the next-round plan. "
-            "Do not invent metrics, do not auto-approve, and never provide numeric solver parameters directly. "
-            f"After this batch, stop and wait for the explicit stage decision. Reply in {language}."
+            "The authoritative optimization configuration defines geometry, load case, material, grid, "
+            "penal, rmin, iteration limits, accuracy and filter strategy. Never change those fields. "
+            "Do not invent metrics or provide numeric solver parameters directly. "
+            f"After all candidates of this round finish, stop and wait for the explicit human step decision. Reply in {language}."
         )
         threading.Thread(target=self._send_pi_or_fallback,
                          args=(research_id, prompt, "experiment-planning"), daemon=True).start()
@@ -616,7 +654,7 @@ class ResearchService:
                 research_id, status="STOPPING", termination_reason="USER_STOPPED",
             )
             self.store.append_event(
-                research_id, EventKind.HUMAN.value, "AUTONOMOUS_STOP_REQUESTED",
+            research_id, EventKind.HUMAN.value, "DEEP_OPTIMIZATION_STOP_REQUESTED",
                 "用户要求停止自主研究；正在终止 Agent、子任务和求解器。",
                 payload={"run_ids": [run_id for run_id, _ in run_ids]}, source="USER",
             )
@@ -646,7 +684,7 @@ class ResearchService:
                     if errors:
                         self.store.update_research(research_id, status="STOP_FAILED")
                         self.store.append_event(
-                            research_id, EventKind.SYSTEM.value, "AUTONOMOUS_STOP_FAILED",
+                            research_id, EventKind.SYSTEM.value, "DEEP_OPTIMIZATION_STOP_FAILED",
                             "；".join(errors), payload={"errors": errors},
                         )
                     else:
@@ -654,7 +692,7 @@ class ResearchService:
                             research_id, status="STOPPED", termination_reason="USER_STOPPED",
                         )
                         self.store.append_event(
-                            research_id, EventKind.SYSTEM.value, "AUTONOMOUS_STOPPED",
+                            research_id, EventKind.SYSTEM.value, "DEEP_OPTIMIZATION_STOPPED",
                             "自主研究后台链路已全部停止；下次运行将建立空白活动轮次。",
                             payload={"termination_reason": "USER_STOPPED"},
                         )
@@ -665,6 +703,46 @@ class ResearchService:
                 target=reconcile_stop, daemon=True, name=f"stop-autonomous-{research_id}",
             ).start()
             return stopping_response
+
+    @staticmethod
+    def _chinese_reflection(status: str, evaluation: dict[str, Any] | None) -> str:
+        """执行进度面板的中文阶段反思：求解有效性 + 目标差距。"""
+        if status != "SUCCESS":
+            return "求解无效，未产生可用于结论的真实指标。"
+        unmet = [str(item) for item in ((evaluation or {}).get("unmet_targets") or [])]
+        gap_labels = {"gray": "灰度率高于目标", "connected": "拓扑不连通",
+                      "stress": "应力超出参考限值"}
+        gaps = "；".join(gap_labels.get(item, item) for item in unmet)
+        if gaps:
+            return f"求解收敛，指标有效。目标差距：{gaps}；差距将作为后续轮次的优化方向。"
+        return "求解收敛，指标有效，已达成全部目标阈值。"
+
+    @staticmethod
+    def _select_round_best(successful_items: list[dict[str, Any]]) -> dict[str, Any]:
+        """对比本轮候选的连通性、灰度率与柔度，选出最优方案。
+
+        顺序：结构连通优先，灰度率更低次之，柔度更低收尾。
+        """
+        def rank(item: dict[str, Any]) -> tuple:
+            result = item.get("result") or {}
+            quality = result.get("quality") or {}
+            connected = quality.get("connected_components")
+            gray = quality.get("gray_ratio")
+            compliance = (result.get("objective") or {}).get("compliance")
+            return (0 if connected == 1 else 1,
+                    float(gray) if isinstance(gray, (int, float)) else 1.0,
+                    float(compliance) if isinstance(compliance, (int, float)) else float("inf"))
+        return min(successful_items, key=rank, default=None) or {}
+
+    @staticmethod
+    def _has_usable_stage_result(item: dict[str, Any]) -> bool:
+        """A screening Step may legally miss the final targets; any real FEM
+        metrics from the deterministic evaluator count as usable evidence."""
+        if item.get("status") == "SUCCESS" and item.get("result"):
+            return True
+        objective = (item.get("result") or {}).get("objective") or {}
+        compliance = objective.get("compliance")
+        return isinstance(compliance, (int, float)) and not isinstance(compliance, bool)
 
     def _pending_fidelity_stage_gate(self, research_id: str) -> dict[str, Any] | None:
         events = self.store.list_events(research_id)
@@ -678,45 +756,159 @@ class ResearchService:
                 return event
         return None
 
-    def decide_fidelity_stage(self, research_id: str, advance: bool) -> dict[str, Any]:
-        """Repeat the completed stage once or explicitly advance to the next F1-F4 stage."""
-        self._require_research(research_id)
+    def decide_fidelity_stage(self, research_id: str, decision: str | bool) -> dict[str, Any]:
+        # Gate lookup and consumption must be one critical section; otherwise
+        # two windows can both act on the same pending stage event.
+        with self._completion_lock:
+            return self._decide_fidelity_stage_locked(research_id, decision)
+
+    def _decide_fidelity_stage_locked(self, research_id: str,
+                                      decision: str | bool) -> dict[str, Any]:
+        research = self._require_research(research_id)
         gate = self._pending_fidelity_stage_gate(research_id)
-        if not gate:
-            raise ValueError("当前没有等待确认的 F1-F4 阶段结果")
-        payload = gate.get("payload") or {}
-        stage_code = str(payload.get("stage_code") or "F1")
-        internal_fidelity = str(payload.get("internal_fidelity") or "F0")
-        stage_number = max(1, min(4, int(stage_code[1:]) if stage_code[1:].isdigit() else 1))
-        internal_number = max(0, min(3, int(internal_fidelity[1:])
-                                     if internal_fidelity[1:].isdigit() else 0))
-        next_stage = f"F{min(4, stage_number + 1)}"
-        next_internal = f"F{min(3, internal_number + 1)}"
-        self.store.append_event(
-            research_id, EventKind.HUMAN.value, "FIDELITY_STAGE_DECISION",
-            (f"确认进入 {next_stage}" if advance and stage_number < 4 else
-             "确认完成 F4" if advance else f"要求在 {stage_code} 再进行一轮"),
-            payload={"gate_event_id": str(gate.get("id")), "stage_code": stage_code,
-                     "decision": "ADVANCE" if advance else "REPEAT"},
-            source="USER",
-        )
-        if advance and stage_number >= 4:
-            self.store.update_research(research_id, status="STOPPED", termination_reason="F4_CONFIRMED")
+        if not gate: raise ValueError('当前没有等待确认的保真度阶段结果')
+        payload = gate.get('payload') or {}
+        stage_code = normalize_stage(payload.get('stage_code') or payload.get('internal_fidelity'))
+        action = ('ADVANCE_STAGE' if decision else 'REPEAT_STAGE') if isinstance(decision, bool) else str(decision or '').upper()
+        if action not in {'REPEAT_STAGE','ADVANCE_STAGE','APPROVE_FINAL'}: raise ValueError('无效的阶段决策动作')
+        rank = {'STEP1':0,'STEP2':1,'STEP3':2,'STEP4':3}
+        is_final = stage_code == 'STEP4'
+        if action == 'APPROVE_FINAL':
+            if not is_final: raise ValueError('当前阶段不是最终阶段')
+            ids = set(payload.get('experiment_ids') or [])
+            all_experiments = self.store.list_experiments(research_id)
+            usable_codes = {normalize_stage(item.get('fidelity'))
+                            for item in all_experiments if self._has_usable_stage_result(item)}
+            step3_ids = {item['id'] for item in all_experiments
+                         if normalize_stage(item.get('fidelity')) == 'STEP3'
+                         and self._has_usable_stage_result(item)}
+            if not {'STEP1', 'STEP2', 'STEP3', 'STEP4'}.issubset(usable_codes):
+                raise ValueError('结束实验前必须完成 Step1、Step2、Step3、Step4 全部真实有效流程')
+            successful = [item for item in all_experiments
+                          if item.get('status') == 'SUCCESS' and item.get('result')]
+            if not any(
+                item.get('id') in ids and item.get('warm_start') in step3_ids
+                and self._matches_authoritative_step4(item, research)
+                for item in successful
+            ):
+                raise ValueError('Step4 没有可结束且参数匹配的 MATLAB 真实成功结果')
+            self.store.append_event(research_id, EventKind.HUMAN.value, 'FIDELITY_STAGE_DECISION', '用户批准最终阶段结果', payload={'gate_event_id': str(gate.get('id')), 'stage_code': stage_code, 'decision': action}, source='USER')
+            self.store.update_research(research_id, status='STOPPED', termination_reason='FINAL_RESULT_APPROVED')
             return self.get_research(research_id)
-        target_stage = next_stage if advance else stage_code
-        target_internal = next_internal if advance else internal_fidelity
-        self.store.update_research(research_id, status="RUNNING")
-        prompt = (
-            f"The user explicitly chose {'advance' if advance else 'repeat'} after {stage_code}. "
-            f"Run exactly one new {target_stage} batch at internal fidelity {target_internal}. "
-            "Call research_get_context and research_get_budget, propose exactly three meaningfully different "
-            "candidate plans, compile all parameters through policy_compile_intent, preview and submit only "
-            "safe proposals within budget. Do not promote beyond the requested internal fidelity. After all "
-            "real results are recorded, stop and wait for the next explicit stage decision."
-        )
-        threading.Thread(target=self._send_pi_or_fallback,
-                         args=(research_id, prompt, "experiment-planning"), daemon=True).start()
+        if action == 'REPEAT_STAGE': target_stage = stage_code
+        else:
+            if is_final: raise ValueError('最终阶段必须使用 APPROVE_FINAL')
+            gate_ids = set(payload.get('experiment_ids') or [])
+            stage_result = any(
+                item.get('id') in gate_ids
+                and normalize_stage(item.get('fidelity')) == stage_code
+                and self._has_usable_stage_result(item)
+                for item in self.store.list_experiments(research_id)
+            )
+            if not stage_result:
+                raise ValueError('当前阶段没有有效真实结果，暂不能推进；请重复本阶段或检查求解环境')
+            target_stage = f'STEP{rank[stage_code] + 2}'
+        self.store.append_event(research_id, EventKind.HUMAN.value, 'FIDELITY_STAGE_DECISION', f'{action}: {stage_code} -> {target_stage}', payload={'gate_event_id': str(gate.get('id')), 'stage_code': stage_code, 'decision': action}, source='USER')
+        defaults = dict(research.get('defaults') or {})
+        workflow = dict(defaults.get('autonomous_workflow') or {})
+        workflow['active_fidelity'] = target_stage
+        baseline_id = str(payload.get('best_experiment_id') or '') if action == 'ADVANCE_STAGE' else ''
+        workflow['step_authorization'] = {
+            'stage': target_stage, 'gate_event_id': str(gate.get('id')),
+            'consumed': False, 'authorized_by': action,
+            'candidates_limit': 1 if target_stage == 'STEP4' else 3,
+            'experiment_ids': [],
+            'baseline_experiment_id': baseline_id or None,
+        }
+        defaults['autonomous_workflow'] = workflow
+        self.store.update_research_json(research_id, defaults=defaults)
+        self.store.update_research(research_id, status='RUNNING')
+        if target_stage == 'STEP4':
+            plan_instruction = ('Run exactly one verification experiment at STEP4: inherit the '
+                f'approved baseline scheme {baseline_id or "最优方案"} parameters unchanged '
+                '(volfrac, beta, beta_max, projection, controller, move) and re-solve on the '
+                'MATLAB fine grid with the authoritative configuration.')
+        elif action == 'ADVANCE_STAGE':
+            plan_instruction = (f'The user approved the round-best scheme {baseline_id or ""} as the '
+                f'baseline. Run one comparison round at {target_stage}: derive exactly three '
+                'different-direction candidate plans from that baseline; each candidate may vary only '
+                'volfrac or one hidden whitelist factor (beta, beta_max, projection, controller, move), '
+                'and the three candidates must not repeat the same controlled factor or intent. Compile '
+                f'every candidate through policy_compile_intent at {target_stage} with source_experiment '
+                f'{baseline_id or ""}, preview and submit all three.')
+        else:
+            plan_instruction = (f'The user rejected the round-best scheme as a baseline. Regenerate one '
+                f'fresh comparison round at {target_stage}: exactly three different-direction candidate '
+                'plans rebuilt from the authoritative configuration (not derived from the rejected '
+                'scheme); each candidate may vary only volfrac or one hidden whitelist factor (beta, '
+                'beta_max, projection, controller, move), and the three candidates must not repeat the '
+                'same controlled factor or intent. Compile every candidate through '
+                f'policy_compile_intent at {target_stage}, preview and submit all three.')
+        prompt = (f'The user selected {action} after {stage_code}. {plan_instruction} '
+                  'After all real results of this round are in, compare their grayness and compliance, '
+                  'select the round-best scheme, and stop and wait for the next explicit human decision.')
+        threading.Thread(target=self._send_pi_or_fallback, args=(research_id, prompt, 'experiment-planning'), daemon=True).start()
         return self.get_research(research_id)
+
+    @staticmethod
+    def _matches_authoritative_step4(experiment: dict[str, Any],
+                                     research: dict[str, Any]) -> bool:
+        if (normalize_stage(experiment.get("fidelity")) != "STEP4"
+                or experiment.get("backend") != "matlab"
+                or experiment.get("status") != "SUCCESS"):
+            return False
+        config = ((research.get("defaults") or {}).get("optimization_config") or {})
+        if not config:
+            return False
+        task = build_solver_task(experiment, research)
+        params = task["params"]
+        expected = {
+            "grid3d": [int(config["nelx"]), int(config["nely"]), int(config["nelz"])],
+            "penal": float(config["penal"]),
+            "rmin": float(config["rmin"]),
+            "min_iter": int(config["minIterations"]),
+            "max_iter": int(config["maxIterations"]),
+            "accuracy": str(config["accuracy"]),
+            "filter_strategy": str(config["filterStrategy"]),
+        }
+        if any(params.get(key) != value for key, value in expected.items()):
+            return False
+        solver = ((experiment.get("result") or {}).get("solver") or {})
+        solver_backend = str(solver.get("backend") or "")
+        executed = solver.get("executed_config")
+        if not solver_backend.startswith("matlab_mcp_") or not isinstance(executed, dict):
+            return False
+        material = config.get("material") or {}
+        executed_expected = {
+            "bc_type": str(config["bcType"]),
+            "nelx": int(config["nelx"]),
+            "nely": int(config["nely"]),
+            "nelz": int(config["nelz"]),
+            "accuracy": str(config["accuracy"]),
+            "penal": float(config["penal"]),
+            "rmin": float(config["rmin"]),
+            "min_iterations": int(config["minIterations"]),
+            "max_iterations": int(config["maxIterations"]),
+            "filter_strategy": str(config["filterStrategy"]),
+            "E": float(material["youngsModulusGPa"]),
+            "nu": float(material["poissonRatio"]),
+            "density_kg_m3": float(material["densityKgM3"]),
+            "yield_strength_MPa": float(material["yieldStrengthMPa"]),
+            "beta": float(params.get("beta", 1.0)),
+            "beta_max": float(params.get("beta_max", params.get("beta", 1.0))),
+            "projection": str(task.get("projection", "none")),
+            "controller": str(task.get("controller", "fixed_controller")),
+            "move_start": float(params.get("move_start", params.get("move", 0.2))),
+            "move_end": float(params.get("move_end", params.get("move", 0.2))),
+        }
+        if not all(executed.get(key) == value for key, value in executed_expected.items()):
+            return False
+        executed_geometry = executed.get("geometry") or {}
+        return (
+            list(executed_geometry.get("dimensions") or []) == list(config["dimensions"])
+            and executed_geometry.get("unit") == config["unit"]
+            and executed_geometry.get("cell_size_m") == config["cellSizeMeters"]
+        )
 
     def _send_pi_or_fallback(self, research_id: str, prompt: str, skill: str) -> None:
         try:
@@ -732,85 +924,186 @@ class ResearchService:
         research = self._require_research(research_id)
         if research["status"] in {"STOPPING", "STOPPED", "STOP_FAILED"} or research.get("termination_reason"):
             return
+        if normalize_mode(research.get("mode")) == "DEEP_OPTIMIZATION":
+            workflow = dict(((research.get("defaults") or {}).get("autonomous_workflow") or {}))
+            active_stage = str(workflow.get("active_fidelity") or "")
+            authorization = dict(workflow.get("step_authorization") or {})
+            if not authorization and normalize_stage(active_stage) == "STEP4":
+                authorization = dict(workflow.get("step4_authorization") or {})
+                if authorization:
+                    authorization.setdefault("stage", "STEP4")
+            authorized = bool(
+                active_stage and authorization and not authorization.get("consumed")
+                and normalize_stage(authorization.get("stage")) == normalize_stage(active_stage)
+            )
+            if not authorized:
+                self.store.update_research(research_id, status="READY", termination_reason=None)
+                self.store.append_event(
+                    research_id, EventKind.HUMAN.value,
+                    "DEEP_OPTIMIZATION_PLAN_AWAITING_ACTION",
+                    "当前没有未消费的人工 Step 授权；安全模式不会自行执行实验。",
+                )
+                return
+        self._safe_mode_plan_round(research)
+
+    def _safe_mode_plan_round(self, research: dict[str, Any]) -> None:
+        """Deterministic fallback for one authorized round.
+
+        A round with an approved baseline derives its candidates from that
+        scheme; a round without one (first round, or the user rejected the
+        previous best) regenerates fresh comparison candidates. Step1-Step3
+        rounds compile three different-direction candidates; Step4 rounds stay
+        at one verification candidate that inherits the baseline parameters
+        unchanged and re-solves on the MATLAB fine grid.
+        """
+        research_id = research["id"]
+        workflow = dict(((research.get("defaults") or {}).get("autonomous_workflow") or {}))
+        active_stage = normalize_stage(workflow.get("active_fidelity") or "STEP1")
+        authorization = dict(workflow.get("step_authorization") or {})
+        limit = 1 if active_stage == "STEP4" else 3
         experiments = self.store.list_experiments(research_id)
-        budget = FidelityManager.budget(research, experiments)
-        if budget["remaining"]["total"] <= 0:
-            self.store.update_research(research_id, status="STOPPED",
-                                       termination_reason="BUDGET_EXHAUSTED")
-            return
-        completed = [item for item in experiments if item.get("result")]
-        if not completed:
-            # Safe mode mirrors the autonomous three-plan contract with
-            # deterministic, policy-compiled alternatives. Each candidate is
-            # still previewed/submitted through the normal approval boundary.
-            intents = [
+        baseline_id = str(authorization.get("baseline_experiment_id") or "")
+        baseline = next((item for item in experiments
+                         if item["id"] == baseline_id and item.get("result")), None)
+        completed = [item for item in experiments if item.get("result")
+                     and not (item.get("result") or {}).get("partial")]
+        if active_stage == "STEP4":
+            source = baseline or (completed[-1] if completed else None)
+            requests = [{"intent": "UPGRADE_FIDELITY",
+                         "source_experiment": source["id"] if source else None}]
+            requests = [request for request in requests if request["source_experiment"]] or [
+                {"intent": "ESTABLISH_BASELINE"}]
+        elif baseline is not None:
+            quality = baseline["result"].get("quality", {})
+            requests = []
+            if quality.get("connected_components", 1) != 1:
+                requests.append({"intent": "RESTORE_CONNECTIVITY",
+                                 "source_experiment": baseline["id"]})
+            if quality.get("gray_ratio", 1.0) > research["constraints"].get("gray_max", 0.05):
+                requests.append({"intent": "REDUCE_GRAYNESS", "source_experiment": baseline["id"]})
+            if not requests:
+                requests.append({"intent": "UPGRADE_FIDELITY",
+                                 "source_experiment": baseline["id"]})
+            rotation = ("beta", "move", "volfrac")
+            offset = int(research.get("current_round") or 0)
+            for shift in range(len(rotation)):
+                factor = rotation[(offset + shift) % len(rotation)]
+                requests.append({"intent": "EXPLORE_PARAMETER", "factor": factor,
+                                 "source_experiment": baseline["id"]})
+        else:
+            requests = [
                 {"intent": "ESTABLISH_BASELINE"},
                 {"intent": "EXPLORE_PARAMETER", "factor": "beta"},
-                {"intent": "EXPLORE_PARAMETER", "factor": "rmin"},
+                {"intent": "EXPLORE_PARAMETER", "factor": "move"},
             ]
-            submitted = 0
-            for candidate_intent in intents:
-                if budget["remaining"]["total"] <= submitted:
-                    break
-                proposals = self.tools.policy_compile_intent(
-                    research_id, **candidate_intent, _decision_source="RULE_FALLBACK"
-                )
-                if not proposals:
+
+        def parameter_key(parameters: dict[str, Any]) -> tuple:
+            return self.tools.compiler.canonical_parameter_key(parameters)
+
+        def proposal_factors(proposal: dict[str, Any]) -> set[str]:
+            return {str(item) for item in (proposal.get("controlled_factors") or [])
+                    if item not in {"baseline", "fidelity"}}
+
+        selected: list[dict[str, Any]] = []
+        seen: set[tuple] = set()
+
+        def accept(proposals: list[dict[str, Any]],
+                   locked_factors: set[str]) -> dict[str, Any] | None:
+            for proposal in proposals:
+                stage_key = (normalize_stage(proposal.get("fidelity")),
+                             parameter_key(proposal.get("parameters")))
+                if stage_key in seen:
                     continue
-                try:
-                    self.submit_proposal(research_id, proposals[0]["id"])
-                    submitted += 1
-                    self.store.append_event(
-                        research_id,
-                        EventKind.SYSTEM.value,
-                        "THREE_PLAN_SUBMITTED",
-                        f"Safe Mode 已提交候选方案 {submitted}/3。",
-                        payload={"plan_index": submitted, "intent": candidate_intent["intent"]},
-                    )
-                except ValueError as exc:
-                    self.store.append_event(research_id, EventKind.SYSTEM.value,
-                                            "SAFE MODE PLAN REJECTED", str(exc))
-            if submitted:
-                return
-            self.store.update_research(research_id, status="STOPPED", termination_reason="PLATEAU")
-            self.store.append_event(research_id, EventKind.SYSTEM.value, "SAFE MODE STOPPED",
-                                    "Policy produced no novel controlled experiment.")
+                if proposal_factors(proposal) & locked_factors:
+                    continue
+                return proposal
+            return None
+
+        def remember(proposal: dict[str, Any]) -> None:
+            seen.add((normalize_stage(proposal.get("fidelity")),
+                      parameter_key(proposal.get("parameters"))))
+
+        errors: list[str] = []
+
+        def compile_request(request: dict[str, Any]) -> list[dict[str, Any]]:
+            try:
+                return self.tools.policy_compile_intent(
+                    research_id, _decision_source="RULE_FALLBACK", **request)
+            except Exception as exc:
+                # 编译失败必须留痕：静默吞掉会让回退线程无声死亡、流程卡死。
+                message = f"编译意图 {request.get('intent')} 失败：{exc}"
+                errors.append(message)
+                self.store.append_event(research_id, EventKind.SYSTEM.value,
+                                        "FALLBACK PLAN COMPILE FAILED", message[:400])
+                return []
+
+        # First pass keeps every accepted candidate on a distinct direction.
+        locked: set[str] = set()
+        for request in requests:
+            if len(selected) >= limit:
+                break
+            proposal = accept(compile_request(request), locked)
+            if proposal:
+                selected.append(proposal)
+                locked |= proposal_factors(proposal)
+                remember(proposal)
+        # Second pass fills the remaining quota if distinct directions ran out.
+        for request in requests:
+            if len(selected) >= limit:
+                break
+            proposal = accept(compile_request(request), set())
+            if proposal:
+                selected.append(proposal)
+                remember(proposal)
+        if not selected:
+            self.store.update_research(research_id, status="READY", termination_reason=None)
+            detail = "；".join(errors[-2:]) if errors else "没有未运行过的新受控配置"
+            self.store.append_event(research_id, EventKind.HUMAN.value,
+                                    "DEEP_OPTIMIZATION_PLAN_AWAITING_ACTION",
+                                    f"当前阶段没有可提交的新受控方案（{detail}）；研究保持未结束状态，等待用户调整或重试。")
             return
+        submitted = 0
+        for proposal in selected:
+            try:
+                self.submit_proposal(research_id, proposal["id"])
+                submitted += 1
+            except ValueError as exc:
+                self.store.append_event(research_id, EventKind.SAFETY.value,
+                                        "SAFE MODE PLAN REJECTED", str(exc))
+            except Exception as exc:
+                # 提交阶段的任何异常都必须可见并可恢复，不能让回退线程无声死亡。
+                message = f"提案 {proposal['id']} 提交失败：{exc}"
+                errors.append(message)
+                self.store.append_event(research_id, EventKind.SYSTEM.value,
+                                        "SAFE MODE PLAN FAILED", message[:400])
+        if submitted:
+            self.store.append_event(
+                research_id, EventKind.SYSTEM.value, "ROUND_STARTED",
+                f"Autonomous round {int(research.get('current_round') or 0) + 1} started at {active_stage}.",
+                payload={"stage": active_stage, "required_plans": submitted},
+                source="RESEARCH_ORCHESTRATOR")
+            self.store.append_event(research_id, EventKind.SYSTEM.value,
+                                    "ONE_STEP_PLAN_SUBMITTED",
+                                    f"Safe Mode 已提交本轮 {submitted} 个不同方向的受控候选。")
         else:
-            last = completed[-1]
-            quality = last["result"].get("quality", {})
-            if quality.get("connected_components", 1) != 1:
-                intent = {"intent": "RESTORE_CONNECTIVITY", "source_experiment": last["id"]}
-            elif quality.get("gray_ratio", 1.0) > research["constraints"].get("gray_max", 0.05):
-                intent = {"intent": "REDUCE_GRAYNESS", "source_experiment": last["id"]}
-            else:
-                intent = {"intent": "UPGRADE_FIDELITY", "source_experiment": last["id"]}
-        proposals = self.tools.policy_compile_intent(research_id, **intent,
-                                                     _decision_source="RULE_FALLBACK")
-        if not proposals:
-            self.store.update_research(research_id, status="STOPPED", termination_reason="PLATEAU")
-            self.store.append_event(research_id, EventKind.SYSTEM.value, "SAFE MODE STOPPED",
-                                    "Policy produced no novel controlled experiment.")
-            return
-        try:
-            self.submit_proposal(research_id, proposals[0]["id"])
-        except ValueError as exc:
-            self.store.append_event(research_id, EventKind.SYSTEM.value, "SAFE MODE STOPPED", str(exc))
+            self.store.update_research(research_id, status="READY", termination_reason=None)
+            detail = "；".join(errors[-2:]) if errors else "候选提交失败"
+            self.store.append_event(research_id, EventKind.HUMAN.value,
+                                    "DEEP_OPTIMIZATION_PLAN_AWAITING_ACTION",
+                                    f"当前阶段候选提交失败（{detail}）；研究保持未结束状态，等待用户调整或重试。")
 
     def _termination_reason(self, research_id: str) -> str | None:
         research = self._require_research(research_id)
+        if normalize_mode(research.get("mode")) == "DEEP_OPTIMIZATION":
+            # Step1-Step4 terminates only through explicit post-run approval.
+            return None
         experiments = self.store.list_experiments(research_id)
-        budget = FidelityManager.budget(research, experiments)
-        if budget["remaining"]["total"] <= 0:
-            return "BUDGET_EXHAUSTED"
-        if budget["time_remaining"] is not None and budget["time_remaining"] <= 0:
-            return "BUDGET_EXHAUSTED"
         successful = [item for item in experiments if item.get("result") and item["status"] == "SUCCESS"]
         if successful:
-            required = str(research["constraints"].get("required_fidelity", "F2"))
-            rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+            required = normalize_stage(research["constraints"].get("required_fidelity", "STEP3"))
+            rank = {"STEP1": 0, "STEP2": 1, "STEP3": 2, "STEP4": 3}
             eligible = [item for item in successful
-                        if rank.get(str(item["fidelity"]).split()[0], 0) >= rank.get(required, 2)]
+                        if rank.get(normalize_stage(item["fidelity"]), 0) >= rank.get(required, 2)]
             best = min(eligible, key=lambda item: item["result"]["objective"]["compliance"],
                        default=None)
             q = (best or {}).get("result", {}).get("quality", {})
@@ -829,9 +1122,9 @@ class ResearchService:
     def _next_research_id(self) -> str:
         used = {item["id"] for item in [*self.store.list_research(), *self.store.list_research(archived=True)]}
         number = 1
-        while f"MBB-{number:03d}" in used:
+        while f"R-{number:03d}" in used:
             number += 1
-        return f"MBB-{number:03d}"
+        return f"R-{number:03d}"
 
     def list_research(self, archived: bool = False) -> list[dict[str, Any]]:
         return self.store.list_research(archived=archived)
@@ -883,6 +1176,9 @@ class ResearchService:
                 try:
                     if backend == "matlab":
                         self.matlab_worker.cancel(run_id)
+                        cancel_event = self._matlab_eng_cancels.get(run_id)
+                        if cancel_event is not None:
+                            cancel_event.set()
                     else:
                         self.queue.cancel(run_id)
                 except Exception:
@@ -904,12 +1200,12 @@ class ResearchService:
     @staticmethod
     def _workflow_progress(research: dict[str, Any]) -> dict[str, Any]:
         labels = [
-            ("context", "读取目标、假设、预算与真实基线"),
-            ("planning", "生成三套不同角度的候选方案"),
-            ("approval", "Policy 编译与审批"),
-            ("experiments", "执行三套真实实验"),
-            ("comparison", "比较真实结果"),
-            ("selection", "选择当前最优方案"),
+            ("context", "读取目标、假设、参数配置与真实基线"),
+            ("planning", "生成当前 Step 的受控候选方案组"),
+            ("approval", "Policy 与安全校验"),
+            ("experiments", "执行当前 Step 的一轮候选实验"),
+            ("comparison", "整理当前真实结果"),
+            ("selection", "记录当前 Step 最佳有效结果"),
             ("diagnosis", "问题诊断与阶段反思"),
             ("next_round", "形成下一轮建议或终止结论"),
         ]
@@ -973,11 +1269,11 @@ class ResearchService:
 
         completed_units = sum(1.0 for key, _ in labels if statuses[key] == "completed")
         if statuses["experiments"] == "active" and current_experiments:
-            completed_units += min(1.0, len(terminal) / max(3, len(current_experiments)))
+            completed_units += min(1.0, len(terminal) / max(1, len(current_experiments)))
         percent = int(round(100 * completed_units / len(labels)))
         active_key = next((key for key, _ in labels if statuses[key] == "active"), None)
         stage = active_key or ("completed" if percent == 100 else "idle")
-        experiment_result = f"已完成 {len(terminal)} / {max(3, len(current_experiments))} 个真实方案"
+        experiment_result = f"已完成 {len(terminal)} / {max(1, len(current_experiments))} 次当前 Step 实验"
         experiment_reflection = "；".join(
             str((event.get("payload") or {}).get("reflection") or event.get("body") or "")
             for event in reflections_by_step.get("experiments", [])[-3:]
@@ -991,9 +1287,9 @@ class ResearchService:
             if key == "context":
                 result = "已导入工程基线" if baseline_ids else "使用当前 Research 已完成实验或历史最优结果"
                 reflection = "证据优先级：工程基线 → 当前真实实验 → 历史最优。"
-                next_action = "生成三套候选方案"
+                next_action = "生成本轮受控候选方案组"
             elif key == "planning":
-                result = f"已形成 {min(3, len(current_experiments))} / 3 套受控方案"
+                result = f"已形成 {len(current_experiments)} 个受控候选方案"
                 if reflections_by_step.get(key):
                     reflection = str((reflections_by_step[key][-1].get("payload") or {}).get("reflection") or "") or None
                 next_action = "进入 Policy 编译与审批"
@@ -1023,7 +1319,7 @@ class ResearchService:
                 result = research.get("termination_reason") or "已形成下一轮受控建议"
                 event = reflections_by_step.get(key, [])[-1] if reflections_by_step.get(key) else None
                 reflection = str(((event or {}).get("payload") or {}).get("reflection") or "") or None
-                next_action = "下一轮仍需 Policy、预算与审批"
+                next_action = "等待实验者选择继续当前 Step 或进入下一 Step"
             steps.append({
                 "id": key, "label": label, "status": statuses[key],
                 "summary": label, "result": result, "reflection": reflection,
@@ -1032,8 +1328,8 @@ class ResearchService:
             })
         return {
             "round": round_number, "stage": stage, "percent": percent, "steps": steps,
-            "budgetUsed": int(research.get("budget_used") or 0),
-            "budgetTotal": int(research.get("budget_total") or 0),
+            "budgetUsed": 0,
+            "budgetTotal": 0,
         }
 
     def get_research(self, research_id: str) -> dict[str, Any]:
@@ -1051,10 +1347,10 @@ class ResearchService:
         research["hypotheses"] = self.store.list_hypotheses(research_id)
         research["artifact_lineage"] = self.store.list_artifacts(research_id)
         successful = [e for e in research["experiments"] if e["status"] == "SUCCESS" and e["result"]]
-        rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
-        highest = max((rank.get(str(item["fidelity"]).split()[0], 0) for item in successful), default=0)
+        rank = {"STEP1": 0, "STEP2": 1, "STEP3": 2, "STEP4": 3}
+        highest = max((rank.get(normalize_stage(item["fidelity"]), 0) for item in successful), default=0)
         comparable = [item for item in successful
-                      if rank.get(str(item["fidelity"]).split()[0], 0) == highest]
+                      if rank.get(normalize_stage(item["fidelity"]), 0) == highest]
         research["best_experiment"] = min(
             comparable, key=lambda e: e["result"].get("objective", {}).get("compliance", float("inf")),
             default=None,
@@ -1064,9 +1360,15 @@ class ResearchService:
 
     def create_experiment(self, research_id: str,
                           request: ExperimentCreate | dict[str, Any]) -> dict[str, Any]:
+        # Serialize creation so one human decision cannot accidentally enqueue
+        # multiple experiments for the same Step.
+        with self._experiment_creation_lock:
+            return self._create_experiment_for_authorized_step(research_id, request)
+
+    def _create_experiment_for_authorized_step(
+        self, research_id: str, request: ExperimentCreate | dict[str, Any]
+    ) -> dict[str, Any]:
         research = self._require_research(research_id)
-        if research["budget_used"] >= research["budget_total"]:
-            raise ValueError("Research budget is exhausted")
         if isinstance(request, ExperimentCreate):
             model = request
         else:
@@ -1075,16 +1377,54 @@ class ResearchService:
                     "parameters": defaults.get("parameters", {})}
             model = ExperimentCreate.model_validate(_deep_merge(seed, request))
         code = _validate_fidelity_backend(model.fidelity, model.backend)
-        budget = FidelityManager.budget(research, self.store.list_experiments(research_id))
-        if code in {"F0", "F1", "F2", "F3"} and budget["remaining"].get(code, 0) <= 0:
-            raise ValueError(f"No remaining {code} budget")
-        if budget["time_remaining"] is not None and budget["time_remaining"] <= 0:
-            raise ValueError("Research time budget is exhausted")
+        defaults_state = dict(research.get("defaults") or {})
+        workflow_state = dict(defaults_state.get("autonomous_workflow") or {})
+        deep_active = (
+            normalize_mode(research.get("mode")) == "DEEP_OPTIMIZATION"
+            and bool(workflow_state.get("active_fidelity"))
+        )
+        authorization = dict(workflow_state.get("step_authorization") or {})
+        # Accept the short-lived 2.1.0 development key as compatibility input,
+        # but persist only the generalized all-Step authorization contract.
+        if not authorization and code == "STEP4":
+            authorization = dict(workflow_state.get("step4_authorization") or {})
+            if authorization:
+                authorization.setdefault("stage", "STEP4")
+        # One human authorization covers one comparison round: three
+        # different-direction candidates at Step1-Step3, one verification run
+        # at Step4. Older persisted authorizations default to the same quota.
+        limit = int(authorization.get("candidates_limit") or (1 if code == "STEP4" else 3))
+        issued = [str(item) for item in (authorization.get("experiment_ids") or [])]
+        if not issued and authorization.get("experiment_id"):
+            issued = [str(authorization["experiment_id"])]
+        if deep_active and (
+            not authorization
+            or authorization.get("consumed")
+            or len(issued) >= limit
+            or normalize_stage(authorization.get("stage")) != code
+            or normalize_stage(workflow_state.get("active_fidelity")) != code
+        ):
+            if (limit > 1 and authorization
+                    and normalize_stage(authorization.get("stage")) == code
+                    and normalize_stage(workflow_state.get("active_fidelity")) == code
+                    and len(issued) >= limit):
+                raise ValueError(
+                    f"{stage_label(code)} 本轮 {limit} 个候选名额已用完；"
+                    "请等待本轮实验完成并作出阶段决策"
+                )
+            raise ValueError(
+                f"{stage_label(code)} requires one unconsumed human authorization for the active Step"
+            )
         parameters = {**model.parameters, **research["locks"]}
         experiment_id = self._next_experiment_id(research_id)
         draft = {"id": experiment_id, "research_id": research_id, **model.model_dump(),
                  "parameters": parameters,
                  "round_number": int(research.get("current_round", 0)) + 1}
+        if normalize_mode(research.get("mode")) == "DEEP_OPTIMIZATION" and (
+            (research.get("defaults") or {}).get("optimization_config")
+        ):
+            parameters = build_solver_task(draft, research)["params"]
+            draft["parameters"] = parameters
         safety = self.orchestrator.inspect_proposal(draft)
         if not safety["safe"]:
             self.store.append_event(research_id, EventKind.SAFETY.value, "PROPOSAL REJECTED",
@@ -1096,13 +1436,24 @@ class ResearchService:
             **draft, "status": ExperimentStatus.WAITING.value, "safety": safety["risk"],
             "requires_approval": bool(requires_approval),
         })
+        if deep_active:
+            issued.append(experiment_id)
+            workflow_state["step_authorization"] = {
+                **authorization, "stage": code, "candidates_limit": limit,
+                "experiment_ids": issued,
+                "consumed": len(issued) >= limit,
+                "experiment_id": experiment_id,
+            }
+            workflow_state.pop("step4_authorization", None)
+            defaults_state["autonomous_workflow"] = workflow_state
+            self.store.update_research_json(research_id, defaults=defaults_state)
         body = (f"Purpose: {model.purpose}\n\nFidelity: {model.fidelity}\n\n"
                 f"Parameters: {json.dumps(parameters, ensure_ascii=False)}")
         self.store.append_event(research_id, EventKind.SAFETY.value, f"PROPOSAL {experiment_id}",
                                 f"Risk: {safety['risk']}\n\n{safety['reason']}", experiment_id, safety)
         self.store.append_event(research_id, EventKind.EXPERIMENT.value,
                                 f"PROPOSED EXPERIMENT {experiment_id}", body, experiment_id)
-        if research.get("mode") == "AUTONOMOUS":
+        if normalize_mode(research.get("mode")) == "DEEP_OPTIMIZATION":
             parameter_digest = hashlib.sha256(
                 json.dumps(parameters, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
             ).hexdigest()
@@ -1119,7 +1470,7 @@ class ResearchService:
                 },
                 source="RESEARCH_ORCHESTRATOR",
             )
-        if requires_approval or research["mode"] == "COPILOT":
+        if requires_approval:
             decision_id = f"D-{uuid.uuid4().hex[:8].upper()}"
             self.store.create_decision({
                 "id": decision_id, "research_id": research_id, "experiment_id": experiment_id,
@@ -1130,7 +1481,7 @@ class ResearchService:
             })
             experiment["decision_id"] = decision_id
         else:
-            if research.get("mode") == "AUTONOMOUS":
+            if normalize_mode(research.get("mode")) == "DEEP_OPTIMIZATION":
                 self.store.append_event(
                     research_id, EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
                     f"{experiment_id} 已通过自动 Policy 与 Safety 边界。", experiment_id,
@@ -1138,7 +1489,7 @@ class ResearchService:
                         "workflow_step": "approval", "status": "completed",
                         "experiment_ids": [experiment_id],
                         "evidence_ids": list(model.evidence_ids or []),
-                        "reflection": "该保真度不要求人工审批，但仍已通过 Policy、Safety 与预算校验；放行不等同于结果成功。",
+                    "reflection": "该 Step 已通过 Policy 与 Safety 校验；Step4 同时消费上一阶段人工授权。放行不等同于结果成功。",
                         "next_action": "执行真实实验并等待确定性评估",
                     },
                     source="POLICY_ENGINE",
@@ -1147,10 +1498,14 @@ class ResearchService:
         return experiment
 
     def _next_experiment_id(self, research_id: str) -> str:
-        number = len(self.store.list_experiments(research_id)) + 1
-        while self.store.get_experiment(f"E{number:02d}") is not None:
-            number += 1
-        return f"E{number:02d}"
+        # 实验编号按 Research 独立从 E001 开始；存储 ID 带研究前缀以避免
+        # 不同研究的运行记录混淆（制品目录同样按研究分文件夹存放）。
+        ordinal = len(self.store.list_experiments(research_id)) + 1
+        candidate = f"{research_id}-E{ordinal:03d}"
+        while self.store.get_experiment(candidate) is not None:
+            ordinal += 1
+            candidate = f"{research_id}-E{ordinal:03d}"
+        return candidate
 
     def get_experiment(self, experiment_id: str) -> dict[str, Any]:
         experiment = self.store.get_experiment(experiment_id)
@@ -1219,26 +1574,19 @@ class ResearchService:
             source_result = (source or {}).get("result") or {}
             density = (source_result.get("artifacts") or {}).get("density")
             if density is not None:
+                fidelity_code = normalize_stage(experiment.get("fidelity"))
+                if fidelity_code == "STEP4" and (source or {}).get("backend") == "python3d":
+                    import numpy as np
+                    array = np.asarray(density, dtype=float)
+                    if array.ndim != 3 or not np.isfinite(array).all():
+                        raise ValueError("Step3 warm-start density must be a finite 3D array")
+                    density = array.transpose(1, 2, 0).tolist()
                 task["params"]["initial_density"] = density
-                if str(experiment.get("fidelity", "")).split()[0] == "F3":
-                    task["params"]["verification_mode"] = "fixed_density"
-                    task["params"]["verification_source_experiment"] = str(experiment["warm_start"])
-                    if "grid3d" not in task["params"]:
-                        import numpy as np
-                        density_shape = np.asarray(density).shape
-                        if len(density_shape) == 3 and all(int(value) > 0 for value in density_shape):
-                            # Density arrays use (nely, nelx, nelz), while the
-                            # MATLAB task contract uses [nelx, nely, nelz].
-                            # Reuse the exact F2 discretization for fixed-density
-                            # F3 verification when no user-confirmed grid exists.
-                            task["params"]["grid3d"] = [
-                                int(density_shape[1]), int(density_shape[0]), int(density_shape[2]),
-                            ]
         cache_task = {**task, "backend": experiment["backend"]}
-        fidelity_code = str(experiment.get("fidelity", "F0")).split()[0]
+        fidelity_code = normalize_stage(experiment.get("fidelity"))
         solver_entry = self.project_root / (
             "求解器模块/TopOpt-3D/TopOpt-3D/topopt3d_main.m"
-            if fidelity_code in {"F2", "F3"} else
+            if fidelity_code in {"STEP3", "STEP4"} else
             "求解器模块/2D/TopOpt_integrated/TopOpt_integrated/topopt_main.m")
         if solver_entry.is_file():
             cache_task["solver_entry_sha256"] = hashlib.sha256(solver_entry.read_bytes()).hexdigest()
@@ -1284,15 +1632,13 @@ class ResearchService:
             return self.get_experiment(experiment_id)
         try:
             if experiment["backend"] == "matlab":
-                run_id, _ = self.matlab_worker.submit(
-                    task, research["id"], experiment_id,
-                    done=lambda rid, future: self._complete_experiment(
-                        experiment_id, rid, future, cache_task),
-                )
+                # Step4 复用"基础实现"工程 MATLAB 链路（run_topopt_job.m）：
+                # 独立 MATLAB 进程、逐轮快照/状态/PNG 制品、进度回调与取消。
+                run_id = self._start_step4_matlab(experiment, research, cache_task)
                 self.store.append_event(research["id"], EventKind.EXPERIMENT.value,
-                                        "MATLAB MCP STARTED",
-                                        "Approved task was dispatched to the restricted topopt_run_task MCP tool.",
-                                        experiment_id, {"backend": "matlab_mcp", "tool": "topopt_run_task"})
+                                        "MATLAB ENGINEERING STARTED",
+                                        "Step4 验证已按基础实现同款工程链路启动（run_topopt_job + 逐轮快照）。",
+                                        experiment_id, {"backend": "matlab_eng"})
             else:
                 run_id = self.queue.submit(
                     task, backend=experiment["backend"],
@@ -1313,12 +1659,244 @@ class ResearchService:
                 f"Solver was submitted as {run_id}, but run_id persistence failed; "
                 f"durable claim remains {claim_id}"
             ) from exc
-        self.store.update_research(research["id"], status="RUNNING",
-                                   budget_used=research["budget_used"] + 1)
+        self.store.update_research(research["id"], status="RUNNING")
         self.store.append_event(research["id"], EventKind.EXPERIMENT.value,
                                 f"EXPERIMENT {experiment_id} STARTED",
                                 f"{experiment['fidelity']} is running in the background.", experiment_id)
         return self.get_experiment(experiment_id)
+
+    def _packaged_matlab_root(self) -> Path:
+        """Step4 工程链路的 MATLAB 资源根：打包运行时用安装目录 resources，
+        开发运行时回退源码树。__file__ 在 onefile 包内指向临时解包目录，
+        不能作为 matlab/engineering 与求解器模块的定位依据。"""
+        resource_root = os.environ.get("TOPPILOT_RESOURCE_ROOT")
+        if resource_root:
+            packaged = Path(resource_root)
+            if (packaged / "matlab" / "engineering").is_dir():
+                return packaged
+        return Path(__file__).resolve().parents[2]
+
+    def _engineering_matlab_executable(self) -> Path:
+        matlab_root = Path(self.matlab_worker.connector.matlab_root or "")
+        executable = matlab_root / "bin" / "matlab.exe" if os.name == "nt" else matlab_root / "bin" / "matlab"
+        if not executable.is_file():
+            raise RuntimeError(f"未找到 MATLAB 可执行文件：{executable}")
+        return executable
+
+    def _read_fortran_frame(self, path: Path, shape: list[int]) -> list:
+        import numpy as np
+        raw = np.fromfile(path, dtype="<f4")
+        dims = [int(dim) for dim in shape]
+        if raw.size != int(np.prod(dims)) or not dims:
+            raise ValueError(f"快照帧尺寸不匹配：{path.name}")
+        return np.reshape(raw, dims, order="F").tolist()
+
+    def _publish_matlab_progress(self, experiment_id: str, research_id: str, iteration: int,
+                                 total: int, density_2d: list, density_3d: list,
+                                 history: list, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - getattr(self, "_matlab_progress_ts", 0.0) < 1.5:
+            return
+        self._matlab_progress_ts = now
+        try:
+            self.store.update_experiment(
+                experiment_id,
+                current_iteration=int(iteration),
+                progress=min(1.0, iteration / max(total, 1)),
+                result={"status": "running", "partial": True,
+                        "task_id": experiment_id, "experiment_group": experiment_id,
+                        "objective": {}, "constraints": {}, "quality": {},
+                        "solver": {"backend": "matlab_eng_3d"},
+                        "artifacts": {"density": density_2d,
+                                      "density_3d_live": density_3d,
+                                      "history": history}})
+            self.store.append_event(
+                research_id, EventKind.EXPERIMENT.value,
+                f"MATLAB PROGRESS {experiment_id}",
+                f"实时快照：迭代 {iteration}/{total}", experiment_id)
+        except Exception:
+            pass
+
+    def _start_step4_matlab(self, experiment: dict[str, Any], research: dict[str, Any],
+                            cache_task: dict[str, Any] | None) -> str:
+        """Step4 复用"基础实现"工程 MATLAB 链路：独立 -batch 进程执行
+        run_topopt_job.m（逐轮快照/状态/可视化制品），进度实时回传科研面板。"""
+        from concurrent.futures import Future
+        experiment_id = experiment["id"]
+        run_id = f"run_eng_{experiment_id.lower()}"
+        cancel = threading.Event()
+        self._matlab_eng_cancels[run_id] = cancel
+        future = Future()
+
+        def runner() -> None:
+            try:
+                result = self._run_step4_matlab_task(experiment, research, cancel)
+                future.set_result(result)
+            except BaseException as exc:  # noqa: BLE001 - 完整失败原因进入实验记录
+                future.set_exception(exc)
+
+        def done_callback(done: Future) -> None:
+            self._complete_experiment(experiment_id, run_id, done, cache_task)
+
+        threading.Thread(target=runner, daemon=True,
+                         name=f"step4-matlab-{experiment_id}").start()
+        future.add_done_callback(done_callback)
+        return run_id
+
+    def _run_step4_matlab_task(self, experiment: dict[str, Any], research: dict[str, Any],
+                               cancel: threading.Event) -> dict[str, Any]:
+        from topoptpilot_desktop.engineering.matlab_runner import run_matlab_batch
+        from solver.result_schema import connected_components as density_components
+        experiment_id = experiment["id"]
+        config = ((research.get("defaults") or {}).get("optimization_config") or {})
+        params = experiment.get("parameters") or {}
+        material_cfg = config.get("material") or {}
+        nelx = int(config.get("nelx") or 48)
+        nely = int(config.get("nely") or 16)
+        nelz = int(config.get("nelz") or 12)
+        # MATLAB 参数信封（与正式链路同一边界）；存量研究中的非法组合
+        # （beta > beta_max）在此自动归一，保证演示流程不卡。
+        volfrac, penal, rmin = float(params.get("volfrac", .4)), float(params.get("penal", 3.)), float(params.get("rmin", 2.))
+        beta = float(params.get("beta", 1.))
+        beta_max = max(float(params.get("beta_max", beta) or beta), beta)
+        move = float(params.get("move", .2))
+        projection = str(params.get("projection") or "none")
+        controller = str(params.get("controller") or "fixed_controller")
+        if not (.1 <= volfrac <= .7 and .75 <= rmin <= 4 and 1 <= penal <= 5
+                and 1 <= beta <= 64 and beta <= beta_max <= 64
+                and projection in {"none", "heaviside_projection"}
+                and controller in {"fixed_controller", "periodic_controller"}
+                and .01 <= move <= .5):
+            raise RuntimeError("Task escaped the approved MATLAB parameter envelope")
+        packaged_root = self._packaged_matlab_root()
+        task = {
+            "task_id": experiment_id, "dimension": "3d",
+            "load_case": str(config.get("bcType") or "cantilever"),
+            "solver_dir": str(packaged_root / "求解器模块" / "TopOpt-3D" / "TopOpt-3D"),
+            "geometry": {"nelx": nelx, "nely": nely, "nelz": nelz,
+                         "dimensions": [int(v) for v in (config.get("dimensions") or [48, 16, 12])],
+                         "unit": str(config.get("unit") or "m"),
+                         "cell_size_m": float(config.get("cellSizeMeters") or 1.0)},
+            "params": {"volfrac": volfrac, "penal": penal, "rmin": rmin,
+                       "max_iter": int(config.get("maxIterations", 80)),
+                       "min_iter": int(config.get("minIterations", 10)),
+                       "filter_strategy": str(config.get("filterStrategy") or "fixed"),
+                       "accuracy": str(config.get("accuracy") or "high"),
+                       "beta": beta, "beta_max": beta_max,
+                       "projection": projection, "controller": controller, "move": move},
+            "material": {
+                "preset": str(material_cfg.get("preset") or "structural-steel"),
+                "name": str(material_cfg.get("name") or "结构钢"),
+                "E": float(material_cfg.get("youngsModulusGPa") or 200.0),
+                "E_GPa": float(material_cfg.get("youngsModulusGPa") or 200.0),
+                "nu": float(material_cfg.get("poissonRatio") or 0.3),
+                "density_kg_m3": float(material_cfg.get("densityKgM3") or 7850.0),
+                "yield_strength_MPa": float(material_cfg.get("yieldStrengthMPa") or 250.0),
+            },
+        }
+        output_dir = self.data_dir / research["id"] / "matlab_eng" / experiment_id
+        total_iterations = int(config.get("maxIterations", 80))
+        history: list[dict[str, Any]] = []
+        self._publish_matlab_progress(experiment_id, research["id"], 0, total_iterations,
+                                      [], [], [], force=True)
+
+        def cancelled() -> bool:
+            return cancel.is_set()
+
+        # 实时进度：独立 watcher 扫描唯一名帧文件（不读覆盖型清单/状态，
+        # 从机制上规避 Windows 文件占用冲突）。
+        def frame_iteration(path: Path) -> int:
+            try:
+                return int(path.stem.split("_")[1])
+            except (IndexError, ValueError):
+                return 0
+
+        def watcher() -> None:
+            snapshots_dir = output_dir / "snapshots"
+            last_iteration = 0
+            last_emit = 0.0
+            while not done_flag.wait(0.3):
+                try:
+                    if not snapshots_dir.is_dir():
+                        continue
+                    latest = None
+                    latest_iteration = 0
+                    for frame_path in snapshots_dir.glob("iter_*_density.bin"):
+                        iteration = frame_iteration(frame_path)
+                        if iteration > latest_iteration:
+                            latest_iteration = iteration
+                            latest = frame_path
+                    if latest is None or latest_iteration <= last_iteration:
+                        continue
+                    now = time.monotonic()
+                    if now - last_emit < 1.2:
+                        continue
+                    meta_path = snapshots_dir / f"iter_{latest_iteration:04d}_meta.json"
+                    compliance = None
+                    try:
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        compliance = meta.get("objective")
+                    except Exception:
+                        compliance = None
+                    density_3d = self._read_fortran_frame(latest, [nely, nelx, nelz])
+                    z_mid = len(density_3d[0][0]) // 2 if density_3d and density_3d[0] else 0
+                    density_2d = [[row[column][z_mid] for column in range(len(row))]
+                                  for row in density_3d]
+                    history.append({"iteration": latest_iteration,
+                                    "compliance": compliance})
+                    self._publish_matlab_progress(experiment_id, research["id"],
+                                                  latest_iteration, total_iterations,
+                                                  density_2d, density_3d, list(history))
+                    last_iteration = latest_iteration
+                    last_emit = now
+                except Exception:
+                    continue
+
+        stop_watching = threading.Event()
+        done_flag = stop_watching
+        watcher_thread = threading.Thread(target=watcher, daemon=True,
+                                          name=f"step4-snapshots-{experiment_id}")
+        watcher_thread.start()
+
+        summary = run_matlab_batch(
+            self._engineering_matlab_executable(), task, output_dir,
+            source_root=packaged_root / "matlab" / "engineering",
+            cancel=cancelled, timeout_seconds=7200, progress=None)
+        stop_watching.set()
+        density_path = output_dir / "snapshots" / "final_density.bin"
+        manifest_path = output_dir / "result_manifest.json"
+        density_3d: list = []
+        shape: list[int] = []
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            shape = [int(dim) for dim in manifest.get("shape") or []]
+            density_3d = self._read_fortran_frame(output_dir / manifest.get("density_file", "final_density.bin"), shape)
+        except Exception:
+            if not density_3d and history:
+                density_3d = []
+        import numpy as np
+        quality: dict[str, Any] = {"gray_ratio": summary.get("gray_ratio")}
+        if shape and len(shape) == 3 and density_3d:
+            cube = np.asarray(density_3d, dtype=float)
+            quality["gray_ratio"] = round(float(density_gray_ratio(cube)), 4)
+            quality["connected_components"] = int(density_components(cube))
+        objective_history = [
+            {"iteration": index + 1, "compliance": float(value)}
+            for index, value in enumerate(summary.get("objective_history") or [])
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        return {
+            "status": "converged", "task_id": experiment_id,
+            "experiment_group": experiment_id,
+            "objective": {"compliance": summary.get("objective")},
+            "constraints": {"volume_fraction": summary.get("volume_fraction")},
+            "quality": quality,
+            "solver": {"backend": "matlab_eng_3d", "iterations": int(summary.get("iterations") or 0),
+                       "solver_entry": summary.get("solver_entry"),
+                       "executed_config": task["params"]},
+            "artifacts": {"density": density_3d,
+                          "history": objective_history},
+        }
 
     def _sync_progress(self, experiment: dict[str, Any]) -> None:
         snapshot = self.queue.poll(experiment["run_id"])
@@ -1349,7 +1927,7 @@ class ResearchService:
                 return
             try:
                 result = future.result()
-                analysis = self.orchestrator.analyze(research, result)
+                analysis = self.orchestrator.analyze(research, result, experiment)
                 result["evaluation"] = analysis["evaluation"]
                 if run_id != "cache_hit":
                     self.cache.put(cache_task or {**build_solver_task(experiment, research),
@@ -1394,7 +1972,7 @@ class ResearchService:
                             "stress_unit": result.get("quality", {}).get("stress_unit"),
                             "stress_unit_trusted": result.get("quality", {}).get("stress_unit_trusted"),
                         },
-                        "reflection": analysis["analysis"],
+                        "reflection": self._chinese_reflection(status, analysis["evaluation"]),
                         "next_action": analysis["feedback"],
                     },
                     source="DETERMINISTIC_EVALUATOR",
@@ -1433,8 +2011,27 @@ class ResearchService:
                 )
             running = [e for e in self.store.list_experiments(research["id"])
                        if e["status"] in {"WAITING", "RUNNING"}]
-            if not running:
+            round_ready = not running
+            current = None
+            if round_ready:
                 current = self._require_research(research["id"])
+                if normalize_mode(current.get("mode")) == "DEEP_OPTIMIZATION":
+                    # 缓存命中的候选会在创建循环内同步完成；只有当本轮授权的
+                    # 全部候选都到达终态时才允许收轮，避免提前弹窗、重复弹窗
+                    # 与轮次跳号。
+                    authorization = dict(((current.get("defaults") or {}).get(
+                        "autonomous_workflow") or {}).get("step_authorization") or {})
+                    authorized_ids = [str(item) for item in
+                                      (authorization.get("experiment_ids") or [])]
+                    if authorized_ids:
+                        statuses = {item["id"]: item["status"]
+                                    for item in self.store.list_experiments(research["id"])}
+                        round_ready = all(
+                            statuses.get(item) in {"SUCCESS", "FAILED", "CANCELLED"}
+                            for item in authorized_ids)
+                if round_ready and self._pending_fidelity_stage_gate(research["id"]) is not None:
+                    round_ready = False
+            if round_ready and current is not None:
                 next_round = int(current.get("current_round", 0)) + 1
                 self.store.update_research(research["id"],
                                            current_round=next_round)
@@ -1464,13 +2061,19 @@ class ResearchService:
                         self.store.append_event(research["id"], EventKind.SYSTEM.value,
                                                 "FINAL REPORT FAILED", str(report_error))
                     if self.pi_runtime:
-                        self.pi_runtime.subagents.dispatch(
-                            research["id"], "INDEPENDENT_REVIEWER",
-                            "Audit whether the deterministic evidence supports the termination and conclusion.")
-                        self.pi_runtime.subagents.dispatch(
-                            research["id"], "REPORT_WRITER",
-                            "Review the final deterministic report for evidence attribution and missing values.")
-                elif current["mode"] == "AUTONOMOUS":
+                        try:
+                            self.pi_runtime.subagents.dispatch(
+                                research["id"], "INDEPENDENT_REVIEWER",
+                                "Audit whether the deterministic evidence supports the termination and conclusion.")
+                            self.pi_runtime.subagents.dispatch(
+                                research["id"], "REPORT_WRITER",
+                                "Review the final deterministic report for evidence attribution and missing values.")
+                        except Exception as dispatch_error:
+                            self.store.append_event(
+                                research["id"], EventKind.SYSTEM.value,
+                                "SUBAGENT_DISPATCH_UNAVAILABLE",
+                                f"终止评审子代理暂不可用（{dispatch_error}）；终止结论以确定性证据为准。")
+                elif normalize_mode(current["mode"]) == "DEEP_OPTIMIZATION":
                     all_experiments = self.store.list_experiments(research["id"])
                     batch_round = max(
                         [int(item.get("round_number") or 0) for item in all_experiments]
@@ -1489,11 +2092,7 @@ class ResearchService:
                         if item.get("status") == "SUCCESS"
                         and isinstance((item.get("result") or {}).get("objective", {}).get("compliance"), (int, float))
                     ]
-                    best = min(
-                        successful_items,
-                        key=lambda item: item["result"]["objective"]["compliance"],
-                        default=None,
-                    ) or {}
+                    best = self._select_round_best(successful_items)
                     failed_items = [item for item in completed_items if item.get("status") in {"FAILED", "CANCELLED"}]
                     weak_points: list[str] = []
                     if best:
@@ -1504,7 +2103,7 @@ class ResearchService:
                         if isinstance(gray, (int, float)) and gray > float(refreshed.get("constraints", {}).get("gray_max", 0.05)):
                             weak_points.append("灰度率仍高于研究约束")
                     if failed_items:
-                        weak_points.append(f"{len(failed_items)} 个候选未产生可用于结论的真实成功结果")
+                        weak_points.append(f"{len(failed_items)} 个候选求解无效，未产生可用于结论的真实指标")
                     comparison_reflection = "失败或取消方案只保留状态与原因，不以模拟指标补齐。"
                     self.store.append_event(
                         research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
@@ -1522,7 +2121,8 @@ class ResearchService:
                     )
                     self.store.append_event(
                         research["id"], EventKind.ANALYSIS.value, "WORKFLOW_REFLECTION",
-                        "已按真实柔度选择当前最优方案。" if best else "本轮没有可选的真实成功方案。",
+                        ("已对比本轮各候选的连通性、灰度率与柔度，选定最优方案 "
+                         f"{best.get('id')}。" if best else "本轮没有有效求解结果，无法指定最优方案。"),
                         payload={
                             "workflow_step": "selection", "status": "completed",
                             "experiment_ids": completed_ids,
@@ -1530,9 +2130,17 @@ class ResearchService:
                             "result": {
                                 "best_experiment_id": best.get("id"),
                                 "best_compliance": (best.get("result") or {}).get("objective", {}).get("compliance"),
+                                "comparison": [
+                                    {"id": item["id"],
+                                     "compliance": (item.get("result") or {}).get("objective", {}).get("compliance"),
+                                     "gray_ratio": (item.get("result") or {}).get("quality", {}).get("gray_ratio"),
+                                     "connected_components": (item.get("result") or {}).get("quality", {}).get("connected_components")}
+                                    for item in successful_items
+                                ],
                             },
-                            "reflection": "优选只使用同一 Research 中本轮持久化的真实成功结果；无成功结果时不指定最优方案。",
-                            "next_action": "诊断最优方案弱点与失败候选原因",
+                            "reflection": ("优选顺序：结构连通优先，灰度率更低次之，柔度更低收尾；"
+                                           "只使用同一 Research 中本轮持久化的真实成功结果。"),
+                            "next_action": "把最优方案提交人工审批，作为下一阶段基线或重开一轮",
                         },
                         source="DETERMINISTIC_EVALUATOR",
                     )
@@ -1566,12 +2174,12 @@ class ResearchService:
                         },
                         source="RESEARCH_ORCHESTRATOR",
                     )
-                    fidelity_rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
-                    completed_fidelities = [str(item.get("fidelity") or "F0").split()[0]
+                    fidelity_rank = {"STEP1": 0, "STEP2": 1, "STEP3": 2, "STEP4": 3}
+                    completed_fidelities = [normalize_stage(item.get("fidelity"))
                                             for item in completed_items]
                     internal_fidelity = max(completed_fidelities,
-                                            key=lambda value: fidelity_rank.get(value, 0), default="F0")
-                    stage_code = f"F{fidelity_rank.get(internal_fidelity, 0) + 1}"
+                                            key=lambda value: fidelity_rank.get(value, 0), default="STEP1")
+                    stage_code = internal_fidelity
                     self.store.append_event(
                         research["id"], EventKind.HUMAN.value, "FIDELITY_STAGE_AWAITING_DECISION",
                         f"{stage_code} 已完成，请确认进入下一流程，或在本流程再进行一轮。",
@@ -1980,12 +2588,11 @@ class ResearchService:
         source = self._experiment_arg(research_id, args, "/promote <experiment>")
         current = str(source["fidelity"]).split()[0]
         target = FidelityManager().promote_code(current)
-        labels = {"F0": "F0 — Python 2D Coarse", "F1": "F1 — Python 2D Fine",
-                  "F2": "F2 — Python 3D Target", "F3": "F3 — MATLAB 3D Formal"}
+        labels = {step: stage_label(step) for step in FidelityManager.CODES}
         promoted = ExperimentCreate(purpose=f"Promote {source['id']} to {target}",
                                     fidelity=labels[target], mesh_level=FidelityManager.mesh_level(target),
                                     backend=FidelityManager.backend_for(target), parameters=source["parameters"],
-                                    warm_start=source["id"], requires_approval=target == "F3",
+                                    warm_start=source["id"], requires_approval=False,
                                     intent="UPGRADE_FIDELITY")
         new = self.create_experiment(research_id, promoted)
         return WorkspaceCommandResult(ok=True, message=f"Created promoted run {new['id']}.",
@@ -2136,18 +2743,23 @@ class ResearchService:
         health = self.matlab_worker.health()
         runtime = self.matlab_worker.capabilities(probe=False)
         profiles = []
-        for code, dimension, mesh in (("F0", 2, "coarse"), ("F1", 2, "fine"),
-                                      ("F2", 3, "coarse3d"), ("F3", 3, "fine3d")):
+        for code, dimension, mesh, backend in (
+            ("STEP1", 2, "coarse", "python"),
+            ("STEP2", 2, "coarse", "python"),
+            ("STEP3", 3, "coarse3d", "python3d"),
+            ("STEP4", 3, "fine3d", "matlab"),
+        ):
             profiles.append({
                 "fidelity": code, "dimension": dimension, "mesh_level": mesh,
-                "backend": "matlab", "available": health.get("state") == "READY",
+                "backend": backend,
+                "available": True if backend != "matlab" else health.get("state") == "READY",
                 "variants": runtime.get("variants", ["reference_cpu"]),
                 "selected_variant": runtime.get("selected_variant", "reference_cpu"),
                 "acceleration_mode": runtime.get("acceleration_mode", "cpu"),
-                "requires_human_approval": code == "F3",
+                "requires_human_approval": False,
             })
         return {"matlab": health, "runtime": runtime, "fidelities": profiles,
-                "strict_matlab": True, "python_fallback": False}
+                "strict_matlab": False, "python_fallback": True}
 
     def preview_geometry(self, request: dict[str, Any]) -> dict[str, Any]:
         """Generate masks and load/support node mappings inside controlled MATLAB."""
@@ -2247,7 +2859,7 @@ class ResearchService:
         existing = self.list_research()
         if existing:
             return self.get_research(existing[0]["id"])
-        research = self.create_research(ResearchCreate(name="MBB Beam Workspace"))
+        research = self.create_research(ResearchCreate(name="Topology Optimization Workspace"))
         self.create_experiment(research["id"], ExperimentCreate(
             purpose="Establish the coarse 2D baseline.", parameters={
                 "volfrac": 0.4, "rmin": 1.5, "penal": 3, "beta": 1, "max_iter": 60,

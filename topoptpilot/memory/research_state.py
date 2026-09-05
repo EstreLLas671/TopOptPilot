@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from topoptpilot.nomenclature import LEGACY_STAGE_TO_STEP, normalize_mode
 
 
 def utc_now() -> str:
@@ -25,7 +26,23 @@ class ResearchStateStore:
         self.db_path = Path(db_path).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._backup_legacy_database()
         self._initialize()
+
+    def _backup_legacy_database(self) -> None:
+        """Create one consistent pre-2.1 backup before structured migration."""
+        if not self.db_path.is_file():
+            return
+        backup_path = self.db_path.with_suffix(self.db_path.suffix + ".pre-2.1.0.bak")
+        if backup_path.exists():
+            return
+        source = sqlite3.connect(self.db_path, timeout=30)
+        target = sqlite3.connect(backup_path)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
 
     @contextmanager
     def connection(self):
@@ -36,6 +53,9 @@ class ResearchStateStore:
         try:
             yield connection
             connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
@@ -211,6 +231,30 @@ class ResearchStateStore:
             for table in ("subagent_tasks", "hypotheses", "artifact_lineage"):
                 self._ensure_columns(db, table, {"research_run_id": "TEXT"})
             self._backfill_research_runs(db)
+            self._migrate_v210_names(db)
+
+    @staticmethod
+    def _migrate_v210_names(db: sqlite3.Connection) -> None:
+        if int(db.execute("PRAGMA user_version").fetchone()[0]) >= 210:
+            return
+        db.execute("UPDATE research SET mode='DEEP_OPTIMIZATION' WHERE mode IN ('AUTONOMOUS','COPILOT','RESEARCH')")
+        for legacy, step in LEGACY_STAGE_TO_STEP.items():
+            db.execute("UPDATE experiments SET fidelity=? || substr(fidelity, 3) WHERE fidelity=? OR fidelity LIKE ?",
+                       (step, legacy, legacy + ' %'))
+            db.execute("UPDATE proposals SET fidelity=? WHERE fidelity=?", (step, legacy))
+        rows = db.execute("SELECT id, defaults_json FROM research").fetchall()
+        for row in rows:
+            try:
+                defaults = json.loads(row["defaults_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            workflow = defaults.get("autonomous_workflow") or {}
+            active = str(workflow.get("active_fidelity") or "")
+            if active in LEGACY_STAGE_TO_STEP:
+                workflow["active_fidelity"] = LEGACY_STAGE_TO_STEP[active]
+                defaults["autonomous_workflow"] = workflow
+                db.execute("UPDATE research SET defaults_json=? WHERE id=?", (json.dumps(defaults), row["id"]))
+        db.execute("PRAGMA user_version=210")
 
     @staticmethod
     def _backfill_research_runs(db: sqlite3.Connection) -> None:

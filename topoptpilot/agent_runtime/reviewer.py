@@ -16,7 +16,7 @@ class ReviewerWorkflow:
             raise ValueError(f"Unsupported reviewer trigger: {trigger}")
         message = (
             f"Act as a bounded Reviewer Sub-Agent for {trigger}. First call research_get_context "
-            "and research_get_budget. Audit evidence sufficiency, causal ambiguity, budget value, "
+            "and solver_get_capabilities. Audit evidence sufficiency, causal ambiguity, and safety, "
             f"and safety for proposal {proposal_id or 'none'}. Do not submit experiments. Return a "
             "short APPROVE, REVISE, or REJECT recommendation with cited experiment IDs."
         )

@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 import threading
 
 import uvicorn
@@ -24,6 +25,15 @@ def _exit_with_desktop_parent() -> None:
         if handle:
             ctypes.windll.kernel32.WaitForSingleObject(handle, infinite)
             ctypes.windll.kernel32.CloseHandle(handle)
+            # 桌面进程已退出：整树终结 sidecar 及其全部子进程
+            # （MATLAB MCP 服务、MATLAB 引擎、求解器进程池）。
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(os.getpid())],
+                    capture_output=True, creationflags=0x08000000, timeout=15,
+                )
+            except Exception:
+                pass
             os._exit(0)
     except (OSError, ValueError):
         return

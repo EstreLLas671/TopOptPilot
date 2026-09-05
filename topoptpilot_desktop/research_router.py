@@ -51,8 +51,8 @@ def research_from_engineering_run(run_id: str, request: EngineeringBaselineReque
     research = service.create_research({
         "name": request.name,
         "goal": request.goal,
-        "budget_total": request.budgetTotal,
-        "mode": "COPILOT",
+        "budget_total": 1,
+        "mode": "DEEP_OPTIMIZATION",
         "constraints": {"engineering_baseline": baseline},
     })
     service.store.append_event(
@@ -344,12 +344,28 @@ def _research_config_template(research_id: str) -> tuple[ResearchOptimizationCon
         return ResearchOptimizationConfig.model_validate(raw), True
     geometry = research.get("geometry") or {}
     material = research.get("material") or {}
+    boundary = research.get("boundary_conditions") or {}
+    constraints = research.get("constraints") or {}
+    experiment_defaults = defaults.get("experiment") or {}
+    parameter_defaults = experiment_defaults.get("parameters") or {}
     raw_dimension = str(geometry.get("dimension") or "3d").lower()
     raw_dimensions = list(geometry.get("dimensions") or [6.0, 2.0, 1.5])
     while len(raw_dimensions) < 3:
         raw_dimensions.append(1.0)
+    raw_preset = str(material.get("preset") or "normalized").lower()
+    material_preset = {
+        "steel": "structural-steel",
+        "aluminum": "aluminum-6061-t6",
+        "titanium": "titanium-ti6al4v",
+    }.get(raw_preset, raw_preset)
+    if material_preset not in {
+        "normalized", "structural-steel", "aluminum-6061-t6",
+        "titanium-ti6al4v", "custom",
+    }:
+        material_preset = "custom"
     seed = ResearchOptimizationConfig(
         dimension="2d" if raw_dimension in {"2", "2d"} else "3d",
+        bcType=str(boundary.get("type") or "cantilever"),
         dimensions=raw_dimensions[:3],
         unit=str(geometry.get("unit") or "m"),
         cellSizeMeters=float(geometry.get("cell_size_m") or 0.25),
@@ -357,13 +373,30 @@ def _research_config_template(research_id: str) -> tuple[ResearchOptimizationCon
         nely=int(geometry.get("nely") or 8),
         nelz=int(geometry.get("nelz") or 6),
         accuracy=str(geometry.get("accuracy") or "standard"),
+        volfrac=float(parameter_defaults.get(
+            "volfrac", constraints.get("volume_fraction", 0.4)
+        )),
+        penal=float(parameter_defaults.get("penal", 3.0)),
+        rmin=float(parameter_defaults.get("rmin", 1.5)),
+        minIterations=int(parameter_defaults.get("min_iter", 10)),
+        maxIterations=int(parameter_defaults.get("max_iter", 60)),
+        filterStrategy=str(parameter_defaults.get("filter_strategy", "fixed")),
         material=ResearchMaterialConfig(
-            preset="normalized",
+            preset=material_preset,
             name=str(material.get("name") or "归一化参考材料"),
-            youngsModulusGPa=float(material.get("E") or material.get("youngs_modulus_gpa") or 1),
+            youngsModulusGPa=float(
+                material.get("E_GPa")
+                or material.get("youngs_modulus_gpa")
+                or material.get("E")
+                or 1
+            ),
             poissonRatio=float(material.get("nu") or material.get("poisson_ratio") or 0.3),
             densityKgM3=float(material.get("density_kg_m3") or 1),
-            yieldStrengthMPa=float(material.get("yield_strength_mpa") or 1),
+            yieldStrengthMPa=float(
+                material.get("yield_strength_MPa")
+                or material.get("yield_strength_mpa")
+                or 1
+            ),
         ),
     )
     return seed, False
@@ -394,6 +427,17 @@ def _persist_research_optimization_config(
     payload = request.model_dump()
     defaults = dict(research.get("defaults") or {})
     defaults["optimization_config"] = payload
+    defaults["optimization_config_digest"] = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    defaults["parameter_policy"] = {
+        "mutable": ["volfrac", "beta", "beta_max", "projection", "controller", "move"],
+        "immutable_visible": [
+            "dimension", "bcType", "accuracy", "dimensions", "unit",
+            "cellSizeMeters", "nelx", "nely", "nelz", "penal", "rmin",
+            "minIterations", "maxIterations", "filterStrategy", "material",
+        ],
+    }
     geometry = dict(research.get("geometry") or {})
     geometry.update({
         "dimension": request.dimension,
@@ -405,7 +449,20 @@ def _persist_research_optimization_config(
         "nelz": 1 if request.dimension == "2d" else request.nelz,
         "accuracy": request.accuracy,
     })
-    service.store.update_research_json(research_id, defaults=defaults, geometry=geometry)
+    material = {
+        "preset": request.material.preset, "name": request.material.name,
+        "E": request.material.youngsModulusGPa,
+        "E_GPa": request.material.youngsModulusGPa, "nu": request.material.poissonRatio,
+        "density_kg_m3": request.material.densityKgM3,
+        "yield_strength_MPa": request.material.yieldStrengthMPa,
+    }
+    constraints = dict(research.get("constraints") or {})
+    constraints["volume_fraction"] = request.volfrac
+    boundary = dict(research.get("boundary_conditions") or {})
+    boundary["type"] = request.bcType
+    service.store.update_research_json(research_id, defaults=defaults, geometry=geometry,
+                                       material=material, constraints=constraints,
+                                       boundary_conditions=boundary)
     return payload
 
 
@@ -636,7 +693,7 @@ def research_vision_chat(research_id: str, request: ResearchVisionRequest) -> di
                 "role": "system",
                 "content": (
                     "你是 TopOptPilot 的科研图像分析助手。仅基于提供的 Research State 与图片回答，"
-                    "区分观察与假设，不得绕过 Policy、预算或 F0-F3 审批，不得直接启动实验。"
+                    "区分观察与假设，不得绕过 Policy、安全校验或 Step1-Step4 的人工阶段控制，不得直接启动实验。"
                     "只要回复提出可填写或修改的研究目标、研究假设或参数配置，就必须在回复末尾附加"
                     "<topoptpilot-research-action>{\"type\":\"apply_research_state\",\"goal\":\"可选\","
                     "\"hypothesis\":\"可选\",\"optimizationConfig\":建议的部分或完整配置,\"changedFields\":[实际字段],"
@@ -685,8 +742,8 @@ def research_chat(research_id: str, request: ResearchChatRequest) -> dict[str, o
                 "role": "system",
                 "content": (
                     "你是 TopOptPilot 的科研对话助手。仅基于提供的 Research State 回答，"
-                    "区分事实、观察与假设；不得伪造实验结果，不得绕过 Policy、预算或 F0-F3 审批，"
-                    "也不得直接启动实验。用户要求执行时，应说明需要先完成当前 F1-F4 阶段确认。"
+                    "区分事实、观察与假设；不得伪造实验结果，不得绕过 Policy、安全校验或 Step1-Step4 人工阶段控制，"
+                    "也不得直接启动实验。用户要求执行时，应说明当前 Step 每次只运行一个实验并在结果弹窗等待选择。"
                     "只要回复提出可填写或修改的研究目标、研究假设或参数配置，就必须在回复末尾附加 "
                     "<topoptpilot-research-action>{\"type\":\"apply_research_state\","
                     "\"goal\":\"可选\",\"hypothesis\":\"可选\",\"optimizationConfig\":建议的部分或完整配置,"

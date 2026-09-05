@@ -16,7 +16,7 @@ import "./theme.css";
 type EngineeringHealth = { status: string; service: string; version: string; capabilities: { localMatlab: string; compiledRuntime: string } };
 
 export default function V2App() {
-  const [mode, setMode] = useState<WorkspaceMode>("engineering");
+  const [mode, setMode] = useState<WorkspaceMode>("basic-implementation");
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<EngineeringHealth | null>(null);
@@ -99,7 +99,7 @@ export default function V2App() {
     researchDetailRequest.current += 1;
     setSelectedResearch(created);
     setSelectedExperiment(null);
-    setMode("research");
+    setMode("deep-optimization");
   }, [settings?.new_research.budget_total]);
 
   function createResearch() {
@@ -112,14 +112,14 @@ export default function V2App() {
     setResearchNameBusy(true);
     try {
       const defaults = settings?.new_research;
-      const created = await api.createResearch({ name, goal: "", hypothesis: null, budget_total: defaults?.budget_total ?? 12, mode: defaults?.mode ?? "COPILOT", constraints: defaults?.constraints ?? {} });
+      const created = await api.createResearch({ name, goal: "", hypothesis: null, budget_total: 1, mode: "DEEP_OPTIMIZATION", constraints: defaults?.constraints ?? {} });
       setResearches(items => [created, ...items]);
       selectedResearchId.current = created.id;
       researchDetailRequest.current += 1;
       setSelectedResearch(created);
       setSelectedExperiment(null);
       setResearchNameOpen(false);
-      setMode("research");
+      setMode("deep-optimization");
     } catch (reason) { reportError(String(reason)); }
     finally { setResearchNameBusy(false); }
   }
@@ -168,10 +168,10 @@ export default function V2App() {
   // event stream therefore continue to be owned by the same Engineering
   // component instead of being torn down when Research is selected.
   const workspace = <>
-    <div className={`workspace-mode-layer ${mode === "engineering" ? "active" : "inactive"}`} aria-hidden={mode !== "engineering"}>
+    <div className={`workspace-mode-layer ${mode === "basic-implementation" ? "active" : "inactive"}`} aria-hidden={mode !== "basic-implementation"}>
       <EngineeringWorkspace health={health} environment={environment} onRefreshEnvironment={refreshEnvironment} onError={reportError} onResearchBaseline={createResearchFromRun} researches={researches} selectedResearch={selectedResearch} onCreateResearch={createResearch} onSelectResearch={refreshSelected}/>
     </div>
-    <div className={`workspace-mode-layer ${mode === "research" ? "active" : "inactive"}`} aria-hidden={mode !== "research"}>
+    <div className={`workspace-mode-layer ${mode === "deep-optimization" ? "active" : "inactive"}`} aria-hidden={mode !== "deep-optimization"}>
       <ResearchWorkspace researches={researches} selected={selectedResearch} active={active} command={command} busy={busy} safeMode={safeMode} onCommand={runResearchCommand} onCreateResearch={createResearch} onArchive={archiveResearch} onRestore={restoreResearch} onDecision={decide} onError={reportError} onSelect={refreshSelected} onSelectExperiment={setSelectedExperiment} setCommand={setCommand}/>
     </div>
   </>;
@@ -180,7 +180,7 @@ export default function V2App() {
   return <div className="v2-shell">
     <header className="v2-titlebar" data-tauri-drag-region>
       <div className="v2-brand"><span className="v2-brand-mark"><Boxes size={18}/></span><div><b>TopOptPilot</b><small>TOPOLOGY WORKBENCH</small></div></div>
-      <nav className="v2-workspaces" aria-label="工作区">{(["engineering", "research"] as WorkspaceMode[]).map(item => <button key={item} title={item === "engineering" ? "工程开发" : "AI 科研"} className={mode === item ? "active" : ""} onClick={() => setMode(item)}><span className="workspace-dot" data-mode={item}/>{workspaceLabel(item)}</button>)}</nav>
+      <nav className="v2-workspaces" aria-label="工作区">{(["basic-implementation", "deep-optimization"] as WorkspaceMode[]).map(item => <button key={item} title={workspaceLabel(item)} className={mode === item ? "active" : ""} onClick={() => setMode(item)}><span className="workspace-dot" data-mode={item}/>{workspaceLabel(item)}</button>)}</nav>
       <div className="v2-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/></button></div>
     </header>
     {error ? <div className="v2-error"><ShieldCheck size={15}/>{error}<button aria-label="关闭错误" onClick={() => setError("")}>×</button></div> : null}

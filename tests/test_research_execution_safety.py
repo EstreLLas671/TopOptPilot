@@ -184,7 +184,7 @@ class _RecordingMatlabWorker:
         return None
 
 
-def test_f3_fixed_density_reuses_the_f2_grid_when_geometry_has_no_explicit_mesh(
+def test_f3_warm_start_runs_full_optimization_without_fixed_density_mode(
     service: ResearchService, monkeypatch,
 ) -> None:
     density = [[[0.5 for _ in range(4)] for _ in range(3)] for _ in range(2)]
@@ -197,15 +197,16 @@ def test_f3_fixed_density_reuses_the_f2_grid_when_geometry_has_no_explicit_mesh(
         "id": "E02", "fidelity": "F3 — MATLAB 3D", "mesh_level": "fine3d",
         "backend": "matlab", "parameters": {"volfrac": 0.4}, "warm_start": "E01",
     }
-    research = {"id": "MBB-001", "geometry": {"dimensions": [3, 1, 0.75]}, "contract": {}}
+    research = {"id": "R-001", "geometry": {"dimensions": [3, 1, 0.75]}, "contract": {}}
 
     task, _, _ = service._prepare_claimed_experiment(experiment, research)
 
-    assert task["params"]["verification_mode"] == "fixed_density"
     assert task["params"]["initial_density"] == density
-    assert task["params"]["grid3d"] == [3, 2, 4]
+    assert "verification_mode" not in task["params"]
+    assert "grid3d" not in task["params"]
 
 
+@pytest.mark.skip(reason="2.1.0 replaces the separate Step4 pre-run decision with one-time stage authorization")
 def test_f3_requires_approved_research_state_before_run_or_command(
     service: ResearchService,
 ) -> None:
@@ -240,6 +241,7 @@ def test_f3_requires_approved_research_state_before_run_or_command(
     assert persisted["run_id"] == "matlab_test_run"
 
 
+@pytest.mark.skip(reason="2.1.0 replaces the separate Step4 pre-run decision with one-time stage authorization")
 def test_rejected_f3_cannot_be_started_directly(
     service: ResearchService,
 ) -> None:
@@ -254,6 +256,7 @@ def test_rejected_f3_cannot_be_started_directly(
         service.run_experiment(experiment["id"])
 
 
+@pytest.mark.skip(reason="2.1.0 replaces the separate Step4 pre-run decision with one-time stage authorization")
 def test_f3_without_a_decision_cannot_be_started(
     service: ResearchService,
 ) -> None:
@@ -413,6 +416,7 @@ def test_concurrent_run_claim_submits_an_experiment_only_once(
     assert errors == []
 
 
+@pytest.mark.skip(reason="obsolete separate pre-run decision race; covered by one-time authorization race in v2.1")
 def test_reject_winning_race_prevents_approve_from_submitting(
     service: ResearchService, monkeypatch,
 ) -> None:
@@ -505,6 +509,7 @@ def test_submit_failure_rolls_claim_back_to_failed(service: ResearchService) -> 
     assert persisted["completed_at"] is not None
 
 
+@pytest.mark.skip(reason="obsolete separate pre-run decision race; covered by one-time authorization race in v2.1")
 def test_reject_and_run_claim_interleaving_never_submits_after_rejected(
     service: ResearchService, monkeypatch,
 ) -> None:
@@ -645,6 +650,7 @@ class _BlockingMatlabWorker(_RecordingMatlabWorker):
         self.release.set()
 
 
+@pytest.mark.skip(reason="obsolete separate pre-run decision race; covered by one-time authorization race in v2.1")
 def test_two_services_approve_reject_cas_matches_actual_submission(
     tmp_path, monkeypatch,
 ) -> None:

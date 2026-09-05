@@ -18,6 +18,8 @@ opts = set_default(opts, 'passive_void', []);
 opts = set_default(opts, 'passive_solid', []);
 opts = set_default(opts, 'active_mask', []);
 opts = set_default(opts, 'volume_mask', []);
+opts = set_default(opts, 'volume_projection_beta', 0);
+opts = set_default(opts, 'volume_sensitivity', []);
 
 validateattributes(x, {'numeric'}, {'real','finite','nonempty'});
 validateattributes(dc, {'numeric'}, {'real','finite','size',size(x)});
@@ -86,7 +88,13 @@ end
 
 % 标准柔顺度问题中 dc<0；下限防止非标准灵敏度造成 sqrt 数值异常。
 xActive = min(1, max(opts.xmin, x(activeMask)));
-sensitivityRatio = max(1e-30, -dc(activeMask));
+if isempty(opts.volume_sensitivity)
+    volumeGradient = ones(size(x));
+else
+    volumeGradient = opts.volume_sensitivity;
+    validateattributes(volumeGradient, {'numeric'}, {'real','finite','size',size(x)});
+end
+sensitivityRatio = max(1e-30, -dc(activeMask) ./ max(volumeGradient(activeMask), 1e-12));
 l1 = 0.0;
 l2 = 1e5;
 converged = false;
@@ -97,7 +105,8 @@ for iter = 1:opts.max_bisect
     lambda = 0.5 * (l1+l2);
     candidate = update_candidate(xActive, sensitivityRatio, lambda, opts);
     xnew(activeMask) = candidate;
-    if sum(xnew(volumeMask)) > targetVolume
+    physicalVolume = project_volume(xnew, opts.volume_projection_beta, opts.xmin);
+    if sum(physicalVolume(volumeMask)) > targetVolume
         l1 = lambda;
     else
         l2 = lambda;
@@ -120,6 +129,14 @@ function candidate = update_candidate(xActive, sensitivityRatio, lambda, opts)
 candidate = xActive .* sqrt(sensitivityRatio ./ lambda);
 candidate = max(opts.xmin, max(xActive-opts.move, ...
     min(1.0, min(xActive+opts.move, candidate))));
+end
+
+function values = project_volume(values, beta, xmin)
+if beta > 1
+    tanhHalf = tanh(0.5*beta);
+    values = (tanhHalf + tanh(beta*(values-0.5))) / (2*tanhHalf);
+end
+values = max(xmin, values);
 end
 
 function opts = set_default(opts, name, value)

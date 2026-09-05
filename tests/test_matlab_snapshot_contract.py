@@ -62,9 +62,9 @@ def test_matlab_2d_and_3d_publish_true_gray_ratio_every_iteration() -> None:
 
     assert "'gray_ratio',double(frame.gray_ratio)" in bridge
     assert "'gray_ratio'" in bridge.split("function summary = make_summary", 1)[1]
-    assert "frame.gray_ratio = gray_ratio(x, domainMask);" in solver_2d
-    assert "result.gray_ratio = gray_ratio(x, domainMask);" in solver_2d
+    assert "frame.gray_ratio = gray_ratio(xPhysical, domainMask);" in solver_2d
+    assert "result.gray_ratio = gray_ratio(finalPhysical, domainMask);" in solver_2d
     assert "active > 0.1 & active < 0.9" in solver_2d
-    assert "frame.gray_ratio = gray_ratio_3d(x, domainMask);" in solver_3d
-    assert "result.gray_ratio = gray_ratio_3d(x, domainMask);" in solver_3d
+    assert "frame.gray_ratio = gray_ratio_3d(xPhysical, domainMask);" in solver_3d
+    assert "result.gray_ratio = gray_ratio_3d(finalPhysical, domainMask);" in solver_3d
     assert "active > 0.1 & active < 0.9" in solver_3d

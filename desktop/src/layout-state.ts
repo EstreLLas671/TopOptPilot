@@ -27,8 +27,8 @@ export const LAYOUT_LIMITS = Object.freeze({
 });
 
 export const LAYOUT_STORAGE_KEYS: Record<WorkspaceMode, string> = Object.freeze({
-  engineering: "topoptpilot.layout.engineering.v4",
-  research: "topoptpilot.layout.research.v3",
+  "basic-implementation": "topoptpilot.layout.basic-implementation.v1",
+  "deep-optimization": "topoptpilot.layout.deep-optimization.v1",
 });
 
 export const LEGACY_ENGINEERING_LAYOUT_KEY = "topoptpilot.layout.engineering.v3";
@@ -85,11 +85,18 @@ export function loadWorkspaceLayout(mode: WorkspaceMode, storage: Storage | null
   try {
     const raw = storage.getItem(LAYOUT_STORAGE_KEYS[mode]);
     if (raw) return clampLayout(JSON.parse(raw) as Partial<WorkspaceLayout>);
-    if (mode === "engineering") {
-      const legacyRaw = storage.getItem(LEGACY_ENGINEERING_LAYOUT_KEY);
+    if (mode === "basic-implementation") {
+      const legacyRaw = storage.getItem("topoptpilot.layout.engineering.v4") || storage.getItem(LEGACY_ENGINEERING_LAYOUT_KEY);
       if (legacyRaw) {
         const migrated = migrateEngineeringLayout(JSON.parse(legacyRaw) as Partial<WorkspaceLayout>);
-        storage.setItem(LAYOUT_STORAGE_KEYS.engineering, JSON.stringify(migrated));
+        storage.setItem(LAYOUT_STORAGE_KEYS["basic-implementation"], JSON.stringify(migrated));
+        return migrated;
+      }
+    } else {
+      const legacyRaw = storage.getItem("topoptpilot.layout.research.v3");
+      if (legacyRaw) {
+        const migrated = clampLayout(JSON.parse(legacyRaw) as Partial<WorkspaceLayout>);
+        storage.setItem(LAYOUT_STORAGE_KEYS["deep-optimization"], JSON.stringify(migrated));
         return migrated;
       }
     }

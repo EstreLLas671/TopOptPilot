@@ -60,7 +60,7 @@ export default function EngineeringBottomPanel(props: Props) {
       </div> : null}
       {active === "log" ? <pre className="bottom-console">{events.filter(event => event.type === "console").map(event => "[" + String(event.stream || "stdout") + "] " + String(event.text || "")).join("\n") || events.map(eventLine).join("\n") || "尚无 MATLAB 运行输出。"}</pre> : null}
       {active === "output" ? <pre className="bottom-console">{terminalOutput.join("\n") || (run ? JSON.stringify({ runId: run.runId, status: run.status, metrics: run.metrics }, null, 2) : "尚无工程输出。")}</pre> : null}
-      {active === "tools" ? <pre className="bottom-console">{toolEvents.map(eventLine).join("\n") || "工程链路没有科研工具调用；Research 工具事件只在 AI 科研工作区显示。"}</pre> : null}
+      {active === "tools" ? <pre className="bottom-console">{toolEvents.map(eventLine).join("\n") || "基础实现链路没有科研工具调用；Research 工具事件只在深度优化工作区显示。"}</pre> : null}
       {active === "artifacts" ? <div className="bottom-artifacts"><header><FileJson2 size={14}/><b>本次运行制品</b><span>{run ? run.files.length + run.snapshots.length : 0} 项</span></header>{run ? [...run.files, ...run.snapshots].map(item => <div key={item.sha256}><span>{item.relativePath}</span><small>{(item.sizeBytes / 1024).toFixed(1)} KB</small><code>{item.sha256.slice(0, 12)}</code></div>) : <p>尚未运行，不能生成或展示伪造制品。</p>}</div> : null}
       {active === "diagnostics" ? <div className="bottom-diagnostics"><div><b>MATLAB</b><span>{matlabDiagnostic}</span></div><div><b>Runtime</b><span>{runtimeDiagnostic}</span></div><div><b>当前运行</b><span>{run ? `${run.runId} · ${run.status}` : "无"}</span></div>{run?.error ? <div className="diagnostic-error"><b>{run.error.code}</b><span>{run.error.message}</span></div> : null}</div> : null}
     </div>

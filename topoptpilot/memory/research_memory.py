@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from topoptpilot.fidelity import FidelityManager
+from topoptpilot.nomenclature import normalize_stage
 
 
 class ResearchMemory:
@@ -14,15 +14,32 @@ class ResearchMemory:
               for item in experiments if item.get("result")]
         l1 = [self._experiment_record(item) for item in experiments]
         l2 = self._scientific_memory(l1, research.get("constraints", {}))
-        budget = FidelityManager.budget(research, experiments)
+        defaults = research.get("defaults") or {}
+        workflow = defaults.get("autonomous_workflow") or {}
+        authoritative_config = defaults.get("optimization_config") or {}
         l3 = {
             "research_id": research["id"], "goal": research["goal"],
             "constraints": research["constraints"], "hypothesis": research.get("hypothesis"),
             "best_candidate": l2["best_candidate"], "recent_experiments": l1[-6:],
             "parameter_trends": l2["parameter_trends"], "known_failures": l2["known_failures"],
-            "pareto_candidates": l2["pareto_candidates"], "budget": budget,
+            "pareto_candidates": l2["pareto_candidates"],
             "current_question": research.get("current_question"),
             "current_round": research.get("current_round", 0),
+            "active_fidelity": normalize_stage(workflow.get("active_fidelity")),
+            "authoritative_optimization_config": authoritative_config,
+            "deep_optimization_mutable_parameters": [
+                "volfrac", "beta", "beta_max", "projection", "controller", "move",
+            ],
+            "immutable_visible_parameters": [
+                "dimension", "bcType", "accuracy", "dimensions", "unit",
+                "cellSizeMeters", "nelx", "nely", "nelz", "penal", "rmin",
+                "minIterations", "maxIterations", "filterStrategy", "material",
+            ],
+            "geometry": research.get("geometry") or {},
+            "material": research.get("material") or {},
+            "loads": research.get("loads") or [],
+            "boundary_conditions": research.get("boundary_conditions") or {},
+            "locks": research.get("locks") or {},
             "pending_decisions": [item for item in decisions if item["status"] == "PENDING"],
             "recent_evidence": [self._compact_event(item) for item in events[-8:]
                                 if item["kind"] in {"EVIDENCE", "ANALYSIS", "NEXT DECISION"}],
@@ -52,7 +69,7 @@ class ResearchMemory:
         constraints = constraints or {}
         completed = [item for item in records if item["objective"].get("compliance") is not None]
         feasible = [item for item in completed if item["status"] == "SUCCESS"]
-        rank = {"F0": 0, "F1": 1, "F2": 2, "F3": 3}
+        rank = {"STEP1": 0, "STEP2": 1, "STEP3": 2, "STEP4": 3}
         highest = max((rank.get(str(item["fidelity"]).split()[0], 0) for item in feasible), default=0)
         comparable = [item for item in feasible
                       if rank.get(str(item["fidelity"]).split()[0], 0) == highest]

@@ -42,6 +42,9 @@ config = set_default(config, 'passive_solid', []);
 config = set_default(config, 'passive_void', []);
 % Heaviside projection sharpness; beta=1 reduces to the SIMP filter-only limit.
 config = set_default(config, 'beta', 1.0);
+config = set_default(config, 'beta_max', config.beta);
+config = set_default(config, 'projection', 'none');
+config = set_default(config, 'controller', 'fixed_controller');
 validateattributes(config.beta, {'numeric'}, {'scalar','real','finite','>=',1,'<=',64});
 
 nelx = config.nelx;
@@ -108,11 +111,14 @@ objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);
 moveHistory = zeros(config.max_iterations, 1);
+betaHistory = ones(config.max_iterations, 1);
 
 for loop = 1:config.max_iterations
     % Heaviside projection sharpened by config.beta; the FE solve and the
     % objective/sensitivity chain use the projected physical density.
-    [xProj, dProj] = project_heaviside(x, config.beta);
+    betaNow = scheduled_beta(loop, config);
+    [xProj, dProj] = project_heaviside(x, betaNow);
+    xProj = max(config.xmin, xProj);
     [U, K] = FE_solver(nelx, nely, xProj, config.penal, bcConfig);
     [objective, dc] = compliance_and_sensitivity( ...
         nelx, nely, xProj, config.penal, U, KE);
@@ -127,6 +133,11 @@ for loop = 1:config.max_iterations
     ocOptions.move = config.move_end + ...
         (config.move_start-config.move_end) ...
         *(1-progress)^config.move_schedule_power;
+    if strcmp(config.projection, 'heaviside_projection')
+        ocOptions.move = min(ocOptions.move, projection_move_cap(betaNow));
+    end
+    ocOptions.volume_projection_beta = betaNow * strcmp(config.projection, 'heaviside_projection');
+    ocOptions.volume_sensitivity = dProj;
     [xNew, ocInfo] = OC_solver(x, dcFiltered, config.volfrac, ocOptions);
     change = max(abs(xNew(:)-x(:)));
     x = xNew;
@@ -136,13 +147,15 @@ for loop = 1:config.max_iterations
     radiusHistory(loop) = filterInfo.rmin;
     moveHistory(loop) = ocOptions.move;
 
+    betaHistory(loop) = betaNow;
     if config.verbose
         fprintf(['It.:%4d Obj.:%10.4f Vol.:%7.4f ', ...
             'ch.:%7.4f rmin:%5.2f move:%5.3f\n'], ...
             loop, objective, ocInfo.volume_fraction, change, ...
             filterInfo.rmin, ocOptions.move);
     end
-    if loop >= config.min_iterations && change < config.change_tolerance
+    if loop >= config.min_iterations && change < config.change_tolerance ...
+            && betaNow >= target_beta(config)
         break;
     end
 end
@@ -152,19 +165,33 @@ changeHistory = changeHistory(1:loop);
 radiusHistory = radiusHistory(1:loop);
 moveHistory = moveHistory(1:loop);
 
+betaHistory = betaHistory(1:loop);
+finalBeta = scheduled_beta(loop, config);
+[xProj, ~] = project_heaviside(x, finalBeta);
+xProj = max(config.xmin, xProj);
+[Ufinal, ~] = FE_solver(nelx, nely, xProj, config.penal, bcConfig);
+[finalObjective, ~] = compliance_and_sensitivity( ...
+    nelx, nely, xProj, config.penal, Ufinal, KE);
+objectiveHistory(end) = finalObjective;
+
 result = struct();
 result.x = xProj;
 result.raw_x = x;
 result.domain_mask = domainMask;
 result.iterations = loop;
-result.objective = objectiveHistory(end);
-result.volume_fraction = mean(x(domainMask));
+result.objective = finalObjective;
+result.volume_fraction = mean(xProj(domainMask));
 result.projected_volume_fraction = mean(xProj(domainMask));
 result.objective_history = objectiveHistory;
 result.change_history = changeHistory;
 result.radius_history = radiusHistory;
 result.move_history = moveHistory;
 result.config = config;
+result.beta_history = betaHistory;
+result.final_beta = finalBeta;
+result.final_change = changeHistory(end);
+result.converged = loop < config.max_iterations && result.final_change < config.change_tolerance ...
+    && finalBeta >= target_beta(config);
 
 if config.display
     show_result(result);
@@ -234,6 +261,36 @@ end
 function config = set_default(config, name, value)
 if ~isfield(config, name) || isempty(config.(name))
     config.(name) = value;
+end
+end
+
+function value = projection_move_cap(beta)
+if beta <= 2
+    value = 0.2;
+elseif beta <= 4
+    value = 0.1;
+elseif beta <= 8
+    value = 0.05;
+else
+    value = 0.02;
+end
+end
+
+function betaNow = scheduled_beta(iteration, config)
+if strcmp(config.projection, 'heaviside_projection') && ...
+        strcmp(config.controller, 'periodic_controller')
+    betaNow = min(config.beta_max, config.beta*2^floor((iteration-1)/10));
+else
+    betaNow = config.beta;
+end
+end
+
+function value = target_beta(config)
+if strcmp(config.projection, 'heaviside_projection') && ...
+        strcmp(config.controller, 'periodic_controller')
+    value = config.beta_max;
+else
+    value = config.beta;
 end
 end
 

@@ -20,7 +20,7 @@ from .subagents import SubagentCoordinator
 
 
 MAIN_TOOLS = (
-    "research_get_context,research_query_history,research_get_budget,policy_compile_intent,"
+    "research_get_context,research_query_history,policy_compile_intent,"
     "experiment_preview,experiment_submit,experiment_status,experiment_result,"
     "experiment_compare,research_get_pareto,failure_get_evidence,knowledge_search,knowledge_get,"
     "solver_get_capabilities,subagent_dispatch,subagent_status"
@@ -217,7 +217,7 @@ class PiProcess:
                     threading.Thread(target=self.prompt,
                                      args=(self.last_prompt, self.fallback_on_error), daemon=True).start()
                 else:
-                    if failed and self.fallback_on_error and research and research.get("mode") == "AUTONOMOUS":
+                    if failed and self.fallback_on_error and research and research.get("mode") == "DEEP_OPTIMIZATION":
                         self.bridge.service.store.append_event(
                             self.research_id, "SYSTEM", "PI SAFE MODE",
                             f"Pi/Qwen turn failed: {error}. Deterministic rule policy took over.",

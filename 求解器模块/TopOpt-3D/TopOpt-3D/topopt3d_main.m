@@ -44,7 +44,16 @@ config = set_default(config, 'objective_tolerance', accuracyDefaults.objective_t
 config = set_default(config, 'oc_tol_lambda', accuracyDefaults.oc_tol_lambda);
 % Heaviside projection sharpness; beta=1 reduces to the SIMP filter-only limit.
 config = set_default(config, 'beta', 1.0);
+config = set_default(config, 'beta_max', config.beta);
+config = set_default(config, 'projection', 'none');
+config = set_default(config, 'controller', 'fixed_controller');
 validateattributes(config.beta, {'numeric'}, {'scalar','real','finite','>=',1,'<=',64});
+validateattributes(config.beta_max, {'numeric'}, ...
+    {'scalar','real','finite','>=',config.beta,'<=',64});
+config.projection = validatestring(lower(char(string(config.projection))), ...
+    {'none','heaviside_projection'});
+config.controller = validatestring(lower(char(string(config.controller))), ...
+    {'fixed_controller','periodic_controller'});
 config = set_default(config, 'oc_max_bisect', accuracyDefaults.oc_max_bisect);
 config = set_default(config, 'filter_strategy', 'fixed');
 config = set_default(config, 'rmin_start', 3.0);
@@ -53,6 +62,13 @@ config = set_default(config, 'filter_schedule_power', 2.0);
 config = set_default(config, 'move_start', 0.2);
 config = set_default(config, 'move_end', config.move_start);
 config = set_default(config, 'move_schedule_power', 1.0);
+% 可选的逐轮回调（与工程副本一致）：默认为空，完全不影响算法行为。
+config = set_default(config, 'iteration_callback', []);
+if ~isempty(config.iteration_callback) && ...
+        ~isa(config.iteration_callback, 'function_handle')
+    error('topopt3d_main:InvalidCallback', ...
+        'iteration_callback 必须是函数句柄。');
+end
 config = set_default(config, 'geometry', struct());
 config = set_default(config, 'passive_void', []);
 config = set_default(config, 'passive_solid', []);
@@ -87,6 +103,10 @@ validateattributes(config.max_iterations, {'numeric'}, ...
     {'scalar','integer','positive'});
 validateattributes(config.min_iterations, {'numeric'}, ...
     {'scalar','integer','positive','<=',config.max_iterations});
+validateattributes(config.move_start, {'numeric'}, ...
+    {'scalar','real','finite','>=',0.01,'<=',0.5});
+validateattributes(config.move_end, {'numeric'}, ...
+    {'scalar','real','finite','>=',0.01,'<=',0.5});
 
 nelx = config.nelx;
 nely = config.nely;
@@ -119,7 +139,27 @@ if ~any(activeMask(:))
 end
 
 % 初始材料仅放置于有效域；L 形缺角等区域从第一轮 FE 开始即为 void。
-x = config.volfrac * ones(gridSize);
+if isfield(config, 'initial_density') && ~isempty(config.initial_density)
+    initialDensity = double(config.initial_density);
+    if ndims(initialDensity) ~= 3 || ~all(isfinite(initialDensity(:)))
+        error('topopt3d_main:InvalidInitialDensity', ...
+            'initial_density 必须为有限三维数组。');
+    end
+    if ~isequal(size(initialDensity), gridSize)
+        [yq, xq, zq] = ndgrid( ...
+            linspace(1, size(initialDensity,1), nely), ...
+            linspace(1, size(initialDensity,2), nelx), ...
+            linspace(1, size(initialDensity,3), nelz));
+        initialDensity = interpn(initialDensity, yq, xq, zq, 'linear');
+    end
+    x = min(max(initialDensity, config.xmin), 1.0);
+    currentVolume = mean(x(domainMask));
+    if currentVolume > 0
+        x = min(max(x * config.volfrac/currentVolume, config.xmin), 1.0);
+    end
+else
+    x = config.volfrac * ones(gridSize);
+end
 x(passiveVoid) = config.xmin;
 x(passiveSolid) = 1.0;
 
@@ -192,6 +232,8 @@ if isfield(config, 'verification_mode') && strcmpi(char(string(config.verificati
     result.von_mises = vonMisesFixed;
     result.stress = stressFixed;
     result.config = config;
+    result.final_change = 0;
+    result.converged = true;
     if config.display
         show_result_3d(result);
     end
@@ -204,12 +246,17 @@ radiusHistory = zeros(config.max_iterations, 1);
 moveHistory = zeros(config.max_iterations, 1);
 volumeErrorHistory = zeros(config.max_iterations, 1);
 penalHistory = zeros(config.max_iterations, 1);
+betaHistory = ones(config.max_iterations, 1);
 relativeObjectiveHistory = inf(config.max_iterations, 1);
 
 for iteration = 1:config.max_iterations
-    % Heaviside projection sharpened by config.beta; the FE solve and the
-    % objective/sensitivity chain use the projected physical density.
-    [xProj, dProj] = project_heaviside_3d(x, config.beta);
+    betaNow = scheduled_beta(iteration, config);
+    if strcmp(config.projection, 'heaviside_projection')
+        [xProj, dProj] = project_heaviside_3d(x, betaNow);
+    else
+        xProj = x;
+        dProj = ones(size(x));
+    end
     penalNow = scheduled_penal(iteration, config.max_iterations, config);
     U = FE_solver_3d(nelx, nely, nelz, xProj, penalNow, bcConfig);
     [objective, dc] = compliance_and_sensitivity_3d( ...
@@ -225,6 +272,11 @@ for iteration = 1:config.max_iterations
     ocOptions.move = config.move_end + ...
         (config.move_start-config.move_end) ...
         * (1-progress)^config.move_schedule_power;
+    if strcmp(config.projection, 'heaviside_projection')
+        ocOptions.move = min(ocOptions.move, projection_move_cap(betaNow));
+    end
+    ocOptions.volume_projection_beta = betaNow * strcmp(config.projection, 'heaviside_projection');
+    ocOptions.volume_sensitivity = dProj;
     [xNew, ocInfo] = OC_solver_3d(x, dcFiltered, config.volfrac, ocOptions);
 
     change = max(abs(xNew(:)-x(:)));
@@ -235,6 +287,7 @@ for iteration = 1:config.max_iterations
     moveHistory(iteration) = ocOptions.move;
     volumeErrorHistory(iteration) = ocInfo.volume_error;
     penalHistory(iteration) = penalNow;
+    betaHistory(iteration) = betaNow;
     if iteration > 1
         previousObjective = objectiveHistory(iteration-1);
         relativeObjectiveHistory(iteration) = abs(objective-previousObjective) ...
@@ -247,6 +300,20 @@ for iteration = 1:config.max_iterations
             iteration, objective, ocInfo.volume_fraction, change, ...
             penalNow, filterInfo.rmin, ocOptions.move, ocInfo.volume_error);
     end
+    if ~isempty(config.iteration_callback)
+        frame = struct();
+        frame.iteration = iteration;
+        frame.max_iterations = config.max_iterations;
+        frame.x = x;
+        frame.domain_mask = domainMask;
+        frame.objective = objective;
+        frame.change = change;
+        frame.volume_fraction = ocInfo.volume_fraction;
+        frame.rmin = filterInfo.rmin;
+        frame.penal = penalNow;
+        frame.beta = betaNow;
+        config.iteration_callback(frame);
+    end
     if iteration >= config.min_iterations && change < config.change_tolerance ...
             && relativeObjectiveHistory(iteration) < config.objective_tolerance
         break;
@@ -254,7 +321,11 @@ for iteration = 1:config.max_iterations
 end
 
 % 用最终密度重新分析，使应力图和 result.objective 与最终构型一致。
-finalProj = project_heaviside_3d(x, config.beta);
+if strcmp(config.projection, 'heaviside_projection')
+    finalProj = project_heaviside_3d(x, betaHistory(iteration));
+else
+    finalProj = x;
+end
 finalPenal = penalHistory(iteration);
 [Ufinal, Kfinal] = FE_solver_3d(nelx, nely, nelz, finalProj, finalPenal, bcConfig);
 [finalObjective, ~] = compliance_and_sensitivity_3d( ...
@@ -270,7 +341,7 @@ result.raw_x = x;
 result.domain_mask = domainMask;
 result.iterations = iteration;
 result.objective = finalObjective;
-result.volume_fraction = mean(x(domainMask));
+result.volume_fraction = mean(finalProj(domainMask));
 result.projected_volume_fraction = mean(finalProj(domainMask));
 result.objective_history = objectiveHistory(1:iteration);
 result.change_history = changeHistory(1:iteration);
@@ -278,6 +349,7 @@ result.radius_history = radiusHistory(1:iteration);
 result.move_history = moveHistory(1:iteration);
 result.volume_error_history = volumeErrorHistory(1:iteration);
 result.penal_history = penalHistory(1:iteration);
+result.beta_history = betaHistory(1:iteration);
 result.relative_objective_history = relativeObjectiveHistory(1:iteration);
 result.final_penal = finalPenal;
 result.U = Ufinal;
@@ -286,6 +358,9 @@ result.von_mises = vonMises;
 result.stress = stress;
 result.config = config;
 
+result.final_change = changeHistory(iteration);
+result.converged = iteration < config.max_iterations && ...
+    result.final_change < config.change_tolerance && betaHistory(iteration) >= target_beta(config);
 if config.display
     show_result_3d(result);
 end
@@ -366,6 +441,26 @@ if ~isfield(config, name) || isempty(config.(name))
 end
 end
 
+function value = projection_move_cap(beta)
+if beta <= 2
+    value = 0.2;
+elseif beta <= 4
+    value = 0.1;
+elseif beta <= 8
+    value = 0.05;
+else
+    value = 0.02;
+end
+end
+
+function value = target_beta(config)
+if strcmp(config.projection, 'heaviside_projection') && strcmp(config.controller, 'periodic_controller')
+    value = config.beta_max;
+else
+    value = config.beta;
+end
+end
+
 function [xProj, dProj] = project_heaviside_3d(x, beta)
 %Smooth Heaviside projection (beta-continuation); see project_heaviside (2D).
 if beta <= 1.0
@@ -377,6 +472,14 @@ tanhHalf = tanh(0.5*beta);
 xProj = (tanhHalf + tanh(beta*(x - 0.5))) / (2*tanhHalf);
 sech2 = 1 - tanh(beta*(x - 0.5)).^2;
 dProj = (beta * sech2) / (2*tanhHalf);
+end
+
+function betaNow = scheduled_beta(iteration, config)
+if strcmp(config.controller, 'periodic_controller')
+    betaNow = min(config.beta_max, config.beta * 2^floor((iteration-1)/20));
+else
+    betaNow = config.beta;
+end
 end
 
 function defaults = accuracy_defaults(accuracy, isLBracket)

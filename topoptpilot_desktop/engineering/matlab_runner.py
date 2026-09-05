@@ -92,6 +92,14 @@ def build_engineering_matlab_config(task: dict[str, Any]) -> dict[str, Any]:
         "min_iterations": int(params.get("min_iter", params.get("min_iterations", 1))),
         "filter_strategy": str(params.get("filter_strategy", "fixed")),
         "accuracy": str(params.get("accuracy", "standard")),
+        # 科研 Step4 复用本链路时经 params 透传投影/控制器参数；
+        # 工程模式自身的 task 不含这些键，默认值保持原有行为。
+        "beta": float(params.get("beta", 1.0)),
+        "beta_max": float(params.get("beta_max", params.get("beta", 1.0))),
+        "projection": str(params.get("projection", "none")),
+        "controller": str(params.get("controller", "fixed_controller")),
+        "move_start": float(params.get("move_start", params.get("move", 0.2))),
+        "move_end": float(params.get("move_end", params.get("move", 0.2))),
         "display": False,
         "material_preset": str(material.get("preset", "normalized")),
         "material_name": str(material.get("name", "归一化参考材料")),
@@ -291,8 +299,14 @@ def run_matlab_batch(
     config_path.write_text(json.dumps(matlab_config, ensure_ascii=False, indent=2), encoding="utf-8")
     expression = build_matlab_batch_expression(config_path, output_dir)
     command = [str(executable), "-wait", "-batch", f"addpath('{_matlab_quote(source_root)}'); {expression}"]
+    env = os.environ.copy()
+    solver_dir = str(task.get("solver_dir") or "")
+    if solver_dir and Path(solver_dir).is_dir():
+        # 科研 Step4 复用工程链路时指向求解器模块副本（携带投影/β 支持）；
+        # run_topopt_job.m 会将其置于 bridge 副本之前。
+        env["TOPOPTPILOT_SOLVER_PATH"] = str(Path(solver_dir).resolve())
     started = time.monotonic()
-    process = subprocess.Popen(command, cwd=output_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    process = subprocess.Popen(command, cwd=output_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=env)
     _attach_windows_process_job(process)
     output_queue: queue.Queue[str | None] = queue.Queue()
     reader = threading.Thread(target=_read_process_output, args=(process, output_queue), daemon=True)

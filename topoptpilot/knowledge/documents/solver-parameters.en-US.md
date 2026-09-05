@@ -1,3 +1,3 @@
 # MATLAB solver parameters and fidelities
 
-`volfrac`, `penal`, `rmin`, `beta` and `max_iter` are compiled by Policy. F0 is coarse MATLAB 2D, F1 fine MATLAB 2D, F2 coarse MATLAB 3D and F3 high-accuracy MATLAB 3D. F3 requires human approval. Production experiments never fall back to Python solvers.
+`volfrac`, `penal`, `rmin`, `beta` and `max_iter` are compiled by Policy. Step1 is coarse Python 2D, Step2 adaptive coarse Python 2D, Step3 coarse Python 3D and Step4 full-grid MATLAB 3D. Each authorization runs one experiment and stops for a result decision; Step4 never falls back to Python.

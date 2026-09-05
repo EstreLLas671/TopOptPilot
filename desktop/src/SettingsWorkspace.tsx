@@ -196,13 +196,13 @@ export default function SettingsWorkspace({ settings, onClose, onSaved }: Props)
         <h1>MATLAB 与计算</h1>
         <div className="settings-grid">{field("MATLAB 根目录", "compute.matlab_root")}{field("Python FEM 并发数", "compute.python_workers", "number")}{field("MATLAB 默认超时（秒）", "compute.matlab_timeout_seconds", "number")}{field("MATLAB 自动重试次数", "compute.matlab_retry_count", "number")}</div>
         <button onClick={() => void action("matlab")}><RefreshCw/>重启受控 MATLAB MCP</button>
-        <p className="warning">科研 F3 只允许真实 MATLAB MCP，不能启用 Python fallback。</p>
+        <p className="warning">深度优化 Step4 只允许真实 MATLAB MCP，不能启用 Python fallback。</p>
         {notices.compute ? <div className="settings-notice">{notices.compute}</div> : null}
       </section> : null}
       {tab === "defaults" ? <section>
         <h1>新研究默认值</h1>
         <p>不会修改任何已有 Research、实验、决策或复现包。</p>
-        <div className="settings-grid">{field("默认模式", "new_research.mode")}{field("总预算", "new_research.budget_total", "number")}{field("F0 预算", "new_research.budgets.f0", "number")}{field("F1 预算", "new_research.budgets.f1", "number")}{field("F2 预算", "new_research.budgets.f2", "number")}{field("F3 预算", "new_research.budgets.f3", "number")}{field("材料 E", "new_research.material.E", "number")}{field("泊松比 nu", "new_research.material.nu", "number")}</div>
+        <div className="settings-grid">{field("默认模式", "new_research.mode")}{field("材料 E", "new_research.material.E", "number")}{field("泊松比 nu", "new_research.material.nu", "number")}</div>
         {notices.defaults ? <div className="settings-notice">{notices.defaults}</div> : null}
       </section> : null}
       {tab === "data" ? <section>

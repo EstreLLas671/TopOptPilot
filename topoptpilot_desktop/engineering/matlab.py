@@ -114,6 +114,8 @@ def _system_registry_roots() -> list[dict[str, str]]:
             ["reg.exe", "query", r"HKLM\SOFTWARE\MathWorks\MATLAB", "/s", "/v", "MATLABROOT"],
             capture_output=True,
             text=True,
+            encoding="mbcs",
+            errors="replace",
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -121,6 +123,8 @@ def _system_registry_roots() -> list[dict[str, str]]:
         return []
     roots: list[dict[str, str]] = []
     release = ""
+    if completed.stdout is None:
+        return roots
     for raw in completed.stdout.splitlines():
         line = raw.strip()
         match = re.search(r"\\MATLAB\\(R20\d{2}[ab])$", line, re.IGNORECASE)
@@ -138,7 +142,8 @@ def _where_executables() -> list[str]:
         return []
     try:
         completed = subprocess.run(
-            ["where.exe", "matlab.exe"], capture_output=True, text=True, check=False,
+            ["where.exe", "matlab.exe"], capture_output=True, text=True, encoding="mbcs",
+            errors="replace", check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except OSError:

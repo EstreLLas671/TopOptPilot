@@ -34,6 +34,8 @@ function [xnew, info] = OC_solver(x, dc, volfrac, opts)
     opts = set_default(opts, 'passive_solid', []);
     opts = set_default(opts, 'active_mask',  []);
     opts = set_default(opts, 'volume_mask',  []);
+    opts = set_default(opts, 'volume_projection_beta', 0);
+    opts = set_default(opts, 'volume_sensitivity', []);
 
     validateattributes(x, {'numeric'}, {'real', 'finite', 'nonempty'}, ...
         mfilename, 'x', 1);
@@ -114,7 +116,13 @@ function [xnew, info] = OC_solver(x, dc, volfrac, opts)
     % 最小柔顺度问题的滤波灵敏度通常为负。若改进模型导致某些灵敏度
     % 为零或非负，设置下限可保护 sqrt()，并使这些单元向受步长限制的
     % 较低密度方向更新。
-    sensitivity_ratio = max(1e-30, -dc(active_mask));
+    if isempty(opts.volume_sensitivity)
+        volume_gradient = ones(size(x));
+    else
+        volume_gradient = opts.volume_sensitivity;
+        validateattributes(volume_gradient, {'numeric'}, {'real','finite','size',size(x)});
+    end
+    sensitivity_ratio = max(1e-30, -dc(active_mask) ./ max(volume_gradient(active_mask), 1e-12));
     x_active = min(1, max(opts.xmin, x(active_mask)));
 
     l1 = 0.0;
@@ -131,7 +139,8 @@ function [xnew, info] = OC_solver(x, dc, volfrac, opts)
                     min(1.0, min(x_active + opts.move, candidate))));
 
         xnew(active_mask) = candidate;
-        current_volume = sum(xnew(volume_mask));
+        physical_volume = project_volume(xnew, opts.volume_projection_beta, opts.xmin);
+        current_volume = sum(physical_volume(volume_mask));
 
         if current_volume > target_volume
             l1 = lambda;
@@ -159,6 +168,14 @@ function [xnew, info] = OC_solver(x, dc, volfrac, opts)
         active_mask, volume_mask, converged);
 end
 
+
+function values = project_volume(values, beta, xmin)
+if beta > 1
+    tanhHalf = tanh(0.5*beta);
+    values = (tanhHalf + tanh(beta*(values-0.5))) / (2*tanhHalf);
+end
+values = max(xmin, values);
+end
 
 function opts = set_default(opts, name, value)
     if ~isfield(opts, name) || isempty(opts.(name))

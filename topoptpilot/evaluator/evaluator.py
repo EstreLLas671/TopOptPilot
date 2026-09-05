@@ -26,6 +26,12 @@ def evaluate_result(result: dict[str, Any], constraints: dict[str, Any]) -> dict
                      and float(maximum_stress) <= float(allowable_stress))
     volume_error = (None if target_volume is None or actual_volume is None else
                     float(actual_volume) - float(target_volume))
+    # 求解有效性（决定实验成败）：结果真实、数值完备、求解器正常收敛。
+    solver_valid = (compliance is not None and math.isfinite(float(compliance))
+                    and (volume_error is None
+                         or abs(volume_error) <= float(constraints.get("volume_tolerance", .02)))
+                    and result.get("status") not in {"failed", "timeout"})
+    # 契约阈值（灰度、连通、应力）是审查条件与优化方向，不决定实验成败。
     checks = {
         "gray": gray <= gray_limit,
         "connected": (components == 1) if needs_connected else True,
@@ -33,20 +39,33 @@ def evaluate_result(result: dict[str, Any], constraints: dict[str, Any]) -> dict
         "volume": volume_error is None or abs(volume_error) <= float(constraints.get("volume_tolerance", .02)),
         "stress": stress_ok,
     }
-    success = all(checks.values()) and result.get("status") not in {"failed", "timeout"}
-    if success:
-        summary = "All configured topology constraints passed."
+    feasible = bool(solver_valid and checks["gray"] and checks["connected"] and checks["stress"])
+    unmet_targets = [name for name, ok in
+                     (("gray", checks["gray"]), ("connected", checks["connected"]),
+                      ("stress", checks["stress"])) if not ok]
+    if solver_valid and feasible:
+        summary = "All configured topology targets passed."
         next_action = "PROMOTE_OR_REPORT"
-    elif not checks["connected"]:
-        summary = "Grayness may have improved, but the topology is disconnected."
-        next_action = "RESTORE_CONNECTIVITY"
-    elif not checks["gray"]:
-        summary = "The topology remains above the configured gray-ratio limit."
-        next_action = "REDUCE_GRAYNESS"
-    else:
+    elif not solver_valid:
         summary = "The solver result did not pass numerical evaluation."
         next_action = "RETRY_OR_REVISE"
-    return {"success": success, "checks": checks, "summary": summary,
+    elif not checks["connected"]:
+        summary = ("Solver converged with valid metrics, but the topology is disconnected; "
+                   "the target gap is the next optimization direction, not a failure.")
+        next_action = "RESTORE_CONNECTIVITY"
+    elif not checks["gray"]:
+        summary = ("Solver converged with valid metrics; grayness remains above the target. "
+                   "The gap is tracked as an optimization direction across Steps, not a failure.")
+        next_action = "REDUCE_GRAYNESS"
+    else:
+        summary = ("Solver converged with valid metrics; the stress margin target is not met. "
+                   "Refine at higher fidelity.")
+        next_action = "PROMOTE_OR_REPORT"
+    return {"success": solver_valid, "feasible": feasible, "unmet_targets": unmet_targets,
+            "checks": checks,
+            "targets": {"gray_max": gray_limit, "connected": needs_connected,
+                        "allowable_stress_mpa": allowable_stress},
+            "summary": summary,
             "volume_error": volume_error,
             "maximum_von_mises": maximum_stress,
             "stress_unit": quality.get("stress_unit"),

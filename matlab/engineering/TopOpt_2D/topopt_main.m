@@ -46,6 +46,10 @@ config = set_default(config, 'passive_void', []);
 config = set_default(config, 'iteration_callback', []);
 config = set_default(config, 'live_stress_snapshots', false);
 config = set_default(config, 'stress_measure', 'gauss_max');
+config = set_default(config, 'beta', 1.0);
+config = set_default(config, 'beta_max', config.beta);
+config = set_default(config, 'projection', 'none');
+config = set_default(config, 'controller', 'fixed_controller');
 
 if ~isempty(config.iteration_callback) && ...
         ~isa(config.iteration_callback, 'function_handle')
@@ -115,11 +119,22 @@ objectiveHistory = zeros(config.max_iterations, 1);
 changeHistory = zeros(config.max_iterations, 1);
 radiusHistory = zeros(config.max_iterations, 1);
 moveHistory = zeros(config.max_iterations, 1);
+betaHistory = ones(config.max_iterations, 1);
+didConverge = false;
 
 for loop = 1:config.max_iterations
-    [U, K] = FE_solver(nelx, nely, x, config.penal, bcConfig);
+    betaNow = scheduled_beta(loop, config);
+    if strcmp(config.projection, 'heaviside_projection')
+        [xPhysical, dProjection] = project_heaviside(x, betaNow);
+    else
+        xPhysical = x;
+        dProjection = ones(size(x));
+    end
+    xPhysical = max(config.xmin, xPhysical);
+    [U, K] = FE_solver(nelx, nely, xPhysical, config.penal, bcConfig);
     [objective, dc] = compliance_and_sensitivity( ...
-        nelx, nely, x, config.penal, U, KE);
+        nelx, nely, xPhysical, config.penal, U, KE);
+    dc = dc .* dProjection;
     dc(~domainMask) = 0;
 
     filterConfig.iteration = loop;
@@ -130,14 +145,25 @@ for loop = 1:config.max_iterations
     ocOptions.move = config.move_end + ...
         (config.move_start-config.move_end) ...
         *(1-progress)^config.move_schedule_power;
+    if strcmp(config.projection, 'heaviside_projection')
+        ocOptions.move = min(ocOptions.move, projection_move_cap(betaNow));
+    end
+    ocOptions.volume_projection_beta = betaNow * strcmp(config.projection, 'heaviside_projection');
+    ocOptions.volume_sensitivity = dProjection;
     [xNew, ocInfo] = OC_solver(x, dcFiltered, config.volfrac, ocOptions);
     change = max(abs(xNew(:)-x(:)));
     x = xNew;
+    if strcmp(config.projection, 'heaviside_projection')
+        xPhysical = project_heaviside(x, betaNow);
+    else
+        xPhysical = x;
+    end
 
     objectiveHistory(loop) = objective;
     changeHistory(loop) = change;
     radiusHistory(loop) = filterInfo.rmin;
     moveHistory(loop) = ocOptions.move;
+    betaHistory(loop) = betaNow;
 
     if config.verbose
         fprintf(['It.:%4d Obj.:%10.4f Vol.:%7.4f ', ...
@@ -149,21 +175,24 @@ for loop = 1:config.max_iterations
         frame = struct();
         frame.iteration = loop;
         frame.max_iterations = config.max_iterations;
-        frame.x = x;
+        frame.x = xPhysical;
         frame.domain_mask = domainMask;
         frame.objective = objective;
         frame.change = change;
         frame.volume_fraction = ocInfo.volume_fraction;
-        frame.gray_ratio = gray_ratio(x, domainMask);
+        frame.gray_ratio = gray_ratio(xPhysical, domainMask);
         frame.rmin = filterInfo.rmin;
         frame.penal = config.penal;
+        frame.beta = betaNow;
         if config.live_stress_snapshots
             [frame.von_mises, ~] = compute_von_mises_2d(nelx, nely, ...
                 x, config.penal, U, config.stress_measure, config.E, config.nu);
         end
         config.iteration_callback(frame);
     end
-    if loop >= config.min_iterations && change < config.change_tolerance
+    if loop >= config.min_iterations && change < config.change_tolerance ...
+            && betaNow >= target_beta(config)
+        didConverge = true;
         break;
     end
 end
@@ -173,27 +202,40 @@ changeHistory = changeHistory(1:loop);
 radiusHistory = radiusHistory(1:loop);
 moveHistory = moveHistory(1:loop);
 
+betaHistory = betaHistory(1:loop);
 % Re-analyze the final density so final stress and objective match the displayed topology.
-[Ufinal, Kfinal] = FE_solver(nelx, nely, x, config.penal, bcConfig);
+finalBeta = scheduled_beta(loop, config);
+if strcmp(config.projection, 'heaviside_projection')
+    finalPhysical = project_heaviside(x, finalBeta);
+else
+    finalPhysical = x;
+end
+finalPhysical = max(config.xmin, finalPhysical);
+[Ufinal, Kfinal] = FE_solver(nelx, nely, finalPhysical, config.penal, bcConfig);
 [finalObjective, ~] = compliance_and_sensitivity( ...
-    nelx, nely, x, config.penal, Ufinal, KE);
+    nelx, nely, finalPhysical, config.penal, Ufinal, KE);
 [vonMises, stress] = compute_von_mises_2d( ...
-    nelx, nely, x, config.penal, Ufinal, config.stress_measure, config.E, config.nu);
+    nelx, nely, finalPhysical, config.penal, Ufinal, config.stress_measure, config.E, config.nu);
 objectiveHistory(loop) = finalObjective;
 
 result = struct();
-result.x = x;
+result.x = finalPhysical;
+result.raw_x = x;
 result.domain_mask = domainMask;
 result.iterations = loop;
 result.objective = finalObjective;
-result.volume_fraction = mean(x(domainMask));
-result.gray_ratio = gray_ratio(x, domainMask);
+result.volume_fraction = mean(finalPhysical(domainMask));
+result.gray_ratio = gray_ratio(finalPhysical, domainMask);
 result.objective_history = objectiveHistory;
 result.change_history = changeHistory;
 result.radius_history = radiusHistory;
 result.move_history = moveHistory;
 result.U = Ufinal;
 result.K = Kfinal;
+result.beta_history = betaHistory;
+result.final_beta = finalBeta;
+result.converged = didConverge;
+result.final_change = changeHistory(loop);
 result.von_mises = vonMises;
 result.stress = stress;
 result.config = config;
@@ -255,6 +297,46 @@ else
 end
 end
 
+function value = projection_move_cap(beta)
+if beta <= 2
+    value = 0.2;
+elseif beta <= 4
+    value = 0.1;
+elseif beta <= 8
+    value = 0.05;
+else
+    value = 0.02;
+end
+end
+
+function [xProjected, derivative] = project_heaviside(x, beta)
+if beta <= 1.0
+    xProjected = x;
+    derivative = ones(size(x));
+    return;
+end
+tanhHalf = tanh(0.5*beta);
+xProjected = (tanhHalf + tanh(beta*(x-0.5))) / (2*tanhHalf);
+derivative = beta*(1-tanh(beta*(x-0.5)).^2) / (2*tanhHalf);
+end
+
+function betaNow = scheduled_beta(iteration, config)
+if strcmp(config.projection, 'heaviside_projection') && ...
+        strcmp(config.controller, 'periodic_controller')
+    betaNow = min(config.beta_max, config.beta*2^floor((iteration-1)/10));
+else
+    betaNow = config.beta;
+end
+end
+
+function value = target_beta(config)
+if strcmp(config.projection, 'heaviside_projection') && ...
+        strcmp(config.controller, 'periodic_controller')
+    value = config.beta_max;
+else
+    value = config.beta;
+end
+end
 function value = gray_ratio(x, domainMask)
 active = x(logical(domainMask));
 if isempty(active)

@@ -147,7 +147,7 @@ def test_workflow_progress_counts_only_current_round_real_terminal_experiments()
     assert workflow["stage"] == "experiments"
     experiment_step = next(item for item in workflow["steps"] if item["id"] == "experiments")
     assert experiment_step["experimentIds"] == ["E02", "E03", "E04"]
-    assert experiment_step["result"] == "已完成 2 / 3 个真实方案"
+    assert experiment_step["result"] == "已完成 2 / 3 次当前 Step 实验"
 
 
 def test_workflow_progress_reports_no_successful_route_without_inventing_a_best() -> None:
@@ -202,7 +202,7 @@ def test_autonomous_no_approval_candidate_records_policy_reflection(monkeypatch,
             and experiment["id"] in (event.get("payload") or {}).get("experiment_ids", [])
         ]
         assert approval_events
-        assert "Policy、Safety 与预算校验" in approval_events[-1]["payload"]["reflection"]
+        assert "Policy 与 Safety 校验" in approval_events[-1]["payload"]["reflection"]
     finally:
         isolated.close()
 

@@ -1,9 +1,8 @@
-from datetime import datetime, timezone
+from topoptpilot.nomenclature import normalize_stage, stage_label
 
 
 class FidelityManager:
-    LEVELS = ("F0 — Python 2D Coarse", "F1 — Python 2D Fine",
-              "F2 — Python 3D Target", "F3 — MATLAB 3D Formal")
+    LEVELS = tuple(stage_label(f"STEP{index}") for index in range(1, 5))
 
     def promote(self, current: str) -> str:
         try:
@@ -15,55 +14,24 @@ class FidelityManager:
     def is_high_fidelity(self, fidelity: str) -> bool:
         return fidelity in self.LEVELS[2:]
 
-    CODES = ("F0", "F1", "F2", "F3")
+    CODES = ("STEP1", "STEP2", "STEP3", "STEP4")
 
     def promote_code(self, current: str) -> str:
         try:
             index = self.CODES.index(current)
         except ValueError:
-            return "F0"
+            return "STEP1"
         return self.CODES[min(index + 1, len(self.CODES) - 1)]
 
     @staticmethod
     def backend_for(fidelity: str) -> str:
-        if fidelity not in {"F0", "F1", "F2", "F3"}:
-            raise ValueError(f"Unknown fidelity: {fidelity}")
-        return {"F0": "python", "F1": "python", "F2": "python3d", "F3": "matlab"}[fidelity]
+        code = normalize_stage(fidelity)
+        return {"STEP1": "python", "STEP2": "python", "STEP3": "python3d", "STEP4": "matlab"}[code]
 
     @staticmethod
     def mesh_level(fidelity: str) -> str:
-        return {"F0": "coarse", "F1": "fine", "F2": "coarse3d", "F3": "fine3d"}[fidelity]
+        return {"STEP1": "coarse", "STEP2": "coarse", "STEP3": "coarse3d", "STEP4": "fine3d"}[normalize_stage(fidelity)]
 
     @staticmethod
     def estimated_cost(fidelity: str) -> float:
-        return {"F0": 1.0, "F1": 3.0, "F2": 8.0, "F3": 30.0}[fidelity]
-
-    @staticmethod
-    def budget(research: dict, experiments: list[dict]) -> dict:
-        configured = research.get("budgets") or {}
-        limits = {
-            "total": int(configured.get("total", research.get("budget_total", 12))),
-            "F0": int(configured.get("f0", 6)), "F1": int(configured.get("f1", 4)),
-            "F2": int(configured.get("f2", 2)), "F3": int(configured.get("f3", 1)),
-        }
-        used = {code: 0 for code in ("F0", "F1", "F2", "F3")}
-        for experiment in experiments:
-            if experiment.get("run_id"):
-                code = str(experiment.get("fidelity", "F0")).split()[0]
-                if code in used:
-                    used[code] += 1
-        time_limit = configured.get("time_seconds")
-        time_remaining = None
-        if time_limit is not None:
-            try:
-                created = datetime.fromisoformat(research["created_at"])
-                elapsed = (datetime.now(timezone.utc) - created).total_seconds()
-                time_remaining = max(0.0, float(time_limit) - elapsed)
-            except (KeyError, TypeError, ValueError):
-                time_remaining = float(time_limit)
-        return {
-            "limits": limits, "used": {"total": sum(used.values()), **used},
-            "remaining": {"total": max(0, limits["total"] - sum(used.values())),
-                          **{code: max(0, limits[code] - used[code]) for code in used}},
-            "time_remaining": time_remaining,
-        }
+        return {"STEP1": 1.0, "STEP2": 3.0, "STEP3": 8.0, "STEP4": 30.0}[normalize_stage(fidelity)]

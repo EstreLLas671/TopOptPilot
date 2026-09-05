@@ -600,7 +600,7 @@ export default function EngineeringWorkspace({
   }
   return <>
     <ParameterConfigurationDialog open={detailsOpen} config={optimizationConfig} lane={lane} busy={runBusy} matlabDiagnostic={matlabProbeState === "ready" ? `MATLAB ${matlabInstallation?.release || matlabInstallation?.version || ""} 已就绪`.replace("  ", " ") : "MATLAB 当前不可用，请重新检测。"} runtimeDiagnostic={runtimeDiagnostic} onRefreshEnvironment={() => void scanEngineeringEnvironment()} onClose={() => setDetailsOpen(false)} onApply={(nextConfig, nextLane) => { setOptimizationConfig(nextConfig); setLane(nextLane); setDetailsOpen(false); }}/>
-    <ResizableWorkspaceLayout mode="engineering"
+    <ResizableWorkspaceLayout mode="basic-implementation"
     activitySignal={bottomActivitySignal}
     completionSignal={completionSignal}
     leftHeader={<b className="workspace-panel-heading">工程工作区</b>}

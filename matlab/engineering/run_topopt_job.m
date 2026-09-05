@@ -43,13 +43,15 @@ try
     bridgePath = fileparts(mfilename('fullpath'));
     configuredSolverPath = getenv('TOPOPTPILOT_SOLVER_PATH');
     if ~isempty(configuredSolverPath) && isfolder(configuredSolverPath)
-        addpath(configuredSolverPath);
+        % 指定的求解器目录必须优先生效（科研 Step4 复用工程链路时指向
+        % 求解器模块副本，携带投影/控制器参数），bridge 副本改为尾部追加。
+        addpath(configuredSolverPath, '-begin');
     end
     if isfolder(fullfile(bridgePath, 'TopOpt_2D'))
-        addpath(fullfile(bridgePath, 'TopOpt_2D'));
+        addpath(fullfile(bridgePath, 'TopOpt_2D'), '-end');
     end
     if isfolder(fullfile(bridgePath, 'TopOpt-3D'))
-        addpath(fullfile(bridgePath, 'TopOpt-3D'));
+        addpath(fullfile(bridgePath, 'TopOpt-3D'), '-end');
     end
     if is2D
         result = topopt_main(config);
@@ -112,27 +114,53 @@ if ~isfield(config, 'render_iteration_frames') || config.render_iteration_frames
     render_iteration_frame(frame, config, dimension, ...
         fullfile(snapshotDir, renderName));
 end
-manifest = jsondecode(fileread(manifestPath));
-entry = struct( ...
+% 帧元数据写唯一名文件（新建文件无覆盖竞争），进度消费方直接扫描目录。
+metaPath = fullfile(snapshotDir, sprintf('iter_%04d_meta.json', frame.iteration));
+meta = struct( ...
     'iteration',double(frame.iteration), ...
-    'density_file',densityName, ...
-    'stress_file',stressName, ...
-    'render_file',renderName, ...
+    'max_iterations',double(frame.max_iterations), ...
     'objective',double(frame.objective), ...
-    'change',double(frame.change), ...
     'volume_fraction',double(frame.volume_fraction), ...
-    'gray_ratio',double(frame.gray_ratio), ...
-    'rmin',double(frame.rmin), ...
-    'penal',double(frame.penal));
-if isempty(manifest.frames)
-    manifest.frames = entry;
-else
-    manifest.frames(end+1) = entry;
+    'density_file',densityName);
+try
+    write_json_atomic(metaPath, meta);
+catch
+    % 元数据瞬时写入失败不中断求解；轮询方以下一个帧为准。
 end
-write_json_atomic(manifestPath, manifest);
-write_status(statusPath, 'running', ...
-    sprintf('正在求解：第 %d/%d 轮', frame.iteration, frame.max_iterations), ...
-    frame.iteration/frame.max_iterations);
+% 清单/状态为覆盖型文件，可能被外部进程瞬时占用：容错写入，
+% 失败只跳过清单维护，帧数据与元数据已落盘，绝不中断求解。
+% 求解器内核未提供 gray_ratio 时（如求解器模块副本）以 NaN 占位，
+% 由 Python 侧自行计算，避免快照写入中断。
+if ~isfield(frame, 'gray_ratio') || isempty(frame.gray_ratio)
+    frame.gray_ratio = NaN;
+end
+try
+    manifest = jsondecode(fileread(manifestPath));
+    entry = struct( ...
+        'iteration',double(frame.iteration), ...
+        'density_file',densityName, ...
+        'stress_file',stressName, ...
+        'render_file',renderName, ...
+        'objective',double(frame.objective), ...
+        'change',double(frame.change), ...
+        'volume_fraction',double(frame.volume_fraction), ...
+        'gray_ratio',double(frame.gray_ratio), ...
+        'rmin',double(frame.rmin), ...
+        'penal',double(frame.penal));
+    if isempty(manifest.frames)
+        manifest.frames = entry;
+    else
+        manifest.frames(end+1) = entry;
+    end
+    write_json_atomic(manifestPath, manifest);
+catch
+end
+try
+    write_status(statusPath, 'running', ...
+        sprintf('正在求解：第 %d/%d 轮', frame.iteration, frame.max_iterations), ...
+        frame.iteration/frame.max_iterations);
+catch
+end
 end
 
 function write_single_payload(path, values)
@@ -147,9 +175,22 @@ clear cleanup
 if count ~= numel(values)
     error('TopOptPilot:SnapshotWrite', '二进制制品写入不完整：%s', path);
 end
-[moved, moveMessage] = movefile(tempPath, path, 'f');
-if ~moved
-    error('TopOptPilot:SnapshotWrite', '无法提交二进制制品：%s', moveMessage);
+if ~commit_file_with_retry(tempPath, path)
+    error('TopOptPilot:SnapshotWrite', '无法提交二进制制品：%s', path);
+end
+end
+
+function committed = commit_file_with_retry(tempPath, path)
+% Windows 下若目标清单正被进度轮询进程读取，movefile 会瞬时失败；
+% 短暂重试即可避开冲突，避免快照写入中断整个求解。
+committed = false;
+for attempt = 1:20
+    [moved, ~] = movefile(tempPath, path, 'f');
+    if moved
+        committed = true;
+        return;
+    end
+    pause(0.05);
 end
 end
 
@@ -186,7 +227,8 @@ end
 function summary = make_summary(result)
 summary = struct();
 fields = {'iterations','objective','volume_fraction','gray_ratio','objective_history', ...
-    'change_history','volume_error_history','penal_history','radius_history','final_penal'};
+    'change_history','volume_error_history','penal_history','radius_history','final_penal', ...
+    'beta_history','final_beta','final_change','converged'};
 for i = 1:numel(fields)
     if isfield(result, fields{i}), summary.(fields{i}) = result.(fields{i}); end
 end
@@ -208,8 +250,7 @@ if fid < 0
 end
 fprintf(fid, '%s', jsonencode(value));
 fclose(fid);
-[moved, moveMessage] = movefile(tempPath, path, 'f');
-if ~moved
-    error('TopOptPilot:JsonWrite', '无法提交 JSON 文件：%s', moveMessage);
+if ~commit_file_with_retry(tempPath, path)
+    error('TopOptPilot:JsonWrite', '无法提交 JSON 文件：%s', path);
 end
 end

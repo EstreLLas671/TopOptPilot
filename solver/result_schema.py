@@ -55,9 +55,6 @@ def build_result(*, task_spec: dict, status: str, compliance: float,
                  density_design: np.ndarray = None,
                  run_id: str = "") -> dict:
     """组装最终结果 dict（ExperimentResult 兼容 + 物理调试字段）。"""
-    # 经典 OC 以迭代上限终止是标准行为，映射到契约的 converged
-    if status == "max_iter":
-        status = "converged"
     vol_actual = float(np.mean(xPhys))
     gray = gray_ratio(xPhys)
     connected = connected_components(xPhys)
@@ -94,6 +91,7 @@ def build_result(*, task_spec: dict, status: str, compliance: float,
             "backend": backend,
             "relative_residual": float(relative_residual),
             "cg_iterations": 0,            # 直接稀疏求解，无 PCG 迭代
+            "converged": status == "converged",
             "solve_time_seconds": round(solve_time, 3),
             "mesh_level": task_spec.get("mesh_level", "medium"),
             "iterations": int(iterations),

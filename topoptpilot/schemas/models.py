@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from topoptpilot.nomenclature import normalize_mode, normalize_stage, stage_label
 
 
 class ExperimentStatus(str, Enum):
@@ -74,10 +75,10 @@ class SolverVariant(str, Enum):
 
 
 class Fidelity(str, Enum):
-    F0 = "F0"
-    F1 = "F1"
-    F2 = "F2"
-    F3 = "F3"
+    STEP1 = "STEP1"
+    STEP2 = "STEP2"
+    STEP3 = "STEP3"
+    STEP4 = "STEP4"
 
 
 class IntentType(str, Enum):
@@ -181,7 +182,7 @@ class ComputeSettings(BaseModel):
 
 
 class NewResearchSettings(BaseModel):
-    mode: str = Field(default="COPILOT", pattern="^(COPILOT|AUTONOMOUS)$")
+    mode: str = "DEEP_OPTIMIZATION"
     budget_total: int = Field(default=12, ge=1, le=10000)
     budgets: BudgetSpec = Field(default_factory=BudgetSpec)
     constraints: dict[str, Any] = Field(
@@ -194,6 +195,11 @@ class NewResearchSettings(BaseModel):
             "parameters": {"volfrac": 0.4, "rmin": 1.5, "penal": 3.0, "beta": 1.0, "max_iter": 80},
         }
     )
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_research_mode(cls, value: str) -> str:
+        return normalize_mode(value)
 
 
 class DataSettings(BaseModel):
@@ -241,7 +247,7 @@ class AppSettings(BaseModel):
 
 
 class ResearchCreate(BaseModel):
-    name: str = Field(default="MBB Beam", min_length=1, max_length=120)
+    name: str = Field(default="Untitled Research", min_length=1, max_length=120)
     goal: str = "Minimize compliance while satisfying constraints."
     description: str | None = Field(default=None, max_length=4000)
     constraints: dict[str, Any] = Field(default_factory=lambda: {
@@ -251,11 +257,11 @@ class ResearchCreate(BaseModel):
     })
     budget_total: int = Field(default=12, ge=1, le=10000)
     budgets: BudgetSpec | None = None
-    mode: str = "COPILOT"
-    geometry: dict[str, Any] = Field(default_factory=lambda: {"type": "MBB", "dimensions": [3.0, 1.0]})
+    mode: str = "DEEP_OPTIMIZATION"
+    geometry: dict[str, Any] = Field(default_factory=lambda: {"type": "generic", "dimensions": [3.0, 1.0, 0.75]})
     material: dict[str, Any] = Field(default_factory=lambda: {"E": 1.0, "nu": 0.3})
     loads: list[dict[str, Any]] = Field(default_factory=lambda: [{"type": "vertical", "magnitude": 1.0}])
-    boundary_conditions: dict[str, Any] = Field(default_factory=lambda: {"type": "MBB"})
+    boundary_conditions: dict[str, Any] = Field(default_factory=lambda: {"type": "cantilever"})
     hypothesis: str | None = None
     locale: str = "zh-CN"
     field_sources: dict[str, str] = Field(default_factory=dict)
@@ -267,6 +273,11 @@ class ResearchCreate(BaseModel):
             raise ValueError("locale must be zh-CN or en-US")
         return value
 
+    @field_validator("mode", mode="before")
+    @classmethod
+    def normalize_research_mode(cls, value: str) -> str:
+        return normalize_mode(value)
+
     def normalized_budgets(self) -> dict[str, Any]:
         value = self.budgets or BudgetSpec(total=self.budget_total)
         data = value.model_dump()
@@ -276,7 +287,7 @@ class ResearchCreate(BaseModel):
 
 class ExperimentCreate(BaseModel):
     purpose: str = "Establish a topology optimization baseline."
-    fidelity: str = "F0 - 2D Coarse"
+    fidelity: str = "Step1 — Python 2D 粗网络"
     mesh_level: str = "coarse"
     backend: Literal["python", "python3d", "matlab"] = "python"
     parameters: dict[str, Any] = Field(default_factory=lambda: {
@@ -306,12 +317,11 @@ class ExperimentCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_fidelity_backend(self) -> "ExperimentCreate":
-        code = str(self.fidelity).strip().split(maxsplit=1)[0]
-        expected = {"F0": "python", "F1": "python", "F2": "python3d", "F3": "matlab"}.get(code)
-        if expected is None:
-            raise ValueError("fidelity must start with F0, F1, F2, or F3")
+        code = normalize_stage(self.fidelity)
+        expected = {"STEP1": "python", "STEP2": "python", "STEP3": "python3d", "STEP4": "matlab"}[code]
         if self.backend != expected:
             raise ValueError(f"{code} requires backend={expected}; received backend={self.backend}")
+        self.fidelity = stage_label(code)
         return self
 
 

@@ -18,10 +18,15 @@ class ResearchOrchestrator:
     def inspect_proposal(self, experiment: dict[str, Any]) -> dict[str, Any]:
         return evaluate_safety(experiment["parameters"], experiment["fidelity"])
 
-    def analyze(self, research: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-        evaluation = evaluate_result(result, research["constraints"])
+    def analyze(self, research: dict[str, Any], result: dict[str, Any],
+                experiment: dict[str, Any] | None = None) -> dict[str, Any]:
+        constraints = dict(research["constraints"])
+        parameters = (experiment or {}).get("parameters") or {}
+        if parameters.get("volfrac") is not None:
+            constraints["volume_fraction"] = float(parameters["volfrac"])
+        evaluation = evaluate_result(result, constraints)
         evaluation["next_action"] = choose_action(evaluation)
-        evaluation["failure"] = detect_failure(result, research["constraints"])
+        evaluation["failure"] = detect_failure(result, constraints)
         return {
             "evaluation": evaluation,
             "analysis": build_analysis(result, evaluation),

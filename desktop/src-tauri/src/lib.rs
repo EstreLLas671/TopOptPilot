@@ -171,7 +171,8 @@ fn spawn_backend(
         command = Command::new("python");
         command
             .args(["-m", "topoptpilot_desktop.api.desktop_sidecar"])
-            .current_dir(root);
+            .current_dir(root)
+            .env("TOPPILOT_PARENT_PID", std::process::id().to_string());
     } else {
         let resources = app
             .path()
@@ -261,8 +262,21 @@ pub fn run() {
             project::patch_preview,
             project::patch_apply,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running TopOptPilot desktop");
+        .build(tauri::generate_context!())
+        .expect("error while running TopOptPilot desktop")
+        .run(|app, event| {
+            // 退出应用时同步结束后台 sidecar 进程；Drop 不可靠，这里显式终止。
+            if let tauri::RunEvent::Exit = event {
+                if let Some(state) = app.try_state::<ChildGuard>() {
+                    if let Ok(mut value) = state.0.lock() {
+                        if let Some(child) = value.as_mut() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                }
+            }
+        });
 }
 
 #[cfg(test)]

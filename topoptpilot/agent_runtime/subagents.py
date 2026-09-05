@@ -12,19 +12,19 @@ from topoptpilot.schemas import AgentRole
 ROLE_TOOLS = {
     AgentRole.GUIDE: "research_get_context,knowledge_search,knowledge_get,solver_get_capabilities",
     AgentRole.HYPOTHESIS: (
-        "research_get_context,research_query_history,research_get_budget,knowledge_search,"
+        "research_get_context,research_query_history,knowledge_search,"
         "knowledge_get,experiment_compare,failure_get_evidence"
     ),
     AgentRole.EXPERIMENT_PLANNER: (
-        "research_get_context,research_query_history,research_get_budget,knowledge_search,"
+        "research_get_context,research_query_history,knowledge_search,"
         "knowledge_get,solver_get_capabilities,policy_compile_intent,experiment_preview"
     ),
     AgentRole.EXPERIMENT_EXECUTOR: (
-        "research_get_context,research_get_budget,experiment_preview,experiment_submit,"
+        "research_get_context,experiment_preview,experiment_submit,"
         "experiment_status,experiment_result"
     ),
     AgentRole.INDEPENDENT_REVIEWER: (
-        "research_get_context,research_query_history,research_get_budget,knowledge_search,"
+        "research_get_context,research_query_history,knowledge_search,"
         "knowledge_get,solver_get_capabilities,experiment_result,experiment_compare,"
         "failure_get_evidence,research_get_pareto"
     ),
@@ -39,7 +39,7 @@ ROLE_RULES = {
     AgentRole.HYPOTHESIS: "Propose testable hypotheses and competing explanations grounded in evidence IDs.",
     AgentRole.EXPERIMENT_PLANNER: "Translate one hypothesis into a scientific intent and preview proposals. Never submit.",
     AgentRole.EXPERIMENT_EXECUTOR: "Submit only the explicitly reviewed proposal ID. Never compile parameters or call MATLAB.",
-    AgentRole.INDEPENDENT_REVIEWER: "Audit evidence, causal control, budget and safety. Return APPROVE, REVISE or REJECT.",
+    AgentRole.INDEPENDENT_REVIEWER: "Audit evidence, causal control and safety. Return APPROVE, REVISE or REJECT.",
     AgentRole.REPORT_WRITER: "Summarize confirmed facts using the report structure. Mark missing values as not calculated.",
 }
 
@@ -94,5 +94,5 @@ class SubagentCoordinator:
         return self.dispatch(
             research_id, AgentRole.GUIDE.value,
             "Guide the user from this natural-language request toward confirmed geometry, material, "
-            f"loads, supports, constraints and budget. Request confirmation for AI suggestions: {text}",
+            f"loads, supports and constraints. Request confirmation for AI suggestions: {text}",
         )

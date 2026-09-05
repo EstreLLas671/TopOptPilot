@@ -43,7 +43,7 @@ describe("V2App Research selection races", () => {
     }));
     render(<V2App/>);
     await waitFor(() => expect(screen.getByTestId("selected-research").textContent).toBe("R-A"));
-    fireEvent.click(screen.getByRole("button", { name: "AI 科研" }));
+    fireEvent.click(screen.getByRole("button", { name: "深度优化" }));
     fireEvent.click(screen.getByRole("button", { name: "选择 A" }));
     fireEvent.click(screen.getByRole("button", { name: "选择 B" }));
     await waitFor(() => expect(pending.get("R-B")?.length).toBe(1));

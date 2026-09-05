@@ -12,10 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from topoptpilot.nomenclature import normalize_stage, stage_label
+from topoptpilot.version import __version__
+
 
 FIELD_LABELS = {
     "geometry": "设计域", "material": "材料属性", "loads": "载荷工况",
-    "boundary_conditions": "边界条件", "constraints": "工程约束", "budgets": "预算",
+    "boundary_conditions": "边界条件", "constraints": "工程约束",
     "volume_fraction": "体积分数", "gray_ratio": "灰度率", "connectivity": "连通性",
     "connected": "连通性要求", "gray_max": "灰度率上限", "penal": "惩罚因子",
     "rmin": "滤波半径", "max_iter": "最大迭代次数", "E": "弹性模量",
@@ -71,22 +74,19 @@ def safe_report_name(value: str) -> str:
     return cleaned
 
 
-def _final_f3_experiment(research: dict[str, Any], experiments: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
-    def fidelity_code(item: dict[str, Any]) -> str:
-        parts = str(item.get("fidelity") or "").split()
-        return parts[0] if parts else ""
+def _best_experiments_by_step(research: dict[str, Any], experiments: list[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    source = experiments if experiments is not None else research.get("experiments") or []
+    selected: dict[str, dict[str, Any]] = {}
+    for step in ("STEP1", "STEP2", "STEP3", "STEP4"):
+        candidates = [item for item in source if normalize_stage(item.get("fidelity")) == step
+                      and item.get("status") == "SUCCESS" and item.get("result")]
+        if candidates:
+            selected[step] = min(candidates, key=lambda item: (item.get("result") or {}).get("objective", {}).get("compliance", float("inf")))
+    return selected
 
-    candidates = [
-        item for item in (experiments if experiments is not None else research.get("experiments") or [])
-        if fidelity_code(item) == "F3"
-        and item.get("status") == "SUCCESS" and item.get("result")
-    ]
-    if not candidates:
-        return None
-    best = research.get("best_experiment") or {}
-    if any(item.get("id") == best.get("id") for item in candidates):
-        return next(item for item in candidates if item.get("id") == best.get("id"))
-    return min(candidates, key=lambda item: (item.get("result") or {}).get("objective", {}).get("compliance", float("inf")))
+
+def _final_step4_experiment(research: dict[str, Any], experiments: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    return _best_experiments_by_step(research, experiments).get("STEP4")
 
 
 class ResearchReportGenerator:
@@ -157,27 +157,25 @@ class ResearchReportGenerator:
     @staticmethod
     def _copy_report_figures(research: dict[str, Any], assets: Path,
                              stem: str) -> dict[str, str]:
-        final_f3 = _final_f3_experiment(research)
-        final_f3_id = (final_f3 or {}).get("id")
-        names = {"TOPOLOGY_IMAGE": "图1_最终拓扑构型.png",
-                 "STRESS_IMAGE": "图2_应力分布.png",
-                 "CONVERGENCE_IMAGE": "图3_收敛曲线.png"}
+        best_by_step = _best_experiments_by_step(research)
+        selected_ids = {item["id"]: step for step, item in best_by_step.items()}
+        names = {"TOPOLOGY_IMAGE": "拓扑构型", "CONVERGENCE_IMAGE": "收敛曲线", "STRESS_IMAGE": "应力分布"}
         lineage = [item for item in research.get("artifact_lineage") or []
                    if item.get("artifact_type") in names and item.get("path")
-                   and item.get("experiment_id") == final_f3_id
-                   and Path(item["path"]).is_file()]
-        lineage.sort(key=lambda item: list(names).index(item["artifact_type"]))
+                   and item.get("experiment_id") in selected_ids and Path(item["path"]).is_file()]
+        lineage.sort(key=lambda item: (int(selected_ids[item["experiment_id"]].removeprefix("STEP")), list(names).index(item["artifact_type"])))
         copied, used = {}, set()
         for item in lineage:
-            kind = item["artifact_type"]
-            if kind in used: continue
+            kind = item["artifact_type"]; step = selected_ids[item["experiment_id"]]
+            identity = (step, kind)
+            if identity in used: continue
             source = Path(item["path"]).resolve()
-            target = assets / names[kind]
+            target = assets / f"{stage_label(step)}_{names[kind]}.png"
             shutil.copy2(source, target)
             if hashlib.sha256(source.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
                 raise OSError(f"报告图像复制校验失败：{source.name}")
             copied[str(source)] = f"{stem}_assets/{target.name}"
-            used.add(kind)
+            used.add(identity)
         return copied
 
     def render_markdown(self, research: dict[str, Any], *, round_number: int | None = None,
@@ -188,28 +186,45 @@ class ResearchReportGenerator:
         if round_number is not None: experiments = [e for e in experiments if int(e.get("round_number", 1)) <= round_number]
         hypotheses, tasks, lineage = research.get("hypotheses") or [], research.get("subagent_tasks") or [], research.get("artifact_lineage") or []
         completed = [e for e in experiments if e.get("result")]; feasible = [e for e in completed if ((e.get("result") or {}).get("evaluation") or {}).get("success")]
-        final_f3 = _final_f3_experiment(research, experiments)
-        final_f3_id = (final_f3 or {}).get("id")
+        best_by_step = _best_experiments_by_step(research, experiments)
+        final_step4 = best_by_step.get("STEP4")
         failed = [e for e in experiments if e.get("status") == "FAILED"]
         abnormal = bool(failed) and not completed
         current_round = round_number or research.get("current_round", 0)
         generated = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        sources = contract.get("field_sources") or {}; geometry, material = dict(contract.get("geometry") or {}), contract.get("material") or {}
+        sources = contract.get("field_sources") or {}; geometry, material = dict(contract.get("geometry") or {}), dict(contract.get("material") or {})
         configured = ((research.get("defaults") or {}).get("optimization_config") or {})
         if configured:
             geometry.update({key: configured[key] for key in (
                 "dimension", "dimensions", "unit", "cellSizeMeters", "accuracy", "nelx", "nely", "nelz"
             ) if key in configured})
-        loads, boundary, constraints = contract.get("loads") or [], contract.get("boundary_conditions") or {}, contract.get("constraints") or {}
+            geometry["type"] = configured.get("bcType", geometry.get("type"))
+            configured_material = configured.get("material") or {}
+            material.update({
+                "preset": configured_material.get("preset"),
+                "name": configured_material.get("name"),
+                "E_GPa": configured_material.get("youngsModulusGPa"),
+                "nu": configured_material.get("poissonRatio"),
+                "density_kg_m3": configured_material.get("densityKgM3"),
+                "yield_strength_MPa": configured_material.get("yieldStrengthMPa"),
+            })
+        loads = contract.get("loads") or []
+        boundary = dict(contract.get("boundary_conditions") or {})
+        constraints = dict(contract.get("constraints") or {})
+        if configured:
+            boundary["type"] = configured.get("bcType", boundary.get("type"))
+            constraints["volume_fraction"] = configured.get(
+                "volfrac", constraints.get("volume_fraction")
+            )
         user_prompt = contract.get("description") or missing
         summary = (("本次迭代异常终止，没有产生有效对比结果。" if zh else "The iteration terminated abnormally without valid comparison results.") if abnormal else
-                   (("尚无成功的 F3 最终优化结果，不能用低保真结果替代最终结论。" if zh else "No successful F3 final result is available; lower-fidelity evidence cannot replace the final conclusion.") if not final_f3 else
-                   (("Evaluator 已确认 F3 最终结果可行；结论仍限于已记录工况与约束。" if zh else "The evaluator marked the F3 final result feasible; the conclusion remains limited to recorded cases and constraints.") if ((final_f3.get("result") or {}).get("evaluation") or {}).get("success") else
-                   ("F3 最终结果尚未被 Evaluator 判定为可行，不能宣称设计成功。" if zh else "The F3 final result is not evaluator-feasible; design success cannot be claimed."))))
+                   (("尚无成功的 Step4 MATLAB 3D 最终优化结果，不能用较低步骤结果替代最终结论。" if zh else "No successful Step4 MATLAB 3D final result is available; earlier-step evidence cannot replace it.") if not final_step4 else
+                   (("Evaluator 已确认 Step4 最终结果可行；结论仍限于已记录工况与约束。" if zh else "The evaluator marked the Step4 final result feasible; the conclusion remains limited to recorded cases and constraints.") if ((final_step4.get("result") or {}).get("evaluation") or {}).get("success") else
+                   ("Step4 最终结果尚未被 Evaluator 判定为可行，不能宣称设计成功。" if zh else "The Step4 final result is not evaluator-feasible; design success cannot be claimed."))))
         lines = ["# TopOptPilot 智能体分析报告" if zh else "# TopOptPilot Agent Analysis Report", "",
             f"**{'报告编号' if zh else 'Report No.'}**：TOP-{str(generated)[:10].replace('-','')}-{research['id']}",
             f"**{'任务标题' if zh else 'Task title'}**：{research.get('name') or missing}", f"**{'生成时间' if zh else 'Generated'}**：{generated}",
-            "**智能体版本**：TopOptPilot 2.0.7", f"**对应任务 ID**：{research['id']}",
+            f"**智能体版本**：TopOptPilot {__version__}", f"**对应任务 ID**：{research['id']}",
             f"**{'迭代轮次' if zh else 'Rounds'}**：{current_round}", "", "---", "",
             "## **报告摘要**" if zh else "## **Executive summary**", "", summary, "",
             "## **第一章：任务摘要（映射用户需求）**" if zh else "## **Chapter 1: Task summary**", "",
@@ -239,7 +254,7 @@ class ResearchReportGenerator:
             "### 2.5 工况组合与折减说明（必填）", "", "| 考虑工况 | 未考虑工况 | 原因说明 | 组合/折减系数 |",
             "| :--- | :--- | :--- | :--- |", f"| {shown(loads, missing)} | 未提供 | 仅评估已记录工况 | 未提供 |", "",
             "### 2.6 参数来源清单（必填）", "", "| 参数名称 | 设定值 | 来源/依据 |", "| :--- | :--- | :--- |"]
-        for key, value in (("geometry", geometry), ("material", material), ("loads", loads), ("boundary_conditions", boundary), ("constraints", constraints), ("budgets", contract.get("budgets"))):
+        for key, value in (("geometry", geometry), ("material", material), ("loads", loads), ("boundary_conditions", boundary), ("constraints", constraints)):
             lines.append(f"| {field_label(key)} | {shown(value, missing)} | {sources.get(key, 'Research State')} |")
         lines += ["", "## **第三章：算法配置与融合策略（方法透明）**", "",
             "### 3.1 优化问题数学表述", "", "```text",
@@ -256,12 +271,12 @@ class ResearchReportGenerator:
             "| 灵敏度或密度滤波 | 抑制棋盘格与网格依赖 | 取值来自实验参数 |",
             "| OC 更新 | 约束下更新单元密度 | 使用求解器真实迭代 |",
             "| 确定性评估器 | 校验真实结果 | 不使用模型生成指标 |", "",
-            "融合逻辑：候选方案经 Policy、安全、预算和审批链后进入真实 FEM 求解；结果由确定性评估器比较，再形成优选与诊断。", "",
+            "融合逻辑：每个 Step 的单次方案经 Policy 与安全校验后进入真实 FEM 求解；每次求解结束立即暂停，由实验者决定留在当前 Step 或进入下一 Step。", "",
             "### 3.4 后处理与可制造化流程（必填）", "", "| 步骤 | 操作 | 说明/参数 |",
             "| :--- | :--- | :--- |", "| 1 | 密度阈值化 | 等值阈值仅用于结果呈现 |",
             "| 2 | 连通性检查 | 基于真实密度场计算连通分量 |",
             "| 3 | 应力后处理 | 单元高斯点 Von Mises 应力 |",
-            "| 4 | 三维呈现 | 从 F3 最终密度场提取无单元边线的等值曲面 |",
+            "| 4 | 三维呈现 | 从 Step3/Step4 密度场提取无单元边线的平滑等值曲面 |",
             "| 5 | 工程复核 | 屈曲、疲劳等未计算项须后续专项校核 |", "",
             "### 3.5 收敛条件与终止准则", "", "```text",
             "柔度变化满足求解器收敛阈值，或达到最大迭代次数；",
@@ -272,7 +287,7 @@ class ResearchReportGenerator:
         for e in experiments:
             solver=(e.get("result") or {}).get("solver") or {}; lines.append(f"| {e['id']} | {e.get('fidelity') or missing} | {shown(e.get('parameters'), missing)} | {e.get('solver_variant') or solver.get('solver_variant') or missing} | {e.get('task_hash') or solver.get('task_sha256') or missing} / {e.get('solver_sha256') or solver.get('solver_entry_sha256') or missing} |")
         lines += ["", "## **第四章：核心优化结果对比**" if zh else "## **Chapter 4: Core result comparison**", ""]
-        best=final_f3 or {}; br=best.get("result") or {}; be=br.get("evaluation") or {}
+        best=final_step4 or {}; br=best.get("result") or {}; be=br.get("evaluation") or {}
         if abnormal:
             lines += ["### 4.7 异常情况（仅在异常时启用）", "",
                       "> **⚠️ 本次迭代异常终止，无有效对比数据。不得输出成功结论。**", ""]
@@ -296,15 +311,22 @@ class ResearchReportGenerator:
                       f"| 灰度率 | ≤ {shown(constraints.get('gray_max'),missing)} | {shown((br.get('quality') or {}).get('gray_ratio'),missing)} | {shown((be.get('checks') or {}).get('gray'),missing)} |",
                       f"| 连通性 | {shown(constraints.get('connected'),missing)} | {shown((br.get('quality') or {}).get('connected_components'),missing)} | {shown((be.get('checks') or {}).get('connected'),missing)} |", "",
                       "### 4.4 优化结果可视化", ""]
-            figure_artifacts=[a for a in lineage if a.get("experiment_id") == final_f3_id and a.get("artifact_type") in {"TOPOLOGY_IMAGE","STRESS_IMAGE","CONVERGENCE_IMAGE"} and a.get("path") and Path(a["path"]).is_file()]
-            for artifact in figure_artifacts:
-                labels={"TOPOLOGY_IMAGE":"最终拓扑构型","STRESS_IMAGE":"应力分布","CONVERGENCE_IMAGE":"收敛曲线"}
-                caption=labels.get(artifact.get("artifact_type"),"真实结果图")
-                source=str(Path(artifact["path"]).resolve())
-                image_path=figure_paths.get(source, artifact["path"])
-                lines += [f"![{caption}]({image_path})", f"*{caption} · SHA-256：{artifact.get('sha256') or missing}*", ""]
-            if not figure_artifacts:
-                lines += ["> **尚无成功的 F3 最终优化结果；不会使用 F0–F2 图像冒充最终结果。**" if zh else "> **No successful F3 final result is available; F0-F2 figures are not substituted.**", ""]
+            labels={"TOPOLOGY_IMAGE":"拓扑构型","STRESS_IMAGE":"应力分布","CONVERGENCE_IMAGE":"收敛曲线"}
+            rendered = False
+            for step in ("STEP1", "STEP2", "STEP3", "STEP4"):
+                selected_experiment = best_by_step.get(step)
+                if not selected_experiment: continue
+                figure_artifacts=[a for a in lineage if a.get("experiment_id") == selected_experiment.get("id") and a.get("artifact_type") in labels and a.get("path") and Path(a["path"]).is_file()]
+                if not figure_artifacts: continue
+                rendered = True
+                lines += [f"#### {stage_label(step)} 最佳有效结果" + ("（最终结果）" if step == "STEP4" else ""), ""]
+                for artifact in figure_artifacts:
+                    caption=f"{stage_label(step)} {labels.get(artifact.get('artifact_type'),'真实结果图')}"
+                    source=str(Path(artifact["path"]).resolve())
+                    image_path=figure_paths.get(source, artifact["path"])
+                    lines += [f"![{caption}]({image_path})", f"*{caption} · 实验 {selected_experiment['id']} · SHA-256：{artifact.get('sha256') or missing}*", ""]
+            if not rendered:
+                lines += ["> **尚无任何 Step 的成功结果图。**" if zh else "> **No successful step result figures are available.**", ""]
             best_quality=(br.get("quality") or {})
             stress_limit=next((constraints.get(key) for key in ("allowable_stress_mpa","stress_limit_mpa","max_stress_mpa") if constraints.get(key) is not None),None)
             best_stress=best_quality.get("maximum_von_mises")
@@ -319,28 +341,6 @@ class ResearchReportGenerator:
                       f"| 体积分数校验 | ≤ {shown(constraints.get('volume_fraction'),missing)} | {shown((br.get('constraints') or {}).get('volume_fraction'),missing)} | {shown((be.get('checks') or {}).get('volume'),missing)} |",
                       f"| 连通性检查 | {shown(constraints.get('connected'),missing)} | {shown(best_quality.get('connected_components'),missing)} | {shown((be.get('checks') or {}).get('connected'),missing)} |",
                       "| 可制造性检查 | 未配置完整制造约束 | 未计算 | 未判定 |", ""]
-        lines += [
-            "## **第五章：可交付文件清单（实物证据）**" if zh else "## **Chapter 5: Deliverables**", ""]
-        existing=[a for a in lineage if a.get("path") and Path(a["path"]).exists()]
-        artifact_labels={"DENSITY":"密度场数据","STRESS":"应力场数据","HISTORY":"迭代历史","SOLVER_EVIDENCE":"求解器证据","VTK":"三维场数据","TOPOLOGY_IMAGE":"最终拓扑构型图","STRESS_IMAGE":"应力分布图","CONVERGENCE_IMAGE":"收敛曲线图"}
-        lines += [f"- `{figure_paths.get(str(Path(a['path']).resolve()),a['path'])}` —— {artifact_labels.get(a.get('artifact_type'), '科研证据制品')}；SHA-256：{a.get('sha256') or missing}" for a in existing] or [f"- {missing}"]
-        lines += ["", "## **第六章：结论与审查意见（闭环依据）**", "", "### 6.1 本轮结论摘要", "", summary, "",
-                  "### 6.2 需求达成结论", "",
-                  ("确定性评估器已判定最终方案满足全部已配置约束。" if be.get("success") is True else "当前证据不足以宣称全部约束满足；未计算或量纲不可信的指标不计为通过。"), "",
-                  "### 6.3 迭代历程摘要（必填）", "", "| 轮次 | 实验 | 科学意图 | 结论 |", "| :--- | :--- | :--- | :--- |"]
-        for e in experiments: lines.append(f"| {e.get('round_number',1)} | {e['id']} | {e.get('intent') or missing} | {shown(((e.get('result') or {}).get('evaluation') or {}).get('success'),missing)} |")
-        lines += ["", "### 6.4 审查决策回显", ""]
-        for task in tasks:
-            if task.get("role")=="INDEPENDENT_REVIEWER": lines.append(f"- {task['id']} · {task.get('status')} · {shown((task.get('result') or {}).get('text') or task.get('error'),missing)}")
-        if not any(t.get("role")=="INDEPENDENT_REVIEWER" for t in tasks): lines.append(f"- {missing}")
-        lines += ["", "### 6.5 工程建议与下一步", "",
-                  "进入详细设计前，应补充制造约束、网格无关性、屈曲、疲劳和连接节点校核；未计算项不得视为已满足。"]
-        knowledge=[]
-        for e in experiments:
-            for item in e.get("knowledge_ids") or []:
-                if item not in knowledge: knowledge.append(item)
-        lines += ["", "## **第七章：参考文献与知识来源**" if zh else "## **Chapter 7: References and knowledge sources**", ""]
-        lines += [f"- kb:{item}" for item in knowledge] or [f"- {missing}"]
         lines += ["", "*本报告由 TopOptPilot 智能体依据 Research State 与真实求解证据自动生成。*", ""]
         return "\n".join(lines)
 

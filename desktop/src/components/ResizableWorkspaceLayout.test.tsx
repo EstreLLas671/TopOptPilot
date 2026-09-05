@@ -7,7 +7,7 @@ import ResizableWorkspaceLayout from "./ResizableWorkspaceLayout";
 function renderLayout() {
   return render(
     <ResizableWorkspaceLayout
-      mode="engineering"
+      mode="basic-implementation"
       left={<span>左栏内容</span>}
       leftHeader={<b>工程工作区</b>}
       center={<span>中栏内容</span>}
@@ -71,13 +71,13 @@ describe("ResizableWorkspaceLayout", () => {
   });
   it("opens the bottom once per activity signal and respects a manual close", () => {
     const view = render(
-      <ResizableWorkspaceLayout mode="engineering" activitySignal="" left={<span>左栏内容</span>} leftRail={<button>项目文件</button>} center={<span>中栏内容</span>} right={<span>右栏内容</span>} bottom={<span>下栏内容</span>} />,
+      <ResizableWorkspaceLayout mode="basic-implementation" activitySignal="" left={<span>左栏内容</span>} leftRail={<button>项目文件</button>} center={<span>中栏内容</span>} right={<span>右栏内容</span>} bottom={<span>下栏内容</span>} />,
     );
     expect(screen.queryByText("下栏内容")).toBeNull();
-    view.rerender(<ResizableWorkspaceLayout mode="engineering" activitySignal="run-1" left={<span>左栏内容</span>} leftRail={<button>项目文件</button>} center={<span>中栏内容</span>} right={<span>右栏内容</span>} bottom={<span>下栏内容</span>} />);
+    view.rerender(<ResizableWorkspaceLayout mode="basic-implementation" activitySignal="run-1" left={<span>左栏内容</span>} leftRail={<button>项目文件</button>} center={<span>中栏内容</span>} right={<span>右栏内容</span>} bottom={<span>下栏内容</span>} />);
     expect(screen.getByText("下栏内容")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "隐藏底部面板" }));
-    view.rerender(<ResizableWorkspaceLayout mode="engineering" activitySignal="run-1" left={<span>左栏内容</span>} leftRail={<button>项目文件</button>} center={<span>中栏内容</span>} right={<span>右栏内容</span>} bottom={<span>下栏内容</span>} />);
+    view.rerender(<ResizableWorkspaceLayout mode="basic-implementation" activitySignal="run-1" left={<span>左栏内容</span>} leftRail={<button>项目文件</button>} center={<span>中栏内容</span>} right={<span>右栏内容</span>} bottom={<span>下栏内容</span>} />);
     expect(screen.queryByText("下栏内容")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "隐藏左侧项目栏" }));
     expect(screen.getByRole("button", { name: "项目文件" })).toBeTruthy();
@@ -92,9 +92,9 @@ describe("ResizableWorkspaceLayout", () => {
 
   it("shows one non-blocking completion glow for a new completion signal", async () => {
     const view = render(
-      <ResizableWorkspaceLayout mode="engineering" completionSignal="" left={<span>左栏</span>} center={<span>中栏</span>} right={<span>右栏</span>} bottom={<span>下栏</span>} />,
+      <ResizableWorkspaceLayout mode="basic-implementation" completionSignal="" left={<span>左栏</span>} center={<span>中栏</span>} right={<span>右栏</span>} bottom={<span>下栏</span>} />,
     );
-    view.rerender(<ResizableWorkspaceLayout mode="engineering" completionSignal="run-completed-1" left={<span>左栏</span>} center={<span>中栏</span>} right={<span>右栏</span>} bottom={<span>下栏</span>} />);
+    view.rerender(<ResizableWorkspaceLayout mode="basic-implementation" completionSignal="run-completed-1" left={<span>左栏</span>} center={<span>中栏</span>} right={<span>右栏</span>} bottom={<span>下栏</span>} />);
     await waitFor(() => expect(view.container.querySelectorAll(".workspace-completion-glow")).toHaveLength(1));
     expect((view.container.querySelector(".workspace-completion-glow") as HTMLElement).getAttribute("aria-hidden")).toBe("true");
   });

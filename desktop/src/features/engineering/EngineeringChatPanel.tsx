@@ -267,10 +267,10 @@ export default function EngineeringChatPanel({ projectId, selectedFile, run, con
     }
   }
 
-  return <section ref={dropZone} className={"engineering-chat-panel chat-drop-zone" + (dragActive ? " drag-active" : "")} style={active ? undefined : { display: "none" }} aria-hidden={!active} aria-label="工程开发聊天" {...dropHandlers}>
+  return <section ref={dropZone} className={"engineering-chat-panel chat-drop-zone" + (dragActive ? " drag-active" : "")} style={active ? undefined : { display: "none" }} aria-hidden={!active} aria-label="基础实现聊天" {...dropHandlers}>
     {dragActive ? <div className="chat-drop-overlay"><ImagePlus size={20}/><b>松开以上传附件</b><span>图片、PDF、Word、Excel、SVG、文本 · 单个不超过 10 MB</span></div> : null}
     <header className="chat-panel-header">
-      <div><span className="eyebrow">ENGINEERING ASSISTANT</span><h2>工程开发聊天</h2></div>
+      <div><span className="eyebrow">BASIC IMPLEMENTATION ASSISTANT</span><h2>基础实现聊天</h2></div>
     </header>
     <div ref={messageList} className="chat-message-list" onScroll={() => {
       const node = messageList.current;

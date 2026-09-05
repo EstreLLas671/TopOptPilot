@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 import threading
 
-from topoptpilot.fidelity import FidelityManager
 from topoptpilot.memory import ResearchMemory
 from topoptpilot.memory.retriever import retrieve_events
 from topoptpilot.policy.intent_compiler import IntentCompiler
@@ -16,7 +15,7 @@ if TYPE_CHECKING:
 
 
 ALLOWED_TOOLS = {
-    "research_get_context", "research_query_history", "research_get_budget",
+    "research_get_context", "research_query_history",
     "policy_compile_intent", "experiment_preview", "experiment_submit",
     "experiment_status", "experiment_result", "experiment_compare",
     "research_get_pareto", "failure_get_evidence",
@@ -78,10 +77,6 @@ class ResearchTools:
                        if item["id"] in experiment_ids]
         return [{"event": event} for event in events] + [{"experiment": _compact(item)} for item in experiments]
 
-    def research_get_budget(self, research_id: str) -> dict:
-        return FidelityManager.budget(self.service._require_research(research_id),
-                                      self.service.store.list_experiments(research_id))
-
     def policy_compile_intent(self, research_id: str, **arguments) -> list[dict]:
         research = self.service._require_research(research_id)
         source = arguments.pop("_decision_source", None) or getattr(self._invocation, "source", None) or "HUMAN"
@@ -103,11 +98,7 @@ class ResearchTools:
 
     def experiment_preview(self, research_id: str, proposal_id: str) -> dict:
         proposal = self._proposal(research_id, proposal_id)
-        budget = self.research_get_budget(research_id)
-        code = proposal["fidelity"]
-        return {**proposal, "budget_remaining": budget["remaining"].get(code, 0),
-                "can_submit": proposal["safety_status"] != "REJECTED"
-                and budget["remaining"].get(code, 0) > 0}
+        return {**proposal, "can_submit": proposal["safety_status"] != "REJECTED"}
 
     def experiment_submit(self, research_id: str, proposal_id: str) -> dict:
         return self.service.submit_proposal(research_id, proposal_id)

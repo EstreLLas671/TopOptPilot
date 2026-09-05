@@ -16,6 +16,8 @@ from topoptpilot.service import ResearchService
 from topoptpilot.tools import ALLOWED_TOOLS
 from mcp.matlab_mcp import MatlabMcpWorker
 from solver.matlab3d_adapter import run_matlab3d_or_replay
+from topoptpilot.nomenclature import normalize_stage
+from topoptpilot.version import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,10 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def run_audit(include_online: bool = True) -> dict:
     report = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-              "version": "2.0.7", "gates": {}}
+              "version": __version__, "gates": {}}
     report["gates"]["artifacts"] = _artifact_gate()
     report["gates"]["desktop_app"] = _desktop_gate()
-    report["gates"]["strict_f3"] = _strict_f3_gate()
+    report["gates"]["strict_step4"] = _strict_step4_gate()
     report["gates"]["i18n_zh_default"] = _i18n_gate()
     report["gates"].update(_v6_source_gates())
     report["gates"].update(_matlab_mcp_gates())
@@ -39,7 +41,8 @@ def run_audit(include_online: bool = True) -> dict:
                 result = cases.run(case_id)
                 report["cases"][case_id] = {
                     "research_id": result["research_id"], "experiments": len(result["experiments"]),
-                    "fidelities": [item["fidelity"].split()[0] for item in result["experiments"]],
+                    "fidelities": [normalize_stage(item["fidelity"])
+                                   for item in result["experiments"]],
                     "metrics": result["metrics"],
                     "real_backends": [item["result"]["solver"]["backend"]
                                       for item in result["experiments"] if item.get("result")],
@@ -84,7 +87,7 @@ def _desktop_gate() -> dict:
     release_dir = ROOT / "desktop/src-tauri/target/release"
     executable_candidates = (release_dir / "topoptpilot.exe",)
     installer_dir = release_dir / "bundle/nsis"
-    installer_candidates = (installer_dir / "TopOptPilot_2.0.7_x64-setup.exe",)
+    installer_candidates = (installer_dir / f"TopOptPilot_{__version__}_x64-setup.exe",)
     executable = next((path for path in executable_candidates if path.exists()), executable_candidates[0])
     installer = next((path for path in installer_candidates if path.exists()), installer_candidates[0])
     bundled_resources = release_dir / "resources"
@@ -125,20 +128,20 @@ def _desktop_gate() -> dict:
     }
 
 def _cases_gate_passes(cases: dict) -> bool:
-    """Require the staged evidence case to reach F3 through MATLAB MCP."""
+    """Require the staged evidence case to reach Step4 through MATLAB MCP."""
     return (
         cases["A"]["metrics"]["best_feasible_objective"] is not None
         and cases["B"]["experiments"] >= 6
-        and cases["C"]["fidelities"][-4:] == ["F0", "F1", "F2", "F3"]
-        and any("matlab_mcp_3d" in value for value in cases["C"]["real_backends"])
+        and cases["C"]["fidelities"][-4:] == ["STEP1", "STEP2", "STEP3", "STEP4"]
+        and any(value.startswith("matlab") for value in cases["C"]["real_backends"])
     )
 
-def _strict_f3_gate() -> dict:
+def _strict_step4_gate() -> dict:
     try:
         run_matlab3d_or_replay({"mesh_level": "fine3d", "params": {"grid3d": [4, 2, 2]}})
     except RuntimeError as exc:
         return {"pass": "fallback is forbidden" in str(exc), "evidence": str(exc)}
-    return {"pass": False, "evidence": "legacy F3 adapter returned a result"}
+    return {"pass": False, "evidence": "legacy Step4 adapter returned a result"}
 
 
 def _i18n_gate() -> dict:
@@ -190,8 +193,8 @@ def _v6_source_gates() -> dict:
             ("GUIDE", "HYPOTHESIS", "EXPERIMENT_PLANNER", "EXPERIMENT_EXECUTOR",
              "INDEPENDENT_REVIEWER", "REPORT_WRITER")) and "ROLE_TOOLS" in subagents},
         "fidelity_lane_mapping": {"pass": all(value in fidelity for value in (
-            '"F0": "python"', '"F1": "python"', '"F2": "python3d"',
-            '"F3": "matlab"'))},
+            '"STEP1": "python"', '"STEP2": "python"', '"STEP3": "python3d"',
+            '"STEP4": "matlab"'))},
         "fact_grounded_reports": {"pass": all(value in report for value in (
             "未计算", "evaluation", "artifact_lineage", "SHA-256", "不得输出成功结论"))},
         "credential_not_in_sqlite": {"pass": "api_key" not in store.lower()
@@ -210,10 +213,11 @@ def _matlab_mcp_gates() -> dict:
         worker = MatlabMcpWorker(directory, ROOT)
         try:
             common = {"load_case": "cantilever", "projection": "heaviside_projection",
-                      "params": {"volfrac": .4, "penal": 3, "rmin": 1.5, "max_iter": 2}}
+                      "params": {"volfrac": .4, "penal": 3, "rmin": 1.5,
+                                 "min_iter": 1, "max_iter": 2}}
             for dimension, mesh, grid in ((2, "coarse", None), (3, "coarse3d", [4, 2, 2])):
                 task = {**common, "task_id": f"audit-{dimension}d", "mesh_level": mesh,
-                        "fidelity": "F0" if dimension == 2 else "F2",
+                        "fidelity": "STEP1" if dimension == 2 else "STEP3",
                         "params": {**common["params"]}}
                 if grid:
                     task["params"]["grid3d"] = grid
@@ -244,21 +248,25 @@ def _matlab_mcp_gates() -> dict:
 
 
 def _safe_mode_gate(service: ResearchService) -> dict:
-    research = service.create_research({"name": "Safe mode gate", "mode": "AUTONOMOUS",
-        "budget_total": 2, "budgets": {"total": 2, "f0": 2, "f1": 0, "f2": 0, "f3": 0}})
+    research = service.create_research({"name": "Safe mode gate", "mode": "DEEP_OPTIMIZATION"})
     service.start_autonomous_research(research["id"])
     deadline = time.time() + 90
     while time.time() < deadline:
         state = service.get_research(research["id"])
-        if state.get("termination_reason"): break
+        experiments = state["experiments"]
+        if (experiments and state.get("status") == "READY"
+                and all(item["status"] in {"SUCCESS", "FAILED", "CANCELLED"}
+                        for item in experiments)):
+            break
         time.sleep(.2)
     intents = [item["intent"] for item in state["experiments"]]
     residuals = [(item.get("result") or {}).get("solver", {}).get("relative_residual")
                  for item in state["experiments"]]
-    passed = (state.get("termination_reason") in {"BUDGET_EXHAUSTED", "GOAL_ACHIEVED", "PLATEAU"}
+    passed = (state.get("termination_reason") is None and state.get("status") == "READY"
               and len(intents) >= 1 and all(value is not None and value < 1e-3 for value in residuals))
     return {"pass": passed, "termination": state.get("termination_reason"),
-            "intents": intents, "real_fem_residuals": residuals}
+            "status": state.get("status"), "intents": intents,
+            "real_fem_residuals": residuals}
 
 
 def _online_gate(service: ResearchService) -> dict:

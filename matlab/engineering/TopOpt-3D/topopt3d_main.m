@@ -63,6 +63,10 @@ config = set_default(config, 'display', true);
 config = set_default(config, 'verbose', true);
 config = set_default(config, 'iteration_callback', []);
 config = set_default(config, 'live_stress_snapshots', false);
+config = set_default(config, 'beta', 1.0);
+config = set_default(config, 'beta_max', config.beta);
+config = set_default(config, 'projection', 'none');
+config = set_default(config, 'controller', 'fixed_controller');
 
 if ~isempty(config.iteration_callback) && ...
         ~isa(config.iteration_callback, 'function_handle')
@@ -169,12 +173,22 @@ moveHistory = zeros(config.max_iterations, 1);
 volumeErrorHistory = zeros(config.max_iterations, 1);
 penalHistory = zeros(config.max_iterations, 1);
 relativeObjectiveHistory = inf(config.max_iterations, 1);
+betaHistory = ones(config.max_iterations, 1);
+didConverge = false;
 
 for iteration = 1:config.max_iterations
+    betaNow = scheduled_beta(iteration, config);
+    if strcmp(config.projection, 'heaviside_projection')
+        [xPhysical, dProjection] = project_heaviside_3d(x, betaNow);
+    else
+        xPhysical = x;
+        dProjection = ones(size(x));
+    end
     penalNow = scheduled_penal(iteration, config.max_iterations, config);
-    U = FE_solver_3d(nelx, nely, nelz, x, penalNow, bcConfig);
+    U = FE_solver_3d(nelx, nely, nelz, xPhysical, penalNow, bcConfig);
     [objective, dc] = compliance_and_sensitivity_3d( ...
-        nelx, nely, nelz, x, penalNow, config.Emin, U, KE);
+        nelx, nely, nelz, xPhysical, penalNow, config.Emin, U, KE);
+    dc = dc .* dProjection;
     dc(~domainMask) = 0;
 
     filterConfig.iteration = iteration;
@@ -185,16 +199,27 @@ for iteration = 1:config.max_iterations
     ocOptions.move = config.move_end + ...
         (config.move_start-config.move_end) ...
         * (1-progress)^config.move_schedule_power;
+    if strcmp(config.projection, 'heaviside_projection')
+        ocOptions.move = min(ocOptions.move, projection_move_cap(betaNow));
+    end
+    ocOptions.volume_projection_beta = betaNow * strcmp(config.projection, 'heaviside_projection');
+    ocOptions.volume_sensitivity = dProjection;
     [xNew, ocInfo] = OC_solver_3d(x, dcFiltered, config.volfrac, ocOptions);
 
     change = max(abs(xNew(:)-x(:)));
     x = xNew;
+    if strcmp(config.projection, 'heaviside_projection')
+        xPhysical = project_heaviside_3d(x, betaNow);
+    else
+        xPhysical = x;
+    end
     objectiveHistory(iteration) = objective;
     changeHistory(iteration) = change;
     radiusHistory(iteration) = filterInfo.rmin;
     moveHistory(iteration) = ocOptions.move;
     volumeErrorHistory(iteration) = ocInfo.volume_error;
     penalHistory(iteration) = penalNow;
+    betaHistory(iteration) = betaNow;
     if iteration > 1
         previousObjective = objectiveHistory(iteration-1);
         relativeObjectiveHistory(iteration) = abs(objective-previousObjective) ...
@@ -211,14 +236,15 @@ for iteration = 1:config.max_iterations
         frame = struct();
         frame.iteration = iteration;
         frame.max_iterations = config.max_iterations;
-        frame.x = x;
+        frame.x = xPhysical;
         frame.domain_mask = domainMask;
         frame.objective = objective;
         frame.change = change;
         frame.volume_fraction = ocInfo.volume_fraction;
-        frame.gray_ratio = gray_ratio_3d(x, domainMask);
+        frame.gray_ratio = gray_ratio_3d(xPhysical, domainMask);
         frame.rmin = filterInfo.rmin;
         frame.penal = penalNow;
+        frame.beta = betaNow;
         if config.live_stress_snapshots
             [frame.von_mises, ~] = compute_von_mises_3d(nelx, nely, nelz, ...
                 x, penalNow, config.Emin, U, config.stress_measure, config.E, config.nu);
@@ -226,28 +252,37 @@ for iteration = 1:config.max_iterations
         config.iteration_callback(frame);
     end
     if iteration >= config.min_iterations && change < config.change_tolerance ...
-            && relativeObjectiveHistory(iteration) < config.objective_tolerance
+            && relativeObjectiveHistory(iteration) < config.objective_tolerance ...
+            && betaNow >= target_beta(config)
+        didConverge = true;
         break;
     end
 end
 
 % 用最终密度重新分析，使应力图和 result.objective 与最终构型一致。
 finalPenal = penalHistory(iteration);
-[Ufinal, Kfinal] = FE_solver_3d(nelx, nely, nelz, x, finalPenal, bcConfig);
+finalBeta = scheduled_beta(iteration, config);
+if strcmp(config.projection, 'heaviside_projection')
+    finalPhysical = project_heaviside_3d(x, finalBeta);
+else
+    finalPhysical = x;
+end
+[Ufinal, Kfinal] = FE_solver_3d(nelx, nely, nelz, finalPhysical, finalPenal, bcConfig);
 [finalObjective, ~] = compliance_and_sensitivity_3d( ...
-    nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, KE);
+    nelx, nely, nelz, finalPhysical, finalPenal, config.Emin, Ufinal, KE);
 [vonMises, stress] = compute_von_mises_3d( ...
-    nelx, nely, nelz, x, finalPenal, config.Emin, Ufinal, ...
+    nelx, nely, nelz, finalPhysical, finalPenal, config.Emin, Ufinal, ...
     config.stress_measure, config.E, config.nu);
 objectiveHistory(iteration) = finalObjective;
 
 result = struct();
-result.x = x;
+result.x = finalPhysical;
+result.raw_x = x;
 result.domain_mask = domainMask;
 result.iterations = iteration;
 result.objective = finalObjective;
-result.volume_fraction = mean(x(domainMask));
-result.gray_ratio = gray_ratio_3d(x, domainMask);
+result.volume_fraction = mean(finalPhysical(domainMask));
+result.gray_ratio = gray_ratio_3d(finalPhysical, domainMask);
 result.objective_history = objectiveHistory(1:iteration);
 result.change_history = changeHistory(1:iteration);
 result.radius_history = radiusHistory(1:iteration);
@@ -256,8 +291,12 @@ result.volume_error_history = volumeErrorHistory(1:iteration);
 result.penal_history = penalHistory(1:iteration);
 result.relative_objective_history = relativeObjectiveHistory(1:iteration);
 result.final_penal = finalPenal;
+result.beta_history = betaHistory(1:iteration);
 result.U = Ufinal;
 result.K = Kfinal;
+result.final_beta = finalBeta;
+result.converged = didConverge;
+result.final_change = changeHistory(iteration);
 result.von_mises = vonMises;
 result.stress = stress;
 result.config = config;
@@ -330,6 +369,46 @@ else
 end
 end
 
+function value = projection_move_cap(beta)
+if beta <= 2
+    value = 0.2;
+elseif beta <= 4
+    value = 0.1;
+elseif beta <= 8
+    value = 0.05;
+else
+    value = 0.02;
+end
+end
+
+function [xProjected, derivative] = project_heaviside_3d(x, beta)
+if beta <= 1.0
+    xProjected = x;
+    derivative = ones(size(x));
+    return;
+end
+tanhHalf = tanh(0.5*beta);
+xProjected = (tanhHalf + tanh(beta*(x-0.5))) / (2*tanhHalf);
+derivative = beta*(1-tanh(beta*(x-0.5)).^2) / (2*tanhHalf);
+end
+
+function betaNow = scheduled_beta(iteration, config)
+if strcmp(config.projection, 'heaviside_projection') && ...
+        strcmp(config.controller, 'periodic_controller')
+    betaNow = min(config.beta_max, config.beta*2^floor((iteration-1)/20));
+else
+    betaNow = config.beta;
+end
+end
+
+function value = target_beta(config)
+if strcmp(config.projection, 'heaviside_projection') && ...
+        strcmp(config.controller, 'periodic_controller')
+    value = config.beta_max;
+else
+    value = config.beta;
+end
+end
 function value = gray_ratio_3d(x, domainMask)
 active = x(logical(domainMask));
 if isempty(active)

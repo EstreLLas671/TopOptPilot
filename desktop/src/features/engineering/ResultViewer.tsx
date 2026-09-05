@@ -74,7 +74,8 @@ export function ScalarMap({ values, mode }: { values: number[][]; mode: FieldMod
   const [minimum, maximum] = cells.length ? [Math.min(...cells), Math.max(...cells)] : [0, 1];
   const span = Math.max(maximum - minimum, 1e-12);
   if (!cells.length) return <div className="artifact-empty">本次运行没有可渲染的{mode === "density" ? "密度" : "应力"}场。</div>;
-  return <div className={`density-map ${mode}`} style={{ gridTemplateColumns: `repeat(${values[0].length}, minmax(2px, 1fr))` }} aria-label={mode === "density" ? "密度场" : "Von Mises 应力场"}>
+  const cols = values[0].length, rows = values.length;
+  return <div className={`density-map ${mode}`} style={{ gridTemplateColumns: `repeat(${cols}, minmax(2px, 1fr))`, aspectRatio: `${cols} / ${rows}`, width: "100%", height: "auto", maxHeight: "100%", minHeight: 0, flex: "0 0 auto", alignSelf: "center", margin: "0 auto" }} aria-label={mode === "density" ? "密度场" : "Von Mises 应力场"}>
     {cells.map((value, index) => {
       const normalized = (value - minimum) / span;
       const color = mode === "density"
@@ -90,7 +91,7 @@ export function ConvergenceChart({ points }: { points: ConvergencePoint[] }) {
     if (!points.length) return null;
     const values = points.map(point => point.compliance);
     const min = Math.min(...values), max = Math.max(...values), span = Math.max(max - min, 1e-9);
-    const x0 = 14, x1 = 96, y0 = 7, y1 = 39;
+    const x0 = 72, x1 = 490, y0 = 24, y1 = 202;
     const polyline = points.map((point, index) => {
       const x = x0 + (index / Math.max(points.length - 1, 1)) * (x1 - x0);
       const y = y1 - ((point.compliance - min) / span) * (y1 - y0);
@@ -99,16 +100,16 @@ export function ConvergenceChart({ points }: { points: ConvergencePoint[] }) {
     return { polyline, min, max, first: points[0].iteration, last: points.at(-1)?.iteration ?? points.length };
   }, [points]);
   if (!chart) return <div className="artifact-empty">尚无收敛历史。</div>;
-  return <svg className="convergence-chart" viewBox="0 0 104 50" preserveAspectRatio="xMidYMid meet" aria-label="柔度收敛曲线">
-    <path d="M14 7V39H96 M14 23H96" className="chart-grid"/>
-    <path d="M14 7V39H96" className="chart-axis"/>
+  return <svg className="convergence-chart" viewBox="0 0 520 250" preserveAspectRatio="xMidYMid meet" aria-label="柔度收敛曲线">
+    <path d="M72 24V202H490 M72 113H490" className="chart-grid"/>
+    <path d="M72 24V202H490" className="chart-axis"/>
     <polyline points={chart.polyline} fill="none" className="chart-line"/>
-    <text x="12" y="9" textAnchor="end" className="chart-tick">{chart.max.toFixed(2)}</text>
-    <text x="12" y="40" textAnchor="end" className="chart-tick">{chart.min.toFixed(2)}</text>
-    <text x="14" y="45" textAnchor="middle" className="chart-tick">{chart.first}</text>
-    <text x="96" y="45" textAnchor="middle" className="chart-tick">{chart.last}</text>
-    <text x="55" y="49" textAnchor="middle" className="chart-label">迭代</text>
-    <text x="3" y="24" textAnchor="middle" transform="rotate(-90 3 24)" className="chart-label">柔度</text>
+    <text x="64" y="30" textAnchor="end" className="chart-tick">{chart.max.toFixed(2)}</text>
+    <text x="64" y="207" textAnchor="end" className="chart-tick">{chart.min.toFixed(2)}</text>
+    <text x="72" y="224" textAnchor="middle" className="chart-tick">{chart.first}</text>
+    <text x="490" y="224" textAnchor="middle" className="chart-tick">{chart.last}</text>
+    <text x="281" y="244" textAnchor="middle" className="chart-label">迭代</text>
+    <text x="18" y="113" textAnchor="middle" transform="rotate(-90 18 113)" className="chart-label">柔度</text>
   </svg>;
 }
 

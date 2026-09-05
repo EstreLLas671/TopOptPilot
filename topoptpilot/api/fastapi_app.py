@@ -8,14 +8,16 @@ import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from topoptpilot.schemas import ExperimentCreate, ResearchCreate, ToolRequest
 from topoptpilot.service import ResearchService
+from topoptpilot.version import __version__
 from mcp.matlab_mcp import MatlabMcpError
 
 
@@ -30,7 +32,7 @@ async def lifespan(_: FastAPI):
     service.close()
 
 
-app = FastAPI(title="TopOptPilot Test API", version="5.0", lifespan=lifespan,
+app = FastAPI(title="TopOptPilot Test API", version=__version__, lifespan=lifespan,
               description="Programmatic interface to the same ResearchService used by Streamlit.")
 app.add_middleware(
     CORSMiddleware,
@@ -46,7 +48,14 @@ class CommandRequest(BaseModel):
 
 
 class FidelityStageDecisionRequest(BaseModel):
-    advance: bool
+    action: Literal["REPEAT_STAGE", "ADVANCE_STAGE", "APPROVE_FINAL"] | None = None
+    advance: bool | None = None
+
+    @model_validator(mode="after")
+    def require_decision(self) -> "FidelityStageDecisionRequest":
+        if self.action is None and self.advance is None:
+            raise ValueError("action or advance is required")
+        return self
 
 
 class DecisionEditRequest(BaseModel):
@@ -164,7 +173,7 @@ def list_research_runs(research_id: str):
 @app.post("/api/research/{research_id}/fidelity-stage-decision")
 def decide_fidelity_stage(research_id: str, request: FidelityStageDecisionRequest):
     try:
-        return service.decide_fidelity_stage(research_id, request.advance)
+        return service.decide_fidelity_stage(research_id, request.action if request.action else request.advance)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

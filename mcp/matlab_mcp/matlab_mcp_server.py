@@ -38,9 +38,11 @@ class MatlabMcpWorker:
         self._futures: dict[str, Future] = {}
 
     def submit(self, task: dict[str, Any], research_id: str, experiment_id: str,
-               done: Callable[[str, Future], None] | None = None) -> tuple[str, Future]:
+               done: Callable[[str, Future], None] | None = None,
+               progress: Callable[[int, int, list, list, dict], None] | None = None
+               ) -> tuple[str, Future]:
         run_id = f"run_matlab_mcp_{experiment_id.lower()}"
-        future = self.pool.submit(self.run, task, research_id, experiment_id)
+        future = self.pool.submit(self.run, task, research_id, experiment_id, progress)
         with self._lock:
             self._futures[run_id] = future
         if done:
@@ -69,7 +71,8 @@ class MatlabMcpWorker:
             time.sleep(0.05)
         return future.done()
 
-    def run(self, task: dict[str, Any], research_id: str, experiment_id: str) -> dict[str, Any]:
+    def run(self, task: dict[str, Any], research_id: str, experiment_id: str,
+            progress: Callable[[int, int, list, list, dict], None] | None = None) -> dict[str, Any]:
         job_dir = (self.data_dir / research_id / "matlab_mcp" / experiment_id).resolve()
         if self.data_dir not in job_dir.parents:
             raise MatlabMcpError("MATLAB job path escaped the research data directory")
@@ -78,10 +81,24 @@ class MatlabMcpWorker:
         dimension = 3 if fidelity in {"F2", "F3"} or "3d" in str(task.get("mesh_level", "")).lower() else 2
         payload = {"dimension": dimension, "config": self._config(task, dimension),
                    "task_id": task.get("task_id"), "operation": "solve"}
+        snapshots_dir = job_dir / "snapshots"
+        payload["config"]["progress_dir"] = str(snapshots_dir)
         task_path, result_path = job_dir / "task.json", job_dir / "raw_result.json"
         task_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         scheduled_at = time.monotonic()
-        raw = self.gateway.run_topopt_task(task_path, result_path)
+        stop_watching = threading.Event()
+        watcher = None
+        if progress is not None:
+            watcher = threading.Thread(
+                target=self._watch_progress, args=(snapshots_dir, progress, stop_watching),
+                daemon=True, name=f"matlab-progress-{experiment_id}")
+            watcher.start()
+        try:
+            raw = self.gateway.run_topopt_task(task_path, result_path)
+        finally:
+            stop_watching.set()
+            if watcher is not None:
+                watcher.join(timeout=5)
         if isinstance(raw.get("capabilities"), dict):
             self._capability_cache.update(raw["capabilities"])
             self._capability_cache["probed"] = True
@@ -104,16 +121,25 @@ class MatlabMcpWorker:
             "volfrac": float(params.get("volfrac", .4)),
             "penal": float(params.get("penal", 3.0)),
             "rmin": float(params.get("rmin", 1.5)),
-            "max_iterations": min(int(params.get("max_iter", 80)), 250),
-            "min_iterations": min(10, int(params.get("max_iter", 80))),
+            "max_iterations": int(params.get("max_iter", 80)),
+            "min_iterations": int(params.get("min_iter", 10)),
+            "accuracy": str(params.get("accuracy", "standard")),
+            "filter_strategy": str(params.get("filter_strategy", "fixed")),
             "display": False, "verbose": False,
             "bc_config": dict(task.get("bc_config") or {}),
             "geometry": task.get("geometry") or {},
             "E": float(params.get("E", 1.0)),
+            "density_kg_m3": float(params.get("density_kg_m3", 1.0)),
+            "yield_strength_MPa": float(params.get("yield_strength_MPa", 1.0)),
             "verification_mode": str(params.get("verification_mode", "")),
             "initial_density": params.get("initial_density"),
             "nu": float(params.get("nu", 0.3)),
             "beta": float(params.get("beta", 1.0)),
+            "beta_max": float(params.get("beta_max", params.get("beta", 1.0))),
+            "projection": str(params.get("projection", task.get("projection", "none"))),
+            "controller": str(params.get("controller", task.get("controller", "fixed_controller"))),
+            "move_start": float(params.get("move_start", params.get("move", 0.2))),
+            "move_end": float(params.get("move_end", params.get("move", 0.2))),
             "solver_variant": str(task.get("solver_variant", "auto")),
             "acceleration_mode": str(task.get("acceleration_mode", "auto")),
         }
@@ -123,14 +149,11 @@ class MatlabMcpWorker:
             config["domain_mask"] = geometry["mask"]
         if dimension == 3:
             grid = params.get("grid3d")
-            if str(params.get("verification_mode", "")) == "fixed_density" and not (isinstance(grid, (list, tuple)) and len(grid) == 3):
-                raise MatlabMcpError("F3 fixed-density verification requires an explicit grid3d")
             grid = grid or ([12, 4, 3] if task.get("mesh_level") == "coarse3d"
                             else [18, 6, 4])
             if not isinstance(grid, (list, tuple)) or len(grid) != 3 or any(int(value) < 1 for value in grid):
                 raise MatlabMcpError("grid3d must contain three positive integers")
             config.update({"nelx": int(grid[0]), "nely": int(grid[1]), "nelz": int(grid[2]),
-                           "accuracy": "standard" if task.get("mesh_level") == "coarse3d" else "high",
                            "penal_start": 1.0, "auto_boundary_solid": False})
         else:
             from solver.params import normalize_task
@@ -147,9 +170,65 @@ class MatlabMcpWorker:
                 raise MatlabMcpError(f"Custom mask must have {dimension} dimensions")
         if not (.1 <= config["volfrac"] <= .7 and .75 <= config["rmin"] <= 4
                 and 1 <= config["penal"] <= 5 and config["E"] > 0
-                and 0 <= config["nu"] < .5 and 1 <= config["beta"] <= 64):
+                and 0 <= config["nu"] < .5 and 1 <= config["beta"] <= 64
+                and config["beta"] <= config["beta_max"] <= 64
+                and config["projection"] in {"none", "heaviside_projection"}
+                and config["controller"] in {"fixed_controller", "periodic_controller"}
+                and .01 <= config["move_start"] <= .5 and .01 <= config["move_end"] <= .5):
             raise MatlabMcpError("Task escaped the approved MATLAB parameter envelope")
         return config
+
+    def _watch_progress(self, snapshots_dir: Path,
+                        progress: Callable[[int, int, list, list, dict], None],
+                        stop: threading.Event) -> None:
+        """轮询 MATLAB 写出的逐轮快照，以约 2 秒节流回传实时优化画面。"""
+        manifest_path = snapshots_dir / "manifest.json"
+        last_iteration = 0
+        last_emitted_at = 0.0
+        while not stop.is_set():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                frames = manifest.get("frames") or []
+                if isinstance(frames, dict):
+                    frames = [frames[key] for key in sorted(frames)]
+                frames = [frame for frame in frames
+                          if int(frame.get("iteration", 0)) > last_iteration]
+                if frames and time.monotonic() - last_emitted_at >= 2.0:
+                    entry = frames[-1]
+                    density_file = snapshots_dir / str(entry.get("density_file", ""))
+                    volume = self._read_frame(density_file, manifest.get("shape") or [])
+                    if volume is not None:
+                        iteration = int(entry.get("iteration", 0))
+                        total = int(manifest.get("max_iterations", 0))
+                        slice_2d = self._middle_slice(volume)
+                        history = [{"iteration": int(frame.get("iteration", 0)),
+                                    "compliance": frame.get("objective")}
+                                   for frame in (manifest.get("frames") or [])
+                                   if isinstance(frame, dict)]
+                        progress(iteration, total, slice_2d, volume, history)
+                        last_iteration = iteration
+                        last_emitted_at = time.monotonic()
+            except Exception:
+                pass
+            stop.wait(1.0)
+
+    @staticmethod
+    def _read_frame(path: Path, shape: list) -> list | None:
+        try:
+            import numpy as np
+            raw = np.fromfile(path, dtype="<f4")
+            if not shape or raw.size != int(np.prod([int(dim) for dim in shape])):
+                return None
+            volume = raw.reshape([int(dim) for dim in shape], order="F")
+            return volume.tolist()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _middle_slice(volume: list) -> list:
+        if volume and isinstance(volume[0], list) and volume[0] and isinstance(volume[0][0], list):
+            return volume[len(volume) // 2]
+        return volume
 
     def _normalize(self, raw: dict[str, Any], task: dict[str, Any], dimension: int,
                    task_path: Path, result_path: Path) -> dict[str, Any]:
@@ -182,7 +261,7 @@ class MatlabMcpWorker:
         return {
             "run_id": "", "task_id": str(task.get("task_id", "")),
             "hypothesis_id": str(task.get("hypothesis_id", "")),
-            "experiment_group": str(task.get("experiment_group", "")), "status": "converged",
+            "experiment_group": str(task.get("experiment_group", "")), "status": str(raw.get("status") or "max_iter"),
             "objective": {"compliance": compliance},
             "constraints": {"volume_fraction": float(raw.get("volume_fraction", density.mean()))},
             "quality": {"gray_ratio": round(float(gray_ratio(density)), 4),
@@ -199,6 +278,7 @@ class MatlabMcpWorker:
                        "solver_entry_sha256": hashlib.sha256(entry.read_bytes()).hexdigest(),
                        "solver_variant": raw.get("solver_variant", "optimized_cpu"),
                        "acceleration_mode": raw.get("acceleration_mode", "vectorized_cpu"),
+                       "executed_config": self._config(task, dimension),
                        "capabilities": raw.get("capabilities", self._capability_cache),
                        "iterations": int(raw.get("iterations", len(history))),
                        "relative_residual": None},

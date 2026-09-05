@@ -143,7 +143,11 @@ def run_topopt(task_spec, *, backend: str = "python",
             status = "failed"
             break
         try:
-            xnew, info = oc_update(x, dc_x, volfrac, {"move": move, "xmin": xmin,
+            move_now = move
+            if use_heaviside:
+                projection_cap = 0.2 if beta <= 2 else (0.1 if beta <= 4 else (0.05 if beta <= 8 else 0.02))
+                move_now = min(move, projection_cap)
+            xnew, info = oc_update(x, dc_x, volfrac, {"move": move_now, "xmin": xmin,
                                                        "volume_sensitivity": dv_x,
                                                        "volume_fn": volume_fn})
         except (ValueError, FloatingPointError):
@@ -172,6 +176,7 @@ def run_topopt(task_spec, *, backend: str = "python",
             "beta": beta,
             "penal": penal,
             "lambda": float(info["lambda"]),
+            "move": move_now,
             "residual": float(sol["relative_residual"]),
         })
         final = (sol, info, xPhys, x)
@@ -187,7 +192,10 @@ def run_topopt(task_spec, *, backend: str = "python",
             cancelled = True
             break
 
-        if it >= min_iter and change < tol_change:
+        continuation_target = (float(spec.get("beta_max", beta))
+                               if use_heaviside and spec["controller"] == "periodic_controller" else beta)
+        continuation_complete = beta >= continuation_target
+        if it >= min_iter and change < tol_change and continuation_complete:
             status = "converged"
             break
         if time_limit is not None and (time.time() - t0) > time_limit:

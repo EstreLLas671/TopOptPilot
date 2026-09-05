@@ -16,8 +16,8 @@ export const resources = {
     status: "状态", backend: "后端", model: "模型", refresh: "刷新", report: "生成报告",
     export: "导出复现包", compare: "比较", loading: "正在连接本地科研服务…",
     serviceError: "无法连接桌面后端", noEvents: "尚无研究事件", humanApproval: "需要人工审批",
-    save: "保存", close: "关闭", retry: "重新连接", matlabStrict: "F3 仅接受真实 MATLAB MCP 结果",
-    createHint: "输入结构目标与预算，数值参数仍由 Policy 编译。"
+    save: "保存", close: "关闭", retry: "重新连接", matlabStrict: "Step4 仅接受真实 MATLAB MCP 结果",
+    createHint: "输入结构目标，数值参数仍由 Policy 编译并由人工逐步控制。"
   }},
   "en-US": { translation: {
     appName: "TopOptPilot", newResearch: "New research", research: "Research", experiments: "Experiments",
@@ -33,8 +33,8 @@ export const resources = {
     status: "Status", backend: "Backend", model: "Model", refresh: "Refresh", report: "Generate report",
     export: "Export reproduction bundle", compare: "Compare", loading: "Connecting to the local research service…",
     serviceError: "Unable to connect to the desktop backend", noEvents: "No research events yet", humanApproval: "Human approval required",
-    save: "Save", close: "Close", retry: "Reconnect", matlabStrict: "F3 accepts only genuine MATLAB MCP results",
-    createHint: "Enter the structural goal and budget; Policy still compiles all numeric parameters."
+    save: "Save", close: "Close", retry: "Reconnect", matlabStrict: "Step4 accepts only genuine MATLAB MCP results",
+    createHint: "Enter the structural goal; Policy compiles numeric parameters under stepwise human control."
   }}
 } as const;
 

@@ -26,6 +26,7 @@ class BaseController:
         self.beta_max = float(self.p.get("beta_max", 16) or 0)
         self.beta_step = float(self.p.get("beta_step", 2) or 2)
         self.beta_interval = int(self.p.get("beta_interval", 10) or 10)
+        self.beta_start = float(self.p.get("beta", self.beta_step) or 0)
         self.gray_threshold = float(self.p.get("gray_threshold", 0.20))
 
     def beta(self, iteration: int, gray_ratio: Optional[float] = None,
@@ -54,7 +55,7 @@ class PeriodicController(BaseController):
     def beta(self, iteration, gray_ratio=None, connected=None) -> float:
         if self.beta_max <= 0:
             return 0.0
-        return min(self.beta_max, self.beta_step * (iteration // self.beta_interval + 1))
+        return min(self.beta_max, self.beta_start * 2 ** max(0, (iteration - 1) // self.beta_interval))
 
 
 class GrayFeedbackController(BaseController):

@@ -1,8 +1,8 @@
-# TopOptPilot 2.0.3 使用说明
+# TopOptPilot 2.1.1 使用说明
 
 > 面向 Windows 的二维/三维结构拓扑优化、工程开发与可审计 AI 科研工作台<br>
-> 文档版本：2.0.3<br>
-> 更新日期：2026-08-30<br>
+> 文档版本：2.1.1<br>
+> 更新日期：2026-09-05<br>
 > 项目主页：https://github.com/EstreLLas671/TopOptPilot
 
 ## 1. TopOptPilot 是什么
@@ -77,7 +77,7 @@ TopOptPilot 将真实有限元拓扑优化、工程文件开发、AI 对话和�
 从 [GitHub Releases](https://github.com/EstreLLas671/TopOptPilot/releases) 下载：
 
 ```text
-TopOptPilot_2.0.3_x64-setup.exe
+TopOptPilot_2.1.1_x64-setup.exe
 ```
 
 发布页同时提供安装包大小、SHA-256、签名状态和版本说明。当前安装包未进行商业代码签名时，Windows SmartScreen 可能显示“未知发布者”；请先核对 SHA-256，再决定是否运行。
@@ -603,10 +603,11 @@ GitHub 源码仓库只保留项目实现、测试、配置模板、MATLAB 求解
 
 ## 16. 版本与发布
 
-当前版本：**TopOptPilot 2.0.3**。
+当前版本：**TopOptPilot 2.1.1**。
 
 - 下载：[GitHub Releases](https://github.com/EstreLLas671/TopOptPilot/releases)
-- 2.0.3 说明：[docs/RELEASE_2.0.3.md](docs/RELEASE_2.0.3.md)
+- 2.1.1 说明：[docs/RELEASE_2.1.1.md](docs/RELEASE_2.1.1.md)
+- 历史版本说明：[docs/RELEASE_2.0.3.md](docs/RELEASE_2.0.3.md)
 - 真实 MATLAB 验证：[docs/validation/2026-08-25-matlab-2d-3d-real-iterations.md](docs/validation/2026-08-25-matlab-2d-3d-real-iterations.md)
 
 ## 17. 许可与第三方组件

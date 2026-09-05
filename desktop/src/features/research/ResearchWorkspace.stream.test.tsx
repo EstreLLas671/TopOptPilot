@@ -78,20 +78,36 @@ describe("ResearchWorkspace stream lifecycle", () => {
     apiMocks.researchFidelityStageDecision.mockResolvedValue(research);
   });
 
-  it("shows each completed F1-F4 stage result and repeats only after explicit choice", async () => {
+  it("shows a completed Step result with topology, convergence and explicit choices", async () => {
     const socket = { onmessage: null, onerror: null, close: vi.fn() } as unknown as WebSocket;
     apiMocks.stream.mockResolvedValue(socket);
-    const gated = { ...research, events: [{
+    const experiment = { id:"E01", research_id:research.id, purpose:"Step2", fidelity:"Step2", mesh_level:"coarse", backend:"python", status:"SUCCESS", progress:1, current_iteration:2, parameters:{}, result:{ objective:{compliance:12.5}, constraints:{volume_fraction:.4}, quality:{gray_ratio:.02,connected_components:1}, artifacts:{density:[[.1,.9],[.8,.2]],history:[{iteration:1,compliance:20},{iteration:2,compliance:12.5}]}} } as any;
+    const gated = { ...research, constraints:{volume_fraction:.4,gray_max:.05,connected:true}, experiments:[experiment], events: [{
       id: 41, kind: "HUMAN", title: "FIDELITY_STAGE_AWAITING_DECISION", body: "F1 完成", created_at: new Date().toISOString(),
       payload: { stage_code: "F1", internal_fidelity: "F0", round: 1, experiment_ids: ["E01"], best_experiment_id: "E01", result: { successful: 1, failed: 0, best_compliance: 12.5 } },
     }] } as Research;
-    render(<ResearchWorkspace researches={[gated]} selected={gated} command="" busy={false} safeMode={true}
+    render(<ResearchWorkspace researches={[gated]} selected={gated} active={experiment} command="" busy={false} safeMode={true}
       onCommand={() => undefined} onCreateResearch={() => undefined} onArchive={async () => undefined}
       onRestore={async () => undefined} onDecision={() => undefined} onError={() => undefined}
       onSelect={async () => undefined} onSelectExperiment={() => undefined} setCommand={() => undefined}/>);
-    expect(await screen.findByRole("dialog", { name: "F1 阶段结果" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "否，继续本流程一轮" }));
-    await waitFor(() => expect(apiMocks.researchFidelityStageDecision).toHaveBeenCalledWith(research.id, false));
+    expect(await screen.findByRole("dialog", { name: "Step2 阶段结果" })).toBeTruthy();
+    expect(screen.getByText("当前拓扑")).toBeTruthy();
+    expect(screen.getAllByText("柔度收敛").length).toBeGreaterThan(0);
+    expect(screen.queryByText("真实实验")).toBeNull();
+    expect(screen.getByRole("button", { name: "是，以最优方案为基线进入下一阶段" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "否，重新生成三套对比方案" }));
+    await waitFor(() => expect(apiMocks.researchFidelityStageDecision).toHaveBeenCalledWith(research.id, "REPEAT_STAGE"));
+  });
+
+  it("uses the final Step4 choices without a second pre-run approval", async () => {
+    const socket = { onmessage: null, onerror: null, close: vi.fn() } as unknown as WebSocket;
+    apiMocks.stream.mockResolvedValue(socket);
+    const experiment = { id:"E04", research_id:research.id, purpose:"Step4", fidelity:"Step4", mesh_level:"fine3d", backend:"matlab", status:"SUCCESS", progress:1, current_iteration:1, parameters:{}, result:{ objective:{compliance:8}, constraints:{volume_fraction:.4}, quality:{gray_ratio:.01,connected_components:1}, artifacts:{density:[[1]],history:[{iteration:1,compliance:8}]}} } as any;
+    const gated = { ...research, experiments:[experiment], events:[{id:44,kind:"HUMAN",title:"FIDELITY_STAGE_AWAITING_DECISION",body:"Step4 完成",created_at:new Date().toISOString(),payload:{stage_code:"STEP4",round:4,experiment_ids:["E04"],best_experiment_id:"E04",result:{successful:1,failed:0,best_compliance:8}}}] } as Research;
+    render(<ResearchWorkspace researches={[gated]} selected={gated} active={experiment} command="" busy={false} safeMode={true} onCommand={()=>undefined} onCreateResearch={()=>undefined} onArchive={async()=>undefined} onRestore={async()=>undefined} onDecision={()=>undefined} onError={()=>undefined} onSelect={async()=>undefined} onSelectExperiment={()=>undefined} setCommand={()=>undefined}/>);
+    expect(await screen.findByRole("dialog", {name:"Step4 阶段结果"})).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", {name:"结束实验"}));
+    await waitFor(()=>expect(apiMocks.researchFidelityStageDecision).toHaveBeenCalledWith(research.id,"APPROVE_FINAL"));
   });
 
   it("awaits the ticket-backed socket and closes the resolved socket on unmount", async () => {

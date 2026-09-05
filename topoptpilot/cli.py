@@ -277,9 +277,13 @@ def _is_pid_alive(pid: int) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="mbcs",
+            errors="replace",
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        if completed.stdout is None:
+            return False
         return str(pid) in completed.stdout
     try:
         os.kill(pid, 0)
