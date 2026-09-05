@@ -93,3 +93,6 @@ approval-records/
 *.approval.json
 # Local distributable artifacts (publish through GitHub Releases, not Git history)
 TopOptPilot_*_x64-setup.exe
+
+# MATLAB desktop GUI state (machine-local, not project source)
+MathWorks/
