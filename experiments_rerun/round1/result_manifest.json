@@ -1,0 +1,1 @@
+{"version":1,"dtype":"float32","byte_order":"little","order":"F","dimension":"3d","shape":[16,48,12],"density_file":"final_density.bin","stress_file":"final_von_mises.bin"}

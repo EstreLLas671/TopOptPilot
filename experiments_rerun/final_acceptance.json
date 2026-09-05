@@ -1,0 +1,168 @@
+{
+  "run": "round4_final",
+  "config_hash": "464820cc95521f7570d3a1cf266dd41fd4ead0133ef9548d1d361d1859bd1425",
+  "grid": [
+    48,
+    16,
+    12
+  ],
+  "parameters": {
+    "volfrac": 0.4,
+    "penal": 3.0,
+    "rmin": 2.0,
+    "beta": 2.0,
+    "beta_max": 16.0,
+    "projection": "heaviside_projection",
+    "controller": "periodic_controller",
+    "move_start": 0.2,
+    "move_end": 0.002,
+    "max_iterations": 160,
+    "min_iterations": 10,
+    "accuracy": "high",
+    "filter_strategy": "fixed"
+  },
+  "compliance": 0.08806497986624708,
+  "wall_seconds": 300.594,
+  "checks": {
+    "拓扑形态": {
+      "criterion": "连通分量 == 1，且材料贯通根部到自由端的全部截面",
+      "value": {
+        "connected_components": 1,
+        "x_sections_total": 48,
+        "x_sections_with_material": 48,
+        "spans_full_length": true,
+        "root_has_material": true,
+        "tip_has_material": true,
+        "iso_level": 0.5
+      },
+      "pass": true
+    },
+    "体积分数约束": {
+      "criterion": "|mean(rho) - 0.4| <= 0.001",
+      "value": {
+        "target": 0.4,
+        "actual": 0.399418,
+        "absolute_error": 0.000582
+      },
+      "pass": true
+    },
+    "灰度质量": {
+      "criterion": "gray_ratio (0.1<rho<0.9) <= 0.15",
+      "value": {
+        "gray_ratio": 0.000651,
+        "threshold": 0.15,
+        "solid_fraction": 0.39898,
+        "void_fraction": 0.600369
+      },
+      "pass": true
+    },
+    "收敛性": {
+      "criterion": "求解器 converged == true（max|dx| < 0.003 且 相对目标变化 < 0.0005）",
+      "value": {
+        "converged": true,
+        "final_change": 0.0020000000000000018,
+        "change_tolerance": 0.003,
+        "relative_objective_change": 3.57e-06,
+        "objective_tolerance": 0.0005,
+        "iterations": 160,
+        "max_iterations": 160,
+        "final_beta": 16,
+        "beta_max": 16.0
+      },
+      "pass": true
+    },
+    "重复性": {
+      "criterion": "同配置哈希独立复跑：柔顺度/体积分数/灰度差 <= 1e-9，逐单元密度最大差 <= 1e-9，且复跑同样判定收敛",
+      "value": {
+        "performed": true,
+        "repeat_dir": "round4_repeat",
+        "config_hash_identical": true,
+        "compliance_primary": 0.08806497986624708,
+        "compliance_repeat": 0.08806497986624708,
+        "metric_absolute_deltas": {
+          "compliance": 0.0,
+          "volume_fraction": 0.0,
+          "gray_ratio": 0.0
+        },
+        "max_elementwise_density_delta": 0.0,
+        "connected_components_repeat": 1,
+        "converged_repeat": true,
+        "wall_seconds_primary": 300.594,
+        "wall_seconds_repeat": 304.875
+      },
+      "pass": true
+    },
+    "工程适用性": {
+      "criterion": "密度场与应力场有限且在物理区间内；最小构件尺度 >= 滤波半径（可制造性）；材料预设随结果留档；全套制品齐全并带哈希",
+      "pass": true,
+      "value": {
+        "stress_field_written": true,
+        "stress_unit": "normalized",
+        "stress_unit_reason": "单位载荷与归一化单元尺度，量纲链不完整，不折算 MPa",
+        "material_preset": "structural-steel",
+        "material_E_GPa": 200,
+        "material_yield_MPa": 250,
+        "min_member_size_elements": 2.828,
+        "filter_radius_elements": 2.0,
+        "member_size_meets_filter_radius": true,
+        "density_finite": true,
+        "density_within_bounds": true,
+        "artifacts": {
+          "required": {
+            "config.json": {
+              "present": true,
+              "sha256": "3dff06702ce64f04"
+            },
+            "status.json": {
+              "present": true,
+              "sha256": "dacd28a5e0ffbbb2"
+            },
+            "result_summary.json": {
+              "present": true,
+              "sha256": "b78940a69ee3a753"
+            },
+            "result.mat": {
+              "present": true,
+              "sha256": "70f085dac81b0d71"
+            },
+            "result_manifest.json": {
+              "present": true,
+              "sha256": "3066b768107af1a7"
+            },
+            "final_density.bin": {
+              "present": true,
+              "sha256": "ecdc066c9ca19d0d"
+            },
+            "final_von_mises.bin": {
+              "present": true,
+              "sha256": "cc586438e675bf6f"
+            },
+            "convergence.png": {
+              "present": true,
+              "sha256": "4a97c35e87399966"
+            },
+            "density.png": {
+              "present": true,
+              "sha256": "5c2b196a45f937fb"
+            },
+            "solver.log": {
+              "present": true,
+              "sha256": "1e2f201400b5f7f5"
+            },
+            "snapshots/manifest.json": {
+              "present": true,
+              "sha256": "4436edf12076d356"
+            }
+          },
+          "all_required_present": true,
+          "snapshot_density_frames": 160,
+          "snapshot_render_frames": 160
+        },
+        "max_von_mises_normalized": 0.960381,
+        "stress_finite": true,
+        "stress_nonnegative": true
+      }
+    }
+  },
+  "all_pass": true
+}

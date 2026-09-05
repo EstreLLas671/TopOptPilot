@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Boxes, LoaderCircle, Settings2, ShieldCheck } from "lucide-react";
-import { api, initializeBackend } from "./api";
+import { api, DEMO_EDITION, initializeBackend } from "./api";
 import EngineeringWorkspace from "./features/engineering/EngineeringWorkspace";
 import ResearchWorkspace from "./features/research/ResearchWorkspace";
 import SettingsWorkspace from "./SettingsWorkspace";
@@ -58,6 +58,10 @@ export default function V2App() {
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
+      if (!import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+        if (!cancelled) setReady(true);
+        return;
+      }
       try {
         await initializeBackend();
         const [engineering, appSettings, researchList, detectedEnvironment] = await Promise.all([api.engineeringHealth(), api.settings(), api.listResearch(), api.engineeringEnvironment()]);
@@ -103,6 +107,17 @@ export default function V2App() {
   }, [settings?.new_research.budget_total]);
 
   function createResearch() {
+    if (DEMO_EDITION) {
+      void api.demoReset().then(() => {
+        researchDetailRequest.current += 1;
+        selectedResearchId.current = "";
+        setResearches([]);
+        setSelectedResearch(null);
+        setSelectedExperiment(null);
+        setMode("basic-implementation");
+      }).catch(reason => reportError(String(reason)));
+      return;
+    }
     setResearchNameDraft("");
     setResearchNameOpen(true);
   }
@@ -177,9 +192,10 @@ export default function V2App() {
   </>;
 
   if (!ready) return <div className="v2-boot"><LoaderCircle className="spin" size={28}/><b>正在启动 TopOptPilot</b>{error ? <span>{error}</span> : null}</div>;
+  if (!import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) return <div className="v2-boot"><ShieldCheck size={28}/><b>请从 TopOptPilot 桌面应用启动</b></div>;
   return <div className="v2-shell">
     <header className="v2-titlebar" data-tauri-drag-region>
-      <div className="v2-brand"><span className="v2-brand-mark"><Boxes size={18}/></span><div><b>TopOptPilot</b><small>TOPOLOGY WORKBENCH</small></div></div>
+      <div className="v2-brand"><span className="v2-brand-mark"><Boxes size={18}/></span><div><b>TopOptPilot</b><small>V2.1.2 演示版</small></div></div>
       <nav className="v2-workspaces" aria-label="工作区">{(["basic-implementation", "deep-optimization"] as WorkspaceMode[]).map(item => <button key={item} title={workspaceLabel(item)} className={mode === item ? "active" : ""} onClick={() => setMode(item)}><span className="workspace-dot" data-mode={item}/>{workspaceLabel(item)}</button>)}</nav>
       <div className="v2-actions"><button title="设置" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings2 size={16}/></button></div>
     </header>

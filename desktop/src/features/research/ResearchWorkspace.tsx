@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArchiveRestore, Bot, CheckCircle2, ChevronRight, FileJson2, FlaskConical, FolderOpen, ImagePlus, LoaderCircle, MessageCircle, Play, Plus, Send, Settings2, ShieldCheck, Square, Trash2, X } from "lucide-react";
-import { api } from "../../api";
+import { api, DEMO_EDITION } from "../../api";
 import type { ConversationAttachment, ConversationMessage, EngineeringComparisonScheme, Experiment, Research, ResearchProposal, ResearchStageGate, ResearchStateAction, ResearchWorkflowProgress } from "../../types";
 import { DEFAULT_OPTIMIZATION_CONFIG, normalizeOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 import type { EngineeringSolverLane } from "../../engineering-workspace";
@@ -288,7 +288,7 @@ export default function ResearchWorkspace(props: Props) {
       setDensityVolume(density);
     }).catch(() => { if (!cancelled) setVisualizationManifest(null); });
     return () => { cancelled = true; };
-  }, [selected?.id, active?.id]);
+  }, [selected?.id, active?.id, active?.status]);
   
   useEffect(() => {
     const bestId = pendingStageGate?.bestExperimentId;
@@ -308,6 +308,13 @@ export default function ResearchWorkspace(props: Props) {
     if (centerTab !== "chat" || !followMessages.current) return;
     window.requestAnimationFrame(() => messageEnd.current?.scrollIntoView?.({ block: "end" }));
   }, [centerTab, messages, streamText, active?.id]);
+
+  useEffect(() => {
+    if (!DEMO_EDITION) return;
+    setWorkflowProgress(selected?.workflow || null);
+    const running = selected?.experiments?.find(item => ["RUNNING", "WAITING", "QUEUED"].includes(String(item.status).toUpperCase()));
+    if (running) setProgressText(`实验 ${running.id} · 迭代 ${running.current_iteration || 0} · ${Math.round(Number(running.progress || 0) * 100)}%`);
+  }, [selected?.workflow, selected?.experiments]);
 
   async function ensureConversation() {
     if (conversationId) return conversationId;
@@ -353,6 +360,18 @@ export default function ResearchWorkspace(props: Props) {
         void api.researchEvents(selected.id, lastEventId.current).then(acceptEvents).catch(() => undefined);
       }, 1500);
     };
+
+    if (DEMO_EDITION) {
+      pollTimer = window.setInterval(() => {
+        void api.researchEvents(selected.id, lastEventId.current).then(acceptEvents).catch(() => undefined);
+        void onSelect(selected.id);
+      }, 500);
+      return () => {
+        disposed = true;
+        window.clearTimeout(refreshTimer);
+        window.clearInterval(pollTimer);
+      };
+    }
 
     void api.stream(selected.id).then(value => {
       if (disposed) { value.close(); return; }
@@ -793,7 +812,7 @@ export default function ResearchWorkspace(props: Props) {
 function CandidatePlanDialog({proposals,recommendedProposalId,busy,onConfirm,onFinish}:{proposals:ResearchProposal[];recommendedProposalId:string;busy:boolean;onConfirm:(id:string)=>void;onFinish:()=>void}) {
   const [selectedId,setSelectedId]=useState(recommendedProposalId);
   useEffect(()=>setSelectedId(recommendedProposalId),[recommendedProposalId]);
-  return <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-suggestion-card suggestion-dialog candidate-plan-dialog" role="dialog" aria-modal="true" aria-label="Step1 候选方案"><header><b>Step1 · 三候选方案</b><span>求解前确认</span></header><p>以下方案均已通过 Policy 编译，但尚未运行 FEM。“Agent 推荐”只表示规划偏好，不代表实验最优。</p><div className="candidate-plan-list">{proposals.map((proposal,index)=><label key={proposal.id} className={selectedId===proposal.id?"active":""}><input type="radio" name="step1-candidate" checked={selectedId===proposal.id} onChange={()=>setSelectedId(proposal.id)}/><span><b>方案 {index+1}{proposal.id===recommendedProposalId?<em>Agent 推荐</em>:null}</b><small>{proposal.purpose}</small><small>研究方向：{proposal.intent} · 受控因素：{proposal.controlled_factors?.join("、")||"基线"}</small><small>风险：{proposal.risk} · 后端：{proposal.backend}</small></span></label>)}</div><footer><button className="outline-button" disabled={busy} onClick={onFinish}>结束实验并生成报告</button><button className="primary-button" disabled={busy||!selectedId} onClick={()=>onConfirm(selectedId)}>{busy?<LoaderCircle className="spin" size={14}/>:null}确认偏好并运行全部三方案</button></footer></section></div>;
+  return <div className="suggestion-dialog-backdrop" role="presentation"><section className="research-suggestion-card suggestion-dialog candidate-plan-dialog" role="dialog" aria-modal="true" aria-label="Step1 候选方案"><header><b>Step1 · 三候选方案</b><span>求解前确认</span></header><p>以下方案均已通过 Policy 编译，但尚未运行 FEM。“Agent 推荐”只表示规划偏好，不代表实验最优。</p><div className="candidate-plan-list">{proposals.map((proposal,index)=>{const params=proposal.parameters||{};const grid=Array.isArray(params.grid3d)?params.grid3d.join("×"):"—";return <label key={proposal.id} className={selectedId===proposal.id?"active":""}><input type="radio" name="step1-candidate" checked={selectedId===proposal.id} onChange={()=>setSelectedId(proposal.id)}/><span><b>方案 {index+1}{proposal.id===recommendedProposalId?<em>Agent 推荐</em>:null}</b><small>{proposal.purpose}</small><small>研究方向：{proposal.intent} · 受控因素：{proposal.controlled_factors?.join("、")||"基线"}</small><small>网格 {grid} · β {String(params.beta??"—")}→{String(params.beta_max??params.beta??"—")} · move {String(params.move??"—")}</small>{proposal.evidence_source?<small>证据：{proposal.evidence_source}</small>:null}<small>风险：{proposal.risk} · 后端：{proposal.backend}</small></span></label>})}</div><footer><button className="outline-button" disabled={busy} onClick={onFinish}>结束实验并生成报告</button><button className="primary-button" disabled={busy||!selectedId} onClick={()=>onConfirm(selectedId)}>{busy?<LoaderCircle className="spin" size={14}/>:null}确认偏好并运行全部三方案</button></footer></section></div>;
 }
 
 function FidelityStageResultDialog({ gate, experiments, constraints, manifest, densityVolume, history, busy, onDecision, onFinish }: { gate: ResearchStageGate; experiments:Experiment[]; constraints:Record<string,unknown>; manifest:import("../../types").ResearchVisualizationManifest|null; densityVolume:MatlabVolume|null; history:Array<{iteration:number;compliance:number}>; busy:boolean; onDecision:(action:"REPEAT_STAGE"|"ADVANCE_STAGE"|"APPROVE_FINAL",selectedExperimentId?:string)=>void; onFinish:()=>void }) {
@@ -801,6 +820,7 @@ function FidelityStageResultDialog({ gate, experiments, constraints, manifest, d
   const compliance = gate.result.best_compliance;
   const weakPoints = Array.isArray(gate.result.weak_points) ? gate.result.weak_points.map(String) : [];
   const finalStage = gate.stageCode === "STEP4";
+  const comparisonStage = experiments.length > 1;
   const recommended = experiments.find(item=>item.id===gate.bestExperimentId)||null;
   const [selectedId,setSelectedId]=useState(gate.bestExperimentId||"");
   useEffect(()=>setSelectedId(gate.bestExperimentId||""),[gate.eventId,gate.bestExperimentId]);
@@ -813,7 +833,15 @@ function FidelityStageResultDialog({ gate, experiments, constraints, manifest, d
   const targetVolume = constraints.volume_fraction ?? constraints.volfrac;
   const targetGray = constraints.gray_max;
   const usable = Boolean(selectedExperiment && selectedExperiment.status==="SUCCESS" && typeof selectedExperiment.result?.objective?.compliance==="number");
-  return <div className="suggestion-dialog-backdrop" role="presentation"><section className={"research-suggestion-card suggestion-dialog fidelity-stage-dialog" + (manifest?.dimension === "3d" ? " fidelity-stage-wide" : "")} role="dialog" aria-modal="true" aria-label={`${stepLabel(gate.stageCode)} 阶段结果`}><header><b>{stepLabel(gate.stageCode)} 阶段结果</b><span>第 {gate.round} 轮</span></header><p>{finalStage ? "Step4 MATLAB 真实网格 3D 已完成。指标只用于审查，是否结束由你决定。" : "本轮三个候选均已到达终态。确定性评估器给出推荐方案，你也可以选择其他具有可用真实结果的方案作为下一 Step 基线。"}</p><div className="stage-candidate-results">{experiments.map(item=>{const itemCompliance=item.result?.objective?.compliance;const itemUsable=item.status==="SUCCESS"&&typeof itemCompliance==="number";return <label key={item.id} className={(selectedId===item.id?"active ":"")+(item.id===gate.bestExperimentId?"recommended":"")}><input type="radio" name="stage-result-candidate" disabled={!itemUsable||finalStage} checked={selectedId===item.id} onChange={()=>setSelectedId(item.id)}/><span><b>{item.id}{item.id===gate.bestExperimentId?<em>评估器推荐</em>:null}</b><small>{item.status} · 柔度 {typeof itemCompliance==="number"?itemCompliance.toFixed(4):"不可用"}</small><small>灰度率 {typeof item.result?.quality?.gray_ratio==="number"?item.result.quality.gray_ratio.toFixed(4):"不可用"} · 连通分量 {item.result?.quality?.connected_components??"不可用"}</small>{item.error?<small className="error-text">{item.error}</small>:null}</span></label>})}</div><div className="stage-result-summary"><b>确定性评估器推荐</b><span>{gate.bestExperimentId || `无可用结果（${failed} 次失败）`}</span><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "柔度不可用"}</strong></div>{recommended?.result ? <><div className="stage-result-visuals"><section><h4>推荐方案拓扑</h4>{manifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={densityVolume} mode="density" surfaceOnly/> : <ScalarMap values={density2d} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={history.length ? history : normalizeResearchHistory(artifacts.history)}/></section></div><div className="stage-target-comparison"><MetricCompare label="体积分数" current={volume} target={targetVolume}/><MetricCompare label="灰度率" current={gray} target={targetGray}/><MetricCompare label="连通分量" current={connected} target={constraints.connected === true ? 1 : undefined}/><MetricCompare label="柔度" current={compliance} target={constraints.compliance_target}/></div></> : <div className="error-card">本轮没有可审查的有效制品。你仍可重复当前 Step 或结束研究。</div>}{weakPoints.length ? <div className="stage-diagnosis"><b>当前诊断</b><span>{weakPoints.join("；")}</span></div> : null}<footer><button className="outline-button" disabled={busy} onClick={() => onDecision("REPEAT_STAGE")}>{finalStage?"继续 Step4 一轮":"重新生成三套对比方案"}</button><button className="outline-button" disabled={busy} onClick={onFinish}>{busy?<LoaderCircle className="spin" size={14}/>:null}结束实验并生成报告</button>{!finalStage?<button className="primary-button" disabled={busy||!usable} title={!usable?"请选择具有可用真实结果的方案":""} onClick={()=>onDecision("ADVANCE_STAGE",selectedId)}>以所选方案进入下一 Step</button>:null}</footer></section></div>;
+  return <div className="suggestion-dialog-backdrop" role="presentation"><section className={"research-suggestion-card suggestion-dialog fidelity-stage-dialog" + (manifest?.dimension === "3d" ? " fidelity-stage-wide" : "")} role="dialog" aria-modal="true" aria-label={`${stepLabel(gate.stageCode)} 阶段结果`}>
+    <header><b>{stepLabel(gate.stageCode)} 阶段结果</b><span>第 {gate.round} 轮</span></header>
+    <p>{finalStage ? "Step4 MATLAB 真实网格 3D 已完成。指标只用于审查，是否结束由你决定。" : comparisonStage ? "本轮三个候选均已到达终态。确定性评估器给出推荐方案，你也可以选择其他具有可用真实结果的方案作为下一 Step 基线。" : "本轮受控方案已到达终态。请审查结果后决定重复当前 Step 或进入下一 Step。"}</p>
+    <div className="stage-candidate-results">{experiments.map(item=>{const itemCompliance=item.result?.objective?.compliance;const itemUsable=item.status==="SUCCESS"&&typeof itemCompliance==="number";return <label key={item.id} className={(selectedId===item.id?"active ":"")+(item.id===gate.bestExperimentId?"recommended":"")}><input type="radio" name="stage-result-candidate" disabled={!itemUsable||finalStage||!comparisonStage} checked={selectedId===item.id} onChange={()=>setSelectedId(item.id)}/><span><b>{item.id}{item.id===gate.bestExperimentId?<em>{comparisonStage?"评估器推荐":"本轮结果"}</em>:null}</b><small>{item.status} · 柔度 {typeof itemCompliance==="number"?itemCompliance.toFixed(4):"不可用"}</small><small>灰度率 {typeof item.result?.quality?.gray_ratio==="number"?item.result.quality.gray_ratio.toFixed(4):"不可用"} · 连通分量 {item.result?.quality?.connected_components??"不可用"}</small>{item.error?<small className="error-text">{item.error}</small>:null}</span></label>})}</div>
+    <div className="stage-result-summary"><b>{comparisonStage?"确定性评估器推荐":"本轮受控结果"}</b><span>{gate.bestExperimentId || `无可用结果（${failed} 次失败）`}</span><strong>{typeof compliance === "number" ? `柔度 ${compliance.toFixed(4)}` : "柔度不可用"}</strong></div>
+    {recommended?.result ? <><div className="stage-result-visuals"><section><h4>{comparisonStage?"推荐方案拓扑":"本轮结果拓扑"}</h4>{manifest?.dimension === "3d" && densityVolume ? <InteractiveVolumeView density={densityVolume} field={densityVolume} mode="density" surfaceOnly/> : <ScalarMap values={density2d} mode="density"/>}</section><section className="convergence-pane"><h4>柔度收敛</h4><ConvergenceChart points={history.length ? history : normalizeResearchHistory(artifacts.history)}/></section></div><div className="stage-target-comparison"><MetricCompare label="体积分数" current={volume} target={targetVolume}/><MetricCompare label="灰度率" current={gray} target={targetGray}/><MetricCompare label="连通分量" current={connected} target={constraints.connected === true ? 1 : undefined}/><MetricCompare label="柔度" current={compliance} target={constraints.compliance_target}/></div></> : <div className="error-card">本轮没有可审查的有效制品。你仍可重复当前 Step 或结束研究。</div>}
+    {weakPoints.length ? <div className="stage-diagnosis"><b>当前诊断</b><span>{weakPoints.join("；")}</span></div> : null}
+    <footer><button className="outline-button" disabled={busy} onClick={() => onDecision("REPEAT_STAGE")}>{finalStage?"继续 Step4 一轮":comparisonStage?"重新生成三套对比方案":"重复当前 Step"}</button><button className="outline-button" disabled={busy} onClick={onFinish}>{busy?<LoaderCircle className="spin" size={14}/>:null}结束实验并生成报告</button>{!finalStage?<button className="primary-button" disabled={busy||!usable} title={!usable?"当前没有可用真实结果":""} onClick={()=>onDecision("ADVANCE_STAGE",selectedId)}>{comparisonStage?"以所选方案进入下一 Step":"确认结果并进入下一 Step"}</button>:null}</footer>
+  </section></div>;
 }
 
 function MetricCompare({label,current,target}:{label:string;current:unknown;target:unknown}) {

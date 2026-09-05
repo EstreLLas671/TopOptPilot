@@ -71,6 +71,7 @@ $RootNodeModules = Join-Path $ProjectRoot "node_modules"
 $PackageJson = Join-Path $ProjectRoot "package.json"
 $PackageLock = Join-Path $ProjectRoot "package-lock.json"
 $AgentsFile = Join-Path $ProjectRoot "AGENTS.md"
+$DemoArtifactSource = Join-Path $ProjectRoot "experiments_rerun"
 
 Require-File $SidecarSource "Desktop sidecar source is missing."
 Require-Directory (Join-Path $MatlabSource "engineering\TopOpt_2D") "v2 2D MATLAB engineering source was not found."
@@ -78,6 +79,10 @@ Require-Directory (Join-Path $MatlabSource "engineering\TopOpt-3D") "v2 3D MATLA
 Require-File (Join-Path $MatlabSource "engineering\solver-sources.json") "MATLAB solver source manifest was not found."
 Require-File $PackageJson "Root package.json is missing."
 Require-File $PackageLock "Root package-lock.json is missing."
+Require-File (Join-Path $DemoArtifactSource "final_acceptance.json") "Four-round acceptance evidence is missing."
+foreach ($DemoRun in @("round1", "round2", "round3", "round4_final", "s3_base", "s3_cont_b2m16", "s3_move005")) {
+    Require-Directory (Join-Path $DemoArtifactSource $DemoRun) "Four-round evidence directory is missing: $DemoRun"
+}
 if (-not $SkipBundle) {
     Require-Directory $McpSource "mcp resource is missing."
     Require-Directory $SolverSource "MATLAB MCP solver source is missing."
@@ -163,6 +168,12 @@ try {
     Copy-Item -LiteralPath $PackageJson -Destination $StageRoot
     Copy-Item -LiteralPath $PackageLock -Destination $StageRoot
     if (Test-Path -LiteralPath $AgentsFile -PathType Leaf) { Copy-Item -LiteralPath $AgentsFile -Destination $StageRoot }
+    $DemoArtifactStage = Join-Path $StageRoot "experiments_rerun"
+    New-Item -ItemType Directory -Force -Path $DemoArtifactStage | Out-Null
+    Copy-Item -LiteralPath (Join-Path $DemoArtifactSource "final_acceptance.json") -Destination $DemoArtifactStage
+    foreach ($DemoRun in @("round1", "round2", "round3", "round4_final", "s3_base", "s3_cont_b2m16", "s3_move005")) {
+        Copy-Item -LiteralPath (Join-Path $DemoArtifactSource $DemoRun) -Destination $DemoArtifactStage -Recurse
+    }
 
     if ($RuntimePackage) {
         $RuntimeStageRoot = Join-Path $StageRoot "runtime"

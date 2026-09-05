@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings, BackendInfo, EngineeringRun, GeometryPreview, KnowledgeEntry, Locale, MatlabHealth, Research, SettingsDiagnostics, SolverCapabilities, SubagentTask, SystemHealth } from "./types";
 
 let backend: BackendInfo | null = null;
+export const DEMO_EDITION = true;
+const demoPath = (path: string) => `/api/demo/four-round${path}`;
 
 export async function initializeBackend(): Promise<BackendInfo> {
   if (backend) return backend;
@@ -58,6 +60,7 @@ async function requestBuffer(path:string):Promise<ArrayBuffer>{
 }
 
 export const api = {
+  demoReset: () => request<{reset:boolean}>(demoPath("/reset"), { method: "POST" }),
   projectPickFolder: () => invoke<string | null>("project_pick_folder"),
   readDroppedImages: (paths: string[]) => invoke<import("./types").DroppedImageData[]>("read_dropped_images", { paths }),
   projectOpen: (root: string) => invoke<import("./types").ProjectOpen>("project_open", { root }),
@@ -79,13 +82,13 @@ export const api = {
   conversationMessage: (id: string, data: object) => request<import("./types").ConversationMessage>("/api/conversations/" + encodeURIComponent(id) + "/messages", { method: "POST", body: JSON.stringify(data) }),
   conversationAttachment: (id: string, data: object) => request<import("./types").ConversationAttachment>("/api/conversations/" + encodeURIComponent(id) + "/attachments", { method: "POST", body: JSON.stringify(data) }),
   health: () => request<SystemHealth>("/api/health"),
-  listResearch: (archived = false) => request<Research[]>(`/api/research?archived=${archived ? "true" : "false"}`),
+  listResearch: (archived = false) => DEMO_EDITION ? (archived ? Promise.resolve([]) : request<Research[]>(demoPath("/research"))) : request<Research[]>(`/api/research?archived=${archived ? "true" : "false"}`),
   archiveResearch: (id: string) => request<Research>(`/api/research/${encodeURIComponent(id)}?confirm=true`, { method: "DELETE" }),
   restoreResearch: (id: string) => request<Research>(`/api/research/${encodeURIComponent(id)}/restore`, { method: "POST" }),
-  getResearch: (id: string) => request<Research>(`/api/research/${id}`),
-  researchArtifacts: (id: string) => request<{researchId:string; experiments:Array<{experimentId:string; status:string; fidelity:string; backend:string; provenance:Record<string,string>; files:Array<{relativePath:string; sha256:string; mediaType:string; sizeBytes:number}>; metrics:Record<string,number|null>}>}>(`/api/research/${id}/artifacts`),
-  researchEvents: (id: string, after = 0) => request<Array<Record<string, unknown>>>("/api/research/" + id + "/events?after=" + after),
-  researchOptimizationConfig: (id: string) => request<import("./optimization-config").OptimizationConfig>("/api/researches/" + encodeURIComponent(id) + "/optimization-config"),
+  getResearch: (id: string) => request<Research>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}`) : `/api/research/${id}`),
+  researchArtifacts: (id: string) => request<{researchId:string; experiments:Array<{experimentId:string; status:string; fidelity:string; backend:string; provenance:Record<string,string>; files:Array<{relativePath:string; sha256:string; mediaType:string; sizeBytes:number}>; metrics:Record<string,number|null>}>}>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/artifacts`) : `/api/research/${id}/artifacts`),
+  researchEvents: (id: string, after = 0) => request<Array<Record<string, unknown>>>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/events?after=${after}`) : "/api/research/" + id + "/events?after=" + after),
+  researchOptimizationConfig: (id: string) => request<import("./optimization-config").OptimizationConfig>(DEMO_EDITION ? demoPath(`/researches/${encodeURIComponent(id)}/optimization-config`) : "/api/researches/" + encodeURIComponent(id) + "/optimization-config"),
   saveResearchOptimizationConfig: (id: string, config: import("./optimization-config").OptimizationConfig) => request<import("./optimization-config").OptimizationConfig>("/api/researches/" + encodeURIComponent(id) + "/optimization-config", { method: "PUT", body: JSON.stringify(config) }),
   saveResearchGoal: (id: string, goal: string) => request<Research>("/api/researches/" + encodeURIComponent(id) + "/goal", { method: "PUT", body: JSON.stringify({ goal }) }),
   saveResearchHypothesis: (id: string, hypothesis: string) => request<Research>("/api/researches/" + encodeURIComponent(id) + "/hypothesis", { method: "PUT", body: JSON.stringify({ hypothesis }) }),
@@ -95,11 +98,11 @@ export const api = {
   researchSuggestionExtract: (id:string, sourceId:string, content:string) => request<{reply:string;sourceId:string;actions:import("./types").ResearchStateAction[]}>(`/api/research/${encodeURIComponent(id)}/suggestions/extract`, { method:"POST", body:JSON.stringify({sourceId,content}) }),
   researchPareto: (id: string) => request<Array<Record<string,unknown>>>(`/api/research/${id}/pareto`),
   researchCompare: (id: string, a: string, b: string) => request<Record<string,unknown>>(`/api/research/${id}/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
-  researchFromEngineeringRun: (runId: string, data: object) => request<Research>(`/api/research/from-engineering-run/${encodeURIComponent(runId)}`, { method: "POST", body: JSON.stringify(data) }),
+  researchFromEngineeringRun: (runId: string, data: object) => request<Research>(DEMO_EDITION ? demoPath(`/research/from-engineering-run/${encodeURIComponent(runId)}`) : `/api/research/from-engineering-run/${encodeURIComponent(runId)}`, { method: "POST", body: JSON.stringify(data) }),
   researchImportEngineeringScheme: (researchId: string, schemeId: string) => request<{research:Research;optimizationConfig:import("./optimization-config").OptimizationConfig;baseline:import("./types").ImportedEngineeringBaseline}>(`/api/research/${encodeURIComponent(researchId)}/engineering-baselines`, { method: "POST", body: JSON.stringify({ schemeId }) }),
-  researchVisualization: (researchId:string, experimentId:string) => request<import("./types").ResearchVisualizationManifest>(`/api/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization`),
-  researchVisualizationField: (researchId:string, experimentId:string, field:"density"|"stress") => requestBuffer(`/api/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization/${field}`),
-  researchReportExport: (researchId:string, data:{name:string;outputDirectory:string;formats:Array<"markdown"|"pdf">;overwrite:boolean}) => request<{markdownPath:string|null;pdfPath:string|null;assetDirectory:string;files:Array<{path:string;sizeBytes:number;sha256:string}>}>(`/api/research/${encodeURIComponent(researchId)}/reports/export`, { method: "POST", body: JSON.stringify(data) }),
+  researchVisualization: (researchId:string, experimentId:string) => request<import("./types").ResearchVisualizationManifest>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization`) : `/api/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization`),
+  researchVisualizationField: (researchId:string, experimentId:string, field:"density"|"stress") => requestBuffer(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization/${field}`) : `/api/research/${encodeURIComponent(researchId)}/experiments/${encodeURIComponent(experimentId)}/visualization/${field}`),
+  researchReportExport: (researchId:string, data:{name:string;outputDirectory:string;formats:Array<"markdown"|"pdf">;overwrite:boolean}) => request<{markdownPath:string|null;pdfPath:string|null;assetDirectory:string;files:Array<{path:string;sizeBytes:number;sha256:string}>}>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(researchId)}/reports/export`) : `/api/research/${encodeURIComponent(researchId)}/reports/export`, { method: "POST", body: JSON.stringify(data) }),
   compare: (id:string,a:string,b:string) => request<Record<string,unknown>>(`/api/research/${id}/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`),
   createResearch: (data: object) => request<Research>("/api/research", { method: "POST", body: JSON.stringify(data) }),
   previewGuide: (text:string,locale:Locale) => request<Record<string,any>>("/api/guide", {method:"POST",body:JSON.stringify({text,locale})}),
@@ -109,13 +112,13 @@ export const api = {
   knowledgeGet: (id:string,locale:Locale) => request<KnowledgeEntry>(`/api/knowledge/${encodeURIComponent(id)}?locale=${locale}`),
   solverCapabilities: () => request<SolverCapabilities>("/api/solvers/capabilities"),
   previewGeometry: (data:object,signal?:AbortSignal) => request<GeometryPreview>("/api/solvers/geometry-preview", {method:"POST",body:JSON.stringify(data),signal}),
-  autonomous: (id: string) => request<Research>(`/api/research/${id}/autonomous`, { method: "POST" }),
+  autonomous: (id: string) => request<Research>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/autonomous`) : `/api/research/${id}/autonomous`, { method: "POST" }),
   stopAutonomous: (id: string) => request<Research>(`/api/research/${encodeURIComponent(id)}/autonomous/stop`, { method: "POST" }),
-  confirmResearchCandidatePlan: (id:string, preferredProposalId:string) => request<Research>(`/api/research/${encodeURIComponent(id)}/candidate-plan/confirm`, { method:"POST", body:JSON.stringify({ preferredProposalId }) }),
-  finishResearch: (id:string) => request<Research>(`/api/research/${encodeURIComponent(id)}/finish`, { method:"POST" }),
-  researchReportPreview: (id:string) => request<{markdown:string;markdownPath:string;pdfPath:string}>(`/api/research/${encodeURIComponent(id)}/reports/preview`),
+  confirmResearchCandidatePlan: (id:string, preferredProposalId:string) => request<Research>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/candidate-plan/confirm`) : `/api/research/${encodeURIComponent(id)}/candidate-plan/confirm`, { method:"POST", body:JSON.stringify({ preferredProposalId }) }),
+  finishResearch: (id:string) => request<Research>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/finish`) : `/api/research/${encodeURIComponent(id)}/finish`, { method:"POST" }),
+  researchReportPreview: (id:string) => request<{markdown:string;markdownPath:string;pdfPath:string}>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/reports/preview`) : `/api/research/${encodeURIComponent(id)}/reports/preview`),
   researchRuns: (id:string) => request<import("./types").ResearchRun[]>(`/api/research/${encodeURIComponent(id)}/runs`),
-  researchFidelityStageDecision: (id: string, action: "REPEAT_STAGE" | "ADVANCE_STAGE" | "APPROVE_FINAL", selectedExperimentId?:string) => request<Research>(`/api/research/${encodeURIComponent(id)}/fidelity-stage-decision`, { method: "POST", body: JSON.stringify({ action, selectedExperimentId }) }),
+  researchFidelityStageDecision: (id: string, action: "REPEAT_STAGE" | "ADVANCE_STAGE" | "APPROVE_FINAL", selectedExperimentId?:string) => request<Research>(DEMO_EDITION ? demoPath(`/research/${encodeURIComponent(id)}/fidelity-stage-decision`) : `/api/research/${encodeURIComponent(id)}/fidelity-stage-decision`, { method: "POST", body: JSON.stringify({ action, selectedExperimentId }) }),
   command: (id: string, text: string, selected_experiment?: string) => request<{ok:boolean;message:string;action:string;data:Record<string,unknown>}>(`/api/research/${id}/commands`, { method: "POST", body: JSON.stringify({ text, selected_experiment }) }),
   approve: (id: string) => request(`/api/decision/${id}/approve`, { method: "POST" }),
   reject: (id: string) => request(`/api/decision/${id}/reject`, { method: "POST" }),
@@ -140,14 +143,14 @@ export const api = {
   engineeringPreference: (preference: "local-matlab" | "compiled-runtime") => request<{preference:string}>("/api/engineering/matlab/preference", { method: "POST", body: JSON.stringify({ preference }) }),
   engineeringRuntimeProbe: (root: string, solverExecutable: string) => request<{state:string; root:string; dllPath?:string; solverExecutable:string; profileId:string; usable:boolean; diagnostic:string}>("/api/engineering/runtime/probe", { method: "POST", body: JSON.stringify({ root, solverExecutable }) }),
   engineeringBundledRuntime: () => request<{state:string; root?:string; dllPath?:string; solverExecutable?:string; profileId:string|null; usable:boolean; diagnostic:string}>("/api/engineering/runtime/bundled"),
-  engineeringRun: (data: object) => request<EngineeringRun>("/api/engineering/runs", { method: "POST", body: JSON.stringify(data) }),
-  engineeringRunGet: (id: string) => request<EngineeringRun>(`/api/engineering/runs/${id}`),
+  engineeringRun: (data: object) => request<EngineeringRun>(DEMO_EDITION ? demoPath("/engineering/runs") : "/api/engineering/runs", { method: "POST", body: JSON.stringify(data) }),
+  engineeringRunGet: (id: string) => request<EngineeringRun>(DEMO_EDITION ? demoPath(`/engineering/runs/${encodeURIComponent(id)}`) : `/api/engineering/runs/${id}`),
   engineeringComparisonSchemes: () => request<import("./types").EngineeringComparisonScheme[]>("/api/engineering/comparison-schemes"),
   engineeringComparisonScheme: (id: string) => request<import("./types").EngineeringComparisonScheme>(`/api/engineering/comparison-schemes/${encodeURIComponent(id)}`),
   engineeringComparisonSchemeCreate: (runId: string, name?: string) => request<import("./types").EngineeringComparisonScheme>("/api/engineering/comparison-schemes", { method: "POST", body: JSON.stringify({ runId, name }) }),
   engineeringComparisonSchemeDelete: (id: string) => request<{deleted:boolean; id:string}>(`/api/engineering/comparison-schemes/${encodeURIComponent(id)}`, { method: "DELETE" }),
   engineeringCancel: (id: string) => request<EngineeringRun>(`/api/engineering/runs/${id}/cancel`, { method: "POST" }),
-  engineeringEvents: (id: string) => request<{runId:string; events:Array<Record<string,unknown>>}>(`/api/engineering/runs/${id}/events`),
+  engineeringEvents: (id: string) => request<{runId:string; events:Array<Record<string,unknown>>}>(DEMO_EDITION ? demoPath(`/engineering/runs/${encodeURIComponent(id)}/events`) : `/api/engineering/runs/${id}/events`),
   engineeringRuns: (projectId?: string) => request<{runs: EngineeringRun[]; nextCursor: number | null}>("/api/engineering/runs" + (projectId ? "?project_id=" + encodeURIComponent(projectId) : "")),
   engineeringConsole: (id: string, afterSeq = 0) => request<{runId:string; events:Array<Record<string,unknown>>}>("/api/engineering/runs/" + id + "/console?after_seq=" + afterSeq),
   engineeringReport: (id: string, name: string, outputDirectory?: string) => request<{relativePath:string; exportedPath?:string; sha256:string; mediaType:string; sizeBytes:number}>(`/api/engineering/runs/${id}/report`, { method: "POST", body: JSON.stringify({ name, outputDirectory: outputDirectory || null }) }),

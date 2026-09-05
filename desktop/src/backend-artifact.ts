@@ -1,8 +1,9 @@
-import { initializeBackend } from "./api";
+import { DEMO_EDITION, initializeBackend } from "./api";
 
 function artifactUrl(port: number, runId: string, relativePath: string): string {
   const safePath = relativePath.split("/").map(encodeURIComponent).join("/");
-  return `http://127.0.0.1:${port}/api/engineering/runs/${encodeURIComponent(runId)}/files/${safePath}`;
+  const prefix = DEMO_EDITION ? "/api/demo/four-round/engineering" : "/api/engineering";
+  return `http://127.0.0.1:${port}${prefix}/runs/${encodeURIComponent(runId)}/files/${safePath}`;
 }
 
 async function responseFor(runId: string, relativePath: string): Promise<Response> {

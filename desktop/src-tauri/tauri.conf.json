@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TopOptPilot",
+  "productName": "TopOptPilot 演示版",
   "version": "2.1.2",
-  "identifier": "com.topoptpilot.desktop",
+  "identifier": "com.topoptpilot.desktop.demo",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{
-      "title": "TopOptPilot",
+      "title": "TopOptPilot 2.1.2 演示版",
       "width": 1440,
       "height": 900,
       "minWidth": 920,
@@ -28,8 +28,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "shortDescription": "工程开发与 AI 科研拓扑优化工作台",
-    "longDescription": "TopOptPilot Tauri 桌面工作台，保留 MATLAB 工程链路并接入 Policy 控制的 AI 科研。",
+    "shortDescription": "TopOptPilot 四轮实验桌面演示版",
+    "longDescription": "TopOptPilot 桌面演示版本，用于完整展示基础实现至四轮深度优化流程。",
     "resources": ["resources/**/*"],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true }

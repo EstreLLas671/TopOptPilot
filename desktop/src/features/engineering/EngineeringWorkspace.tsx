@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ChevronRight, FileCode2, FlaskConical, FolderOpen, Gauge, MessageCircle, Pencil, Plus, Save, Search, Send, Settings2 } from "lucide-react";
-import { api } from "../../api";
+import { api, DEMO_EDITION } from "../../api";
 import type { Conversation, EngineeringRun, PatchApproval, PatchProposal, ProjectEntry, ProjectFile, ProjectListing, Research } from "../../types";
 import { solverLaneLabel } from "../../workspace";
 import { acceptGeneratedPatch, acceptPatchApply, acceptPatchPreview, advancePatchPreviewContext, approvalTokenFor, assistantConsentAfterAttempt, buildEngineeringAssistantRequest, buildEngineeringRunRequest , claimPatchApplyFlight , type EngineeringSolverLane, type MatlabInstallation, type PatchPreviewContext, type RuntimeInstallation } from "../../engineering-workspace";
@@ -13,7 +13,7 @@ import EngineeringComparisonWorkspace from "./EngineeringComparisonWorkspace";
 import EngineeringBottomPanel, { EngineeringRunButton } from "./EngineeringBottomPanel";
 import EngineeringChatPanel from "./EngineeringChatPanel";
 import ParameterConfigurationDialog from "./ParameterConfigurationDialog";
-import { DEFAULT_OPTIMIZATION_CONFIG, engineeringTaskFromConfig, normalizeOptimizationConfig, validateOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
+import { DEFAULT_OPTIMIZATION_CONFIG, engineeringTaskFromConfig, materialForPreset, normalizeOptimizationConfig, validateOptimizationConfig, type OptimizationConfig } from "../../optimization-config";
 
 const MonacoEditor = lazy(() => import("../../components/MonacoCodeEditor"));
 function relativeConversationTime(value: number, now: number): string {
@@ -93,7 +93,12 @@ export default function EngineeringWorkspace({
   const [runtimeDiagnostic, setRuntimeDiagnostic] = useState("正在扫描本机 MATLAB Runtime…");
   const [environmentScanBusy, setEnvironmentScanBusy] = useState(false);
   const engineeringWorkspaceRestoredRef = useRef(false);
-  const [optimizationConfig, setOptimizationConfig] = useState<OptimizationConfig>(DEFAULT_OPTIMIZATION_CONFIG);
+  const [optimizationConfig, setOptimizationConfig] = useState<OptimizationConfig>(() => DEMO_EDITION ? normalizeOptimizationConfig({
+    ...DEFAULT_OPTIMIZATION_CONFIG,
+    dimension: "3d", bcType: "cantilever", accuracy: "high", dimensions: [12, 4, 3],
+    cellSizeMeters: 0.25, volfrac: 0.4, penal: 3, rmin: 2, maxIterations: 80,
+    minIterations: 10, filterStrategy: "fixed", material: materialForPreset("structural-steel"),
+  }) : DEFAULT_OPTIMIZATION_CONFIG);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [run, setRun] = useState<EngineeringRun | null>(null);
   const nelx = optimizationConfig.nelx, nely = optimizationConfig.nely, nelz = optimizationConfig.nelz, volfrac = optimizationConfig.volfrac, maxIter = optimizationConfig.maxIterations;
@@ -143,10 +148,10 @@ export default function EngineeringWorkspace({
           lane?: EngineeringSolverLane; optimizationConfig?: OptimizationConfig;
         };
         if (saved.viewTab && ["chat", "code", "results", "iteration", "compare"].includes(saved.viewTab)) setViewTab(saved.viewTab);
-        if (saved.lane && ["local-matlab", "compiled-runtime", "python-fem"].includes(saved.lane)) {
+        if (!DEMO_EDITION && saved.lane && ["local-matlab", "compiled-runtime", "python-fem"].includes(saved.lane)) {
           setLane(saved.lane === "compiled-runtime" ? "local-matlab" : saved.lane);
         }
-        if (saved.optimizationConfig) { const normalized = normalizeOptimizationConfig(saved.optimizationConfig); if (!validateOptimizationConfig(normalized).length) setOptimizationConfig(normalized); }
+        if (!DEMO_EDITION && saved.optimizationConfig) { const normalized = normalizeOptimizationConfig(saved.optimizationConfig); if (!validateOptimizationConfig(normalized).length) setOptimizationConfig(normalized); }
         if (saved.projectRoot) {
           void api.projectOpen(saved.projectRoot).then(async opened => {
             const listing = await api.projectList(opened.root);
@@ -461,12 +466,12 @@ export default function EngineeringWorkspace({
         seenEventKeys.add(key);
         setEvents(items => [...items, event].slice(-120));
       };
-      const socket = api.engineeringStream(created.runId, acceptEvent);
+      const socket = DEMO_EDITION ? null : api.engineeringStream(created.runId, acceptEvent);
       let streamClosed = false;
       const closeStream = () => {
         if (streamClosed) return;
         streamClosed = true;
-        socket.close();
+        socket?.close();
       };
       let eventPollBusy = false;
       const eventPoller = window.setInterval(() => {
@@ -476,7 +481,7 @@ export default function EngineeringWorkspace({
           .then(value => value.events.forEach(acceptEvent))
           .catch(() => undefined)
           .finally(() => { eventPollBusy = false; });
-      }, 1500);
+      }, DEMO_EDITION ? 100 : 1500);
       try {
         let terminalRun: EngineeringRun | null = null;
         for (;;) {

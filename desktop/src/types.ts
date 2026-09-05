@@ -36,6 +36,7 @@ export interface ResearchProposal {
   id:string; intent:string; purpose:string; fidelity:string; backend:string;
   parameters:Record<string,unknown>; estimated_cost?:number; risk:string;
   safety_status:string; controlled_factors:string[]; status:string; experiment_id?:string|null;
+  evidence_source?:string;
 }
 export interface Research {
   id: string; name: string; goal: string; hypothesis?: string | null; locale: Locale; status: string; mode: string;
