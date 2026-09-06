@@ -1,0 +1,52 @@
+# controller.fixed.v1 — 固定控制器（无投影基线）
+# 对应 Python 入口：solver.continuation.FixedController（beta 恒为 0，纯 SIMP）
+# 对应实验组 B0（projection=none）
+
+plugin:
+  id: "controller.fixed.v1"
+  name: "固定控制器（无投影基线）"
+  version: "1.0.0"
+  language: "Python"
+  entry: "fixed_controller"
+  type: "controller"
+  status: "verified"
+
+interface:
+  input: ["params", "iteration"]
+  output: ["beta"]
+  signature: "FixedController(params).beta(iteration, gray_ratio, connected) -> float   # solver/continuation.py"
+  note: "beta 恒为 0，投影退化为恒等，纯 SIMP 路径"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: ["filter.sensitivity.v1", "filter.density.v1"]
+  projections: ["none"]
+  controllers: []
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2, 3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters: []
+
+limitations:
+  - "beta 恒为 0，无锐化效果，仅用于无投影基线实验组（B0）"
+  - "不适用于需要 Heaviside 锐化的投影实验组"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

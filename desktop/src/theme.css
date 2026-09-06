@@ -1,0 +1,589 @@
+:root {
+  --theme-accent: #2e73ca;
+  --theme-accent-hover: #245da5;
+  --theme-background: #f4f7fb;
+  --theme-surface: #ffffff;
+  --theme-elevated: #f8fbff;
+  --theme-text: #24344d;
+  --theme-muted-text: #6f8095;
+  --theme-border: #dce5ef;
+  --theme-success: #23835c;
+  --theme-warning: #b56b17;
+  --theme-danger: #c64242;
+  --theme-chart: #2e73ca;
+  --theme-chart-grid: #cbd7e5;
+  --theme-volume-background: #f1f5fa;
+  --theme-contrast: 100%;
+}
+
+html[data-color-scheme="dark"] { color-scheme: dark; }
+html, body, #root { background: var(--theme-background); color: var(--theme-text); }
+.workspace-mode-layer {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+}
+.workspace-mode-layer.inactive { display: none; }
+.workspace-mode-layer > .v2-workspace {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Application layers */
+.v2-shell, .v2-workspace, .v2-center, .v2-boot, .resizable-workspace,
+.resizable-workspace .workspace-center, .resizable-workspace .workspace-main-column,
+.engineering-center-shell, .engineering-chat-panel, .iteration-workspace,
+.comparison-workspace, .result-viewer, .research-center, .research-chat-workspace,
+.settings-workspace {
+  background: var(--theme-background) !important;
+  color: var(--theme-text) !important;
+}
+
+/* Fixed panels and tool surfaces */
+.v2-titlebar, .v2-sidebar, .v2-inspector, .resizable-workspace .workspace-panel,
+.resizable-workspace .workspace-left-rail, .resizable-workspace .panel-resize,
+.workspace-panel-header, .workspace-panel-toggle-row, .workspace-bottom,
+.resizable-workspace .workspace-panel-toggle-row,
+.resizable-workspace .workspace-bottom, .v2-tabs,
+.workspace-view-heading, .engineering-bottom-panel, .bottom-tab-content,
+.engineering-composer, .chat-composer, .research-header, .research-stage-strip,
+.stream-strip, .terminal-toolbar, .browser-toolbar, .inspector-card,
+.engineering-settings-card, .settings-title, .settings-nav, .config-dialog,
+.parameter-dialog, .parameter-dialog > header, .parameter-dialog > footer,
+.scheme-detail-dialog, .scheme-detail-dialog > header, .scheme-detail-content > aside,
+.scheme-name-dialog, .research-name-dialog, .research-project-menu {
+  background: var(--theme-surface) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+/* Cards, canvases and content blocks */
+.chat-message > div, .chat-composer > div, .research-chat-composer > div,
+.iteration-canvas, .iteration-metrics > div, .result-summary > div,
+.result-plots > section, .comparison-table, .comparison-scheme-row,
+.scheme-result-column, .metric-cards > div, .bottom-diagnostics > div,
+.decision-card, .selected-research-card, .artifact-browser, .artifact-preview,
+.artifact-list button, .diagnostics, .iteration-console-line, .assistant-command-line,
+.optimization-action-card, .optimization-action-diff > div,
+.optimization-action-card details pre, .research-suggestion-card,
+.research-suggestion-card article, .scheme-config-list > div, .case-preview-section,
+.parameter-dialog-fields fieldset, .parameter-dialog-preview, .volume-toolbar,
+.volume-view-switch, .volume-controls, .volume-statusbar,
+.interactive-volume .volume-toolbar,
+.interactive-volume .volume-toolbar .volume-view-switch,
+.interactive-volume .volume-toolbar .volume-controls,
+.interactive-volume .volume-statusbar, .matlab-render-frame,
+.matlab-render-frame > img {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.bottom-console, .run-log {
+  background: var(--theme-background) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+/* Lists blend into their panel instead of becoming white strips. */
+.tree-file, .project-tree-row, .research-row-shell, .research-row,
+.compact-research-list button, .experiment-row {
+  background: transparent !important;
+  color: var(--theme-muted-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.tree-file:hover, .tree-file.active, .project-tree-row:hover, .project-tree-row.active,
+.research-row-shell:hover, .research-row-shell.active, .research-row:hover,
+.research-row.active, .compact-research-list button:hover,
+.compact-research-list button.active, .experiment-row:hover, .experiment-row.active,
+.v2-workspaces button.active, .tab.active, .settings-nav button:hover,
+.settings-nav button.active {
+  background: color-mix(in srgb, var(--theme-accent) 14%, var(--theme-surface)) !important;
+  color: var(--theme-accent) !important;
+}
+
+button, input, select, textarea {
+  color: var(--theme-text);
+  border-color: var(--theme-border);
+}
+
+input, select, textarea, .settings-field input, .settings-field select,
+.parameter-grid select, .parameter-grid input, .parameter-dialog-fields input,
+.parameter-dialog-fields select, .scheme-dialog-actions select {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.panel-toggle, .panel-restore, .layout-reset,
+.resizable-workspace .panel-toggle, .resizable-workspace .panel-restore,
+.resizable-workspace .panel-restore-left, .resizable-workspace .layout-reset,
+.center-panel-action,
+.center-toolbar-actions, .dialog-icon-button, .inspector-card-heading button,
+.research-list-actions > button, .engineering-run-secondary-actions button,
+.terminal-toolbar button.secondary, .browser-toolbar button.secondary, .outline-button {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-muted-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+.v2-brand-mark, .primary-button, .approve, .v2-bottom button,
+.research-composer button, .research-chat-composer button,
+.assistant-command-line button {
+  background: var(--theme-accent) !important;
+  color: #ffffff !important;
+  border-color: var(--theme-accent) !important;
+}
+
+.primary-button:hover:not(:disabled), .approve:hover:not(:disabled),
+.v2-bottom button:hover:not(:disabled), .research-composer button:hover:not(:disabled),
+.research-chat-composer button:hover:not(:disabled),
+.assistant-command-line button:hover:not(:disabled) {
+  background: var(--theme-accent-hover) !important;
+  color: #ffffff !important;
+  border-color: var(--theme-accent-hover) !important;
+}
+
+/* Text hierarchy */
+.research-header h1, .chat-panel-header h2, .workspace-view-heading h2,
+.run-heading h3, .inspector-card h4, .metric-cards b, .iteration-metrics b,
+.result-summary b, .selected-research-card b, .parameter-dialog h2,
+.scheme-detail-dialog h2 {
+  color: var(--theme-text) !important;
+}
+
+small, .muted, .tree-file, .project-tree-empty, .settings-content p,
+.inspector-card p, .chat-message small, .chat-panel-header p,
+.research-header p, .volume-statusbar {
+  color: var(--theme-muted-text) !important;
+}
+
+.warning { color: var(--theme-warning) !important; }
+.error, .v2-error, .field-error { color: var(--theme-danger) !important; }
+.status-success { color: var(--theme-success) !important; }
+
+/* Visualisation palette */
+.interactive-volume, .volume-canvas, .volume-viewport, .matlab-render-frame {
+  background: var(--theme-volume-background) !important;
+}
+.convergence-chart .chart-axis, .convergence-chart .chart-tick { stroke: var(--theme-muted-text); }
+.convergence-chart .chart-label { fill: var(--theme-muted-text); }
+.convergence-chart .chart-grid { stroke: var(--theme-chart-grid); }
+.convergence-chart .chart-line { stroke: var(--theme-chart); }
+
+/* Settings use an open layout: fields do not sit on separate white cards. */
+.settings-content, .settings-content section, .settings-grid, .theme-token-grid,
+.settings-field, .settings-check, .theme-contrast {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.settings-content section { border: 0 !important; }
+.settings-field input[type="color"] {
+  background: transparent !important;
+  padding: 2px !important;
+  border-color: var(--theme-border) !important;
+}
+.settings-notice {
+  background: color-mix(in srgb, var(--theme-accent) 8%, var(--theme-background)) !important;
+  color: var(--theme-text) !important;
+  border-color: color-mix(in srgb, var(--theme-accent) 45%, var(--theme-border)) !important;
+}
+.workspace-completion-glow { filter: none; }
+
+/* Legacy component rules use fixed light colors. Keep their structure, but
+   remap every visible surface and text layer when the dark preset is active. */
+html[data-theme="dark"] .v2-titlebar,
+html[data-theme="dark"] .v2-sidebar,
+html[data-theme="dark"] .v2-inspector,
+html[data-theme="dark"] .workspace-panel,
+html[data-theme="dark"] .workspace-center,
+html[data-theme="dark"] .workspace-bottom,
+html[data-theme="dark"] .engineering-center-shell,
+html[data-theme="dark"] .engineering-chat-panel,
+html[data-theme="dark"] .research-center,
+html[data-theme="dark"] .research-chat-workspace,
+html[data-theme="dark"] .engineering-composer,
+html[data-theme="dark"] .chat-composer,
+html[data-theme="dark"] .research-chat-composer,
+html[data-theme="dark"] .engineering-bottom-panel,
+html[data-theme="dark"] .bottom-tab-content {
+  background: var(--theme-background) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+html[data-theme="dark"] .v2-tabs,
+html[data-theme="dark"] .workspace-view-heading,
+html[data-theme="dark"] .chat-panel-header,
+html[data-theme="dark"] .research-header,
+html[data-theme="dark"] .research-stage-strip,
+html[data-theme="dark"] .bottom-tabbar,
+html[data-theme="dark"] .terminal-toolbar,
+html[data-theme="dark"] .browser-toolbar,
+html[data-theme="dark"] .sidebar-section-heading,
+html[data-theme="dark"] .engineering-history-panel > header,
+html[data-theme="dark"] .engineering-settings-card,
+html[data-theme="dark"] .inspector-card,
+html[data-theme="dark"] .parameter-summary-card,
+html[data-theme="dark"] .research-goal-card,
+html[data-theme="dark"] .research-hypothesis-card,
+html[data-theme="dark"] .research-config-card,
+html[data-theme="dark"] .research-results-card {
+  background: var(--theme-surface) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+html[data-theme="dark"] .chat-message > div,
+html[data-theme="dark"] .chat-message.user > div,
+html[data-theme="dark"] .chat-composer > div,
+html[data-theme="dark"] .research-chat-composer > div,
+html[data-theme="dark"] .assistant-command-line,
+html[data-theme="dark"] .configuration-summary,
+html[data-theme="dark"] .result-summary > div,
+html[data-theme="dark"] .result-plots > section,
+html[data-theme="dark"] .comparison-table,
+html[data-theme="dark"] .comparison-row,
+html[data-theme="dark"] .metric-cards > div,
+html[data-theme="dark"] .bottom-diagnostics > div,
+html[data-theme="dark"] .artifact-browser,
+html[data-theme="dark"] .artifact-list button,
+html[data-theme="dark"] .decision-card,
+html[data-theme="dark"] .selected-research-card,
+html[data-theme="dark"] .optimization-action-card,
+html[data-theme="dark"] .research-suggestion-card,
+html[data-theme="dark"] .research-suggestion-card article,
+html[data-theme="dark"] .research-result-panel {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+html[data-theme="dark"] .engineering-settings-card > header button {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-muted-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+html[data-theme="dark"] .engineering-settings-card > header button:hover,
+html[data-theme="dark"] .engineering-settings-card > header button:focus-visible {
+  background: color-mix(in srgb, var(--theme-accent) 18%, var(--theme-elevated)) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-accent) !important;
+}
+
+html[data-theme="dark"] .chat-message p,
+html[data-theme="dark"] .chat-empty b,
+html[data-theme="dark"] .chat-empty span,
+html[data-theme="dark"] .chat-panel-header h2,
+html[data-theme="dark"] .chat-panel-header p,
+html[data-theme="dark"] .research-header h1,
+html[data-theme="dark"] .research-header p,
+html[data-theme="dark"] .research-stage-strip b,
+html[data-theme="dark"] .engineering-tab-actions,
+html[data-theme="dark"] .engineering-tab-actions > span,
+html[data-theme="dark"] .tab-action,
+html[data-theme="dark"] .bottom-tabbar button,
+html[data-theme="dark"] .terminal-toolbar,
+html[data-theme="dark"] .terminal-toolbar em,
+html[data-theme="dark"] .bottom-console,
+html[data-theme="dark"] .run-heading h3,
+html[data-theme="dark"] .run-heading small,
+html[data-theme="dark"] .inspector-card h4,
+html[data-theme="dark"] .inspector-card p,
+html[data-theme="dark"] .inspector-card dt,
+html[data-theme="dark"] .inspector-card dd,
+html[data-theme="dark"] .research-row b,
+html[data-theme="dark"] .research-row small,
+html[data-theme="dark"] .research-evidence,
+html[data-theme="dark"] .artifact-row,
+html[data-theme="dark"] .artifact-preview,
+html[data-theme="dark"] .metric-cards b,
+html[data-theme="dark"] .metric-cards small,
+html[data-theme="dark"] .result-summary b,
+html[data-theme="dark"] .result-summary small {
+  color: var(--theme-text) !important;
+}
+
+html[data-theme="dark"] .chat-message small,
+html[data-theme="dark"] .research-evidence p,
+html[data-theme="dark"] .research-evidence h4,
+html[data-theme="dark"] .project-root-label,
+html[data-theme="dark"] .environment-path,
+html[data-theme="dark"] .environment-summary-row,
+html[data-theme="dark"] .environment-summary-row strong,
+html[data-theme="dark"] .field-caption,
+html[data-theme="dark"] .settings-content p,
+html[data-theme="dark"] .settings-field,
+html[data-theme="dark"] .settings-field small,
+html[data-theme="dark"] .research-suggestion-card > header span,
+html[data-theme="dark"] .optimization-action-card > header span {
+  color: var(--theme-muted-text) !important;
+}
+
+html[data-theme="dark"] .chat-message,
+html[data-theme="dark"] .research-message-list,
+html[data-theme="dark"] .chat-message-list,
+html[data-theme="dark"] .research-chat-main,
+html[data-theme="dark"] .engineering-view-content,
+html[data-theme="dark"] .engineering-left-workspace,
+html[data-theme="dark"] .engineering-history-panel,
+html[data-theme="dark"] .engineering-right-settings {
+  min-width: 0;
+  color: var(--theme-text) !important;
+}
+
+/* Keep conversation bubbles readable and prevent long model output from
+   widening either workspace. */
+.chat-message { max-width: 75% !important; min-width: 0; }
+.chat-message > div { max-width: 100%; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.chat-message p, .chat-message pre, .chat-message code,
+.optimization-action-card, .research-suggestion-card { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+
+html[data-theme="dark"] .v2-search,
+html[data-theme="dark"] .v2-search input,
+html[data-theme="dark"] .chat-composer textarea,
+html[data-theme="dark"] .research-chat-composer textarea,
+html[data-theme="dark"] .assistant-command-line input {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+html[data-theme="dark"] .field-switch,
+html[data-theme="dark"] .field-switch button.active,
+html[data-theme="dark"] .bottom-tabbar button.active,
+html[data-theme="dark"] .engineering-view-tabs .tab.active {
+  background: color-mix(in srgb, var(--theme-accent) 20%, var(--theme-surface)) !important;
+  color: var(--theme-accent) !important;
+}
+
+.suggestion-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--theme-background) 72%, transparent);
+  backdrop-filter: blur(3px);
+}
+.suggestion-dialog {
+  width: min(620px, calc(100vw - 40px));
+  max-height: min(78vh, 620px);
+  overflow: auto;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--theme-border) !important;
+  border-radius: 12px;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text) !important;
+  box-shadow: 0 24px 70px color-mix(in srgb, #000 35%, transparent);
+}
+.suggestion-dialog > header,
+.suggestion-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.suggestion-dialog > header { margin-bottom: 12px; }
+.suggestion-dialog > footer { justify-content: flex-end; margin-top: 16px; }
+.suggestion-dialog > footer .outline-button,
+.suggestion-dialog > footer .primary-button { width: auto; min-width: 104px; }
+.suggestion-dialog .dialog-icon-button { width: 30px; height: 30px; }
+.research-plan-flow { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.research-plan-flow span { display: inline-flex; align-items: center; min-height: 24px; padding: 3px 8px; border: 1px solid var(--theme-border); border-radius: 999px; color: var(--theme-muted-text); font-size: 11px; }
+.research-plan-flow span.active { border-color: var(--theme-accent); color: var(--theme-accent); background: color-mix(in srgb, var(--theme-accent) 12%, var(--theme-surface)); }
+
+html[data-theme="dark"] .suggestion-dialog-backdrop {
+  background: color-mix(in srgb, #000 62%, transparent);
+}
+
+html[data-theme="dark"] .settings-workspace,
+html[data-theme="dark"] .settings-title,
+html[data-theme="dark"] .settings-nav,
+html[data-theme="dark"] .settings-content,
+html[data-theme="dark"] .settings-content section,
+html[data-theme="dark"] .settings-field input,
+html[data-theme="dark"] .settings-field select,
+html[data-theme="dark"] .settings-content button:not(.approve) {
+  background: transparent !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+/* Dark theme parity for legacy component surfaces. Keep every workspace layer
+   on the semantic palette so no white cards leak through after switching theme. */
+html[data-theme="dark"] .v2-shell,
+html[data-theme="dark"] .v2-workspace,
+html[data-theme="dark"] .v2-titlebar,
+html[data-theme="dark"] .v2-sidebar,
+html[data-theme="dark"] .v2-inspector,
+html[data-theme="dark"] .v2-center,
+html[data-theme="dark"] .workspace-main-column,
+html[data-theme="dark"] .workspace-bottom,
+html[data-theme="dark"] .engineering-center-shell,
+html[data-theme="dark"] .engineering-chat-panel,
+html[data-theme="dark"] .engineering-composer,
+html[data-theme="dark"] .iteration-workspace,
+html[data-theme="dark"] .comparison-workspace,
+html[data-theme="dark"] .result-viewer,
+html[data-theme="dark"] .research-center,
+html[data-theme="dark"] .research-bottom-progress,
+html[data-theme="dark"] .settings-workspace {
+  background: var(--theme-background) !important;
+  color: var(--theme-text) !important;
+}
+html[data-theme="dark"] .v2-titlebar,
+html[data-theme="dark"] .v2-tabs,
+html[data-theme="dark"] .workspace-panel-header,
+html[data-theme="dark"] .workspace-view-heading,
+html[data-theme="dark"] .chat-panel-header,
+html[data-theme="dark"] .research-header,
+html[data-theme="dark"] .engineering-bottom-panel,
+html[data-theme="dark"] .bottom-tabbar,
+html[data-theme="dark"] .bottom-tab-content,
+html[data-theme="dark"] .parameter-dialog > header,
+html[data-theme="dark"] .parameter-dialog > footer,
+html[data-theme="dark"] .scheme-detail-dialog > header,
+html[data-theme="dark"] .scheme-detail-content > aside,
+html[data-theme="dark"] .scheme-name-dialog,
+html[data-theme="dark"] .research-name-dialog {
+  background: var(--theme-surface) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .iteration-canvas,
+html[data-theme="dark"] .iteration-metrics > div,
+html[data-theme="dark"] .result-plots > section,
+html[data-theme="dark"] .result-summary > div,
+html[data-theme="dark"] .comparison-table,
+html[data-theme="dark"] .comparison-scheme-row,
+html[data-theme="dark"] .scheme-result-column,
+html[data-theme="dark"] .scheme-config-list,
+html[data-theme="dark"] .parameter-dialog-fields fieldset,
+html[data-theme="dark"] .parameter-dialog-preview,
+html[data-theme="dark"] .case-preview-section,
+html[data-theme="dark"] .case-schematic,
+html[data-theme="dark"] .configuration-summary,
+html[data-theme="dark"] .configuration-readiness,
+html[data-theme="dark"] .assistant-command-line,
+html[data-theme="dark"] .chat-composer > div,
+html[data-theme="dark"] .research-chat-composer > div,
+html[data-theme="dark"] .bottom-diagnostics > div,
+html[data-theme="dark"] .bottom-artifacts,
+html[data-theme="dark"] .artifact-browser,
+html[data-theme="dark"] .artifact-preview {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .parameter-dialog-fields input,
+html[data-theme="dark"] .parameter-dialog-fields select,
+html[data-theme="dark"] .parameter-grid input,
+html[data-theme="dark"] .parameter-grid select,
+html[data-theme="dark"] .assistant-command-line input,
+html[data-theme="dark"] .chat-composer textarea,
+html[data-theme="dark"] .research-chat-composer textarea,
+html[data-theme="dark"] .terminal-toolbar input,
+html[data-theme="dark"] .browser-toolbar input,
+html[data-theme="dark"] .scheme-detail-content aside pre {
+  background: var(--theme-background) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .tab,
+html[data-theme="dark"] .tab-action,
+html[data-theme="dark"] .pane-actions button,
+html[data-theme="dark"] .bottom-tabbar button,
+html[data-theme="dark"] .volume-toolbar button,
+html[data-theme="dark"] .case-preview-toolbar button,
+html[data-theme="dark"] .research-list-actions > button,
+html[data-theme="dark"] .research-row-action,
+html[data-theme="dark"] .engineering-run-secondary-actions button {
+  color: var(--theme-muted-text) !important;
+}
+html[data-theme="dark"] .tab:hover,
+html[data-theme="dark"] .tab-action:hover,
+html[data-theme="dark"] .pane-actions button:hover,
+html[data-theme="dark"] .bottom-tabbar button:hover,
+html[data-theme="dark"] .volume-toolbar button:hover,
+html[data-theme="dark"] .case-preview-toolbar button:hover,
+html[data-theme="dark"] .research-list-actions > button:hover {
+  background: color-mix(in srgb, var(--theme-accent) 16%, var(--theme-surface)) !important;
+  color: var(--theme-accent) !important;
+}
+html[data-theme="dark"] .project-root-label,
+html[data-theme="dark"] .sidebar-section-heading,
+html[data-theme="dark"] .research-evidence,
+html[data-theme="dark"] .research-goal-summary,
+html[data-theme="dark"] .research-budget-summary,
+html[data-theme="dark"] .case-preview-source,
+html[data-theme="dark"] .case-preview-2d,
+html[data-theme="dark"] .case-preview-2d-status,
+html[data-theme="dark"] .parameter-dialog-fields legend,
+html[data-theme="dark"] .parameter-dialog-fields label,
+html[data-theme="dark"] .case-preview-section > header {
+  color: var(--theme-muted-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .case-preview-source,
+html[data-theme="dark"] .case-preview-2d,
+html[data-theme="dark"] .case-preview-source-image,
+html[data-theme="dark"] .matlab-render-frame > img {
+  background: var(--theme-background) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .status-success,
+html[data-theme="dark"] .status-running,
+html[data-theme="dark"] .status-failed,
+html[data-theme="dark"] .neutral,
+html[data-theme="dark"] .permission,
+html[data-theme="dark"] .permission.research {
+  background: color-mix(in srgb, var(--theme-accent) 18%, var(--theme-surface)) !important;
+  color: var(--theme-text) !important;
+}
+html[data-theme="dark"] .diagnostic-error,
+html[data-theme="dark"] .v2-error {
+  background: color-mix(in srgb, var(--theme-danger) 16%, var(--theme-surface)) !important;
+  color: var(--theme-danger) !important;
+  border-color: color-mix(in srgb, var(--theme-danger) 55%, var(--theme-border)) !important;
+}
+
+/* Ensure native settings controls remain readable in the dark theme. */
+html[data-theme="dark"] .settings-field,
+html[data-theme="dark"] .settings-check,
+html[data-theme="dark"] .theme-contrast {
+  color: var(--theme-muted-text) !important;
+}
+html[data-theme="dark"] .settings-field input,
+html[data-theme="dark"] .settings-field select {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .settings-field select {
+  color-scheme: dark;
+}
+html[data-theme="dark"] .settings-field select option,
+html[data-theme="dark"] .settings-field select optgroup {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+}
+html[data-theme="dark"] .settings-content button:not(.approve) {
+  background: var(--theme-elevated) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+html[data-theme="dark"] .settings-content button:not(.approve):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--theme-accent) 16%, var(--theme-elevated)) !important;
+  color: var(--theme-accent) !important;
+}

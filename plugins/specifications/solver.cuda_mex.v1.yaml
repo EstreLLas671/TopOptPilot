@@ -1,0 +1,54 @@
+# solver.cuda_mex.v1 — 遗留 CUDA MEX 三维求解器（top3d 参考实现）
+# status=candidate：仅作为 3D 参考基线，尚未在本项目 Python 引擎中复现
+
+plugin:
+  id: "solver.cuda_mex.v1"
+  name: "三维体素求解器（遗留 top3d/CUDA MEX 参考）"
+  version: "1.0.0"
+  language: "MATLAB"
+  entry: "top3d_main"
+  type: "solver"
+  status: "candidate"
+
+interface:
+  input: ["task_spec"]
+  output: ["result"]
+  signature: "top3d_main_2d / top3d_main (MATLAB MEX, CUDA)"
+  note: "遗留 top3d 参考实现，面向 3D 网格；需要 MATLAB Engine / CUDA 运行环境"
+  supported_objectives: ["compliance"]
+  supported_constraints: ["volume_fraction"]
+
+compatibility:
+  solvers: []
+  optimizers: ["OC"]
+  filters: ["sensitivity_filter"]
+  projections: ["none"]
+  controllers: ["fixed_controller"]
+  evaluators: []
+  dimensions: [3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters: []
+
+limitations:
+  - "3D 网格 + MEX 加速，内存与显存开销随体素规模快速上升"
+  - "尚未移植到 Python 后端，非开箱即用（status=candidate，禁止用于正式结论）"
+  - "与 Python 引擎的结果口径未做逐点对照验证"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: false
+  finite_difference_test: false
+  mbb_reproduction: false
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: ""
+  implementation_commit: ""
+  verification_date: ""

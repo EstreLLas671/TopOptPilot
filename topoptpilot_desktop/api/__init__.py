@@ -1,0 +1,1 @@
+"""Unified authenticated FastAPI sidecar."""

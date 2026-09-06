@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "sourceLabel2d": "TopOpt_2D",
+  "sourceLabel3d": "TopOpt-3D",
+  "entry2d": "TopOpt_2D/topopt_main.m",
+  "entry3d": "TopOpt-3D/topopt3d_main.m",
+  "instrumentation": "2D packaged topopt_main.m only adds an iteration_callback hook after each real OC update; solver equations and updates are unchanged.",
+  "files": [
+    {
+      "dimension": "2d",
+      "file": "adaptive_filter_radius.m",
+      "sourceSha256": "539acb69f883299a61dd2038ae8ee3366ffef3cb997671e0545b324c2fbb7a15",
+      "packagedSha256": "539acb69f883299a61dd2038ae8ee3366ffef3cb997671e0545b324c2fbb7a15",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "build_domain_mask.m",
+      "sourceSha256": "6d991e6dd5f9ff5523228a41305cff8dda4524458f8a0987e2cb761c25d611ed",
+      "packagedSha256": "6d991e6dd5f9ff5523228a41305cff8dda4524458f8a0987e2cb761c25d611ed",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "check.m",
+      "sourceSha256": "f176216aa0437033cee451c06653d0bae4c4dd93be77025ba62df048757609ad",
+      "packagedSha256": "f176216aa0437033cee451c06653d0bae4c4dd93be77025ba62df048757609ad",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "FE_solver.m",
+      "sourceSha256": "9af8ca3630e96802e25495db92780d1de8041bd53e4ce411b68cab1da9253a43",
+      "packagedSha256": "9af8ca3630e96802e25495db92780d1de8041bd53e4ce411b68cab1da9253a43",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "filter_solver.m",
+      "sourceSha256": "4b2613b5fff4590ff863f0e646d893da48b438c77ef1e96b2f8fb3ffcf9695bf",
+      "packagedSha256": "4b2613b5fff4590ff863f0e646d893da48b438c77ef1e96b2f8fb3ffcf9695bf",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "OC_solver.m",
+      "sourceSha256": "fa2e3405004a56e12339f0f7f03ecd10f10300a0f419013ad971c60fd122b205",
+      "packagedSha256": "fa2e3405004a56e12339f0f7f03ecd10f10300a0f419013ad971c60fd122b205",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "run_integrated_demo.m",
+      "sourceSha256": "9eae83dba812b65e7f9672dcda88d143bd01dd81b3b1af74a5fad6876464b207",
+      "packagedSha256": "9eae83dba812b65e7f9672dcda88d143bd01dd81b3b1af74a5fad6876464b207",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "run_L_bracket_demo.m",
+      "sourceSha256": "969da6597c368b55b9ff52fa7e7cc071f5de1ea28d45b3766bca37c6e68181e1",
+      "packagedSha256": "969da6597c368b55b9ff52fa7e7cc071f5de1ea28d45b3766bca37c6e68181e1",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "test_integrated_smoke.m",
+      "sourceSha256": "74ec4fcc3d92d452fd63eeaae89affd00262370b7161247e73b97736d7081d03",
+      "packagedSha256": "74ec4fcc3d92d452fd63eeaae89affd00262370b7161247e73b97736d7081d03",
+      "instrumented": false
+    },
+    {
+      "dimension": "2d",
+      "file": "topopt_main.m",
+      "sourceSha256": "be63a49f815ea2c21b0d5e1b56f5b2102077a3a6e7b3fd1e6ea8943a25b19674",
+      "packagedSha256": "a024d851b4610ed8b7bab5497c25432a3c291870c887f1bb4c5d3d5cdf1ffbfd",
+      "instrumented": true
+    },
+    {
+      "dimension": "3d",
+      "file": "adaptive_filter_radius_3d.m",
+      "sourceSha256": "f396b7491e14c8a69fce24738be323a9b9a1ca4b1475813c9fd4d15525b0ac59",
+      "packagedSha256": "f396b7491e14c8a69fce24738be323a9b9a1ca4b1475813c9fd4d15525b0ac59",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "build_boundary_solid_mask_3d.m",
+      "sourceSha256": "c689b29a14de44099b22ff0c215dcd09cdb2a1608623940ee9aceb139b677e07",
+      "packagedSha256": "c689b29a14de44099b22ff0c215dcd09cdb2a1608623940ee9aceb139b677e07",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "build_domain_mask_3d.m",
+      "sourceSha256": "4b864678d5c7208cc3380d0e65c023968cd6eb1a0e32d8660bc52e62def782f8",
+      "packagedSha256": "4b864678d5c7208cc3380d0e65c023968cd6eb1a0e32d8660bc52e62def782f8",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "check_3d.m",
+      "sourceSha256": "064a17871fc2bf29734376defa522501f28899c69d4894e0db42ea1a7ed46bee",
+      "packagedSha256": "064a17871fc2bf29734376defa522501f28899c69d4894e0db42ea1a7ed46bee",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "compute_von_mises_3d.m",
+      "sourceSha256": "4a0d203128e0eeff0b5fc07fb70820af2cf1c8fbcbc2020e3fd07b017016629b",
+      "packagedSha256": "4a0d203128e0eeff0b5fc07fb70820af2cf1c8fbcbc2020e3fd07b017016629b",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "element_dofs_3d.m",
+      "sourceSha256": "358be8a1034b534d4dbd3583f78cdf07ddf5f24124b4a6d264b3913cc11832e1",
+      "packagedSha256": "358be8a1034b534d4dbd3583f78cdf07ddf5f24124b4a6d264b3913cc11832e1",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "FE_solver_3d.m",
+      "sourceSha256": "e431440f530124b4d09298e36e2d67d3c6dd10f359312211361e29922544bfdb",
+      "packagedSha256": "e431440f530124b4d09298e36e2d67d3c6dd10f359312211361e29922544bfdb",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "filter_solver_3d.m",
+      "sourceSha256": "ffbbeb8c583dc50f74e88614d91cf3b5e5e08242f194aef69bb06e29d6a70bb6",
+      "packagedSha256": "ffbbeb8c583dc50f74e88614d91cf3b5e5e08242f194aef69bb06e29d6a70bb6",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "lk_3d.m",
+      "sourceSha256": "7ce379bb639e646fd5aafe41daf2043f6e931da642e16c7a7b36e34759fd1cfb",
+      "packagedSha256": "7ce379bb639e646fd5aafe41daf2043f6e931da642e16c7a7b36e34759fd1cfb",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "OC_solver_3d.m",
+      "sourceSha256": "4b93451f2c30b07ad3529147dae7e0414940c7ba7b2adaa9b5dfb82b9490335f",
+      "packagedSha256": "4b93451f2c30b07ad3529147dae7e0414940c7ba7b2adaa9b5dfb82b9490335f",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "plot_stress_heatmap_3d.m",
+      "sourceSha256": "0e15fa608b82037117705d580452273c047e73ca6862c6cd2d127f38664446dd",
+      "packagedSha256": "0e15fa608b82037117705d580452273c047e73ca6862c6cd2d127f38664446dd",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "test_iteration_callback.m",
+      "sourceSha256": "d475a0b303336feaaca13128054b789115d53c94eb050c058cef05eb6483a8af",
+      "packagedSha256": "d475a0b303336feaaca13128054b789115d53c94eb050c058cef05eb6483a8af",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "test_topopt3d_smoke.m",
+      "sourceSha256": "40562bf417095c29d4a8822b40f194b0dfb5a387c81267d8c8af8a140a562139",
+      "packagedSha256": "40562bf417095c29d4a8822b40f194b0dfb5a387c81267d8c8af8a140a562139",
+      "instrumented": false
+    },
+    {
+      "dimension": "3d",
+      "file": "topopt3d_main.m",
+      "sourceSha256": "8557f8647822a4107ab7de52ace9850f67f301f5cc2399f8fb9c1a1147949b7f",
+      "packagedSha256": "8557f8647822a4107ab7de52ace9850f67f301f5cc2399f8fb9c1a1147949b7f",
+      "instrumented": false
+    }
+  ]
+}

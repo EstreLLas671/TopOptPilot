@@ -1,0 +1,70 @@
+# projection.heaviside.v1 — Heaviside 平滑投影（88-line）
+# 对应 Python 入口：solver.filters.heaviside / heaviside_derivative
+# requires_chain_gradient：必须返回链式导数，否则伴随灵敏度错误
+
+plugin:
+  id: "projection.heaviside.v1"
+  name: "Heaviside 平滑投影"
+  version: "1.0.0"
+  language: "Python"
+  entry: "heaviside_projection"
+  type: "projection"
+  status: "verified"
+
+interface:
+  input: ["x", "beta", "eta"]
+  output: ["xPhys"]
+  signature: "heaviside(x, beta, eta) -> xPhys   # solver/filters.py"
+  note: "beta<=0 时退化为恒等映射，避免 0/0"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: ["filter.density.v1"]
+  projections: []
+  controllers:
+    - "periodic_controller"
+    - "gray_feedback_controller"
+    - "joint_feedback_controller"
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2, 3]
+  requires_chain_gradient: true
+  dependencies: ["filter.density.v1"]
+  mutual_exclusion: []
+
+parameters:
+  - name: "beta_max"
+    meaning: "最大投影锐度（延续调度的上限）"
+    type: "float"
+    range: [0, 64]
+    default: 16
+    suggested: [8, 16, 24, 32]
+    unit: ""
+  - name: "eta"
+    meaning: "投影阈值（0.5 为对称中点）"
+    type: "float"
+    range: [0, 1]
+    default: 0.5
+    suggested: [0.4, 0.5, 0.6]
+    unit: ""
+
+limitations:
+  - "必须提供链式导数（requires_chain_gradient=true），否则 Heaviside 投影的伴随灵敏度错误"
+  - "beta 过大或提升过快会过早陷入局部解并产生断连（需要反馈控制器调度）"
+  - "beta_max=0 时投影退化为恒等，无锐化效果"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

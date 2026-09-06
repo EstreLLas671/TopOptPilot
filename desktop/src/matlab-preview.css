@@ -1,0 +1,20 @@
+.matlab-preview {
+  clip-path: none;
+  background: #10151d;
+  display: block;
+  padding: 28px 30px 27px;
+}
+.matlab-geometry-svg { width: 100%; height: 94px; overflow: visible; }
+.domain-cell { fill: #294f80; stroke: #3b6ca6; stroke-width: .04; }
+.support-node { fill: #b18cff; stroke: #e5d8ff; stroke-width: .08; }
+.load-line { fill: none; stroke: #ff6464; stroke-width: .35; vector-effect: non-scaling-stroke; }
+.preview-title { position: absolute; left: 14px; top: 8px; color: #d8e7ff; }
+.matlab-preview small { left: 14px; }
+.matlab-preview em {
+  position: absolute; right: 14px; top: 8px; max-width: 52%; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; color: #ff9b9b; font-size: 11px;
+}
+.matlab-preview-empty {
+  display: flex; height: 94px; align-items: center; justify-content: center;
+  color: #8d96a4; font-size: 12px;
+}

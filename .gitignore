@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/resources/*
+!desktop/src-tauri/resources/.keep
+.npm-cache/
+
+# Environment
+.env
+venv/
+.venv/
+.venv-release/
+
+# MATLAB
+*.asv
+*.m~*
+slprj/
+*.mexw64
+*.mexa64
+mcp/matlab_mcp/MathWorks/
+.pytest-v6-*/
+
+# CUDA
+*.o
+*.obj
+*.cu.o
+
+# Experiment Output
+experiments/output/
+topoptpilot/storage/
+*.mat
+*.nii
+*.vtk
+*.stl
+
+# Knowledge Storage
+knowledge/storage/papers/*.pdf
+knowledge/storage/references/*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test & verification artifacts
+_ground_truth/
+test_phase0*.py
+test_phase0*.json
+
+# Vendored third-party binaries (Node runtime, MATLAB MCP Server exe)
+# See README "第三方依赖" section for how to obtain them.
+vendor/
+
+# MATLAB solver modules are authoritative product resources and are versioned.
+
+# Competition original materials
+XH-202619*.pdf
+
+# Archives
+*.rar
+*.zip
+*.7z
+
+## Codex/workspace intermediates (never ship)
+.codex/
+.superpowers/
+.codex-*
+.tmp-*
+*.codex-replace
+*.codex-original
+*.bad
+.playwright-cli/
+output/
+.worktrees/
+# Local runtime, approval, log, and verification data (never publish)
+.tmp/
+.debug-data/
+*.log
+approvals/
+approval-records/
+*.approval.json
+# Local distributable artifacts (publish through GitHub Releases, not Git history)
+TopOptPilot_*_x64-setup.exe
+
+# MATLAB desktop GUI state (machine-local, not project source)
+MathWorks/

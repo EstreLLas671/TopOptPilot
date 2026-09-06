@@ -1,0 +1,7 @@
+{
+  "enableSkillCommands": true,
+  "autoCompaction": true,
+  "extensions": ["./extensions/topopt-tools.ts"],
+  "skills": ["./skills"]
+}
+

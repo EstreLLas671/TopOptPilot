@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TopOptPilot 实验任务 JSON Schema",
+  "description": "参照方案 §3.3 输入任务示例格式",
+  "type": "object",
+  "required": ["task_id", "research_goal", "geometry", "material", "load_cases", "volume_fraction"],
+  "properties": {
+    "task_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "research_goal": {"type": "string", "minLength": 10},
+    "geometry": {"type": "string", "description": "TopVoxel/NIfTI/MAT路径"},
+    "material": {
+      "type": "object",
+      "required": ["E_MPa", "nu", "density_kg_m3"],
+      "properties": {
+        "E_MPa": {"type": "number", "minimum": 1},
+        "nu": {"type": "number", "minimum": 0, "maximum": 0.5},
+        "density_kg_m3": {"type": "number", "minimum": 1}
+      }
+    },
+    "load_cases": {
+      "type": "array",
+      "items": {"type": "string"},
+      "minItems": 1
+    },
+    "volume_fraction": {"type": "number", "minimum": 0.01, "maximum": 1.0},
+    "requirements": {
+      "type": "object",
+      "properties": {
+        "connected_components": {"type": "integer", "minimum": 1},
+        "gray_ratio_max": {"type": "number", "minimum": 0, "maximum": 1},
+        "compliance_increase_max": {"type": "number", "minimum": 0}
+      }
+    },
+    "solve_options": {
+      "type": "object",
+      "properties": {
+        "solver": {"type": "string"},
+        "optimizer": {"type": "string"},
+        "filter": {"type": "string"},
+        "projection": {"type": "string"},
+        "controller": {"type": "string"},
+        "evaluator": {"type": "string"},
+        "params": {"type": "object"}
+      }
+    },
+    "compute_budget": {
+      "type": "object",
+      "properties": {
+        "gpu": {"type": "string"},
+        "max_runs": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

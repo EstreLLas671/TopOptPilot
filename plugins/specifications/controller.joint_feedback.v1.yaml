@@ -1,0 +1,74 @@
+# controller.joint_feedback.v1 — 联合反馈控制器（灰度 + 连通性）
+# 对应 Python 入口：solver.continuation.JointFeedbackController
+# 对应实验组 Ours：灰度未达标 → 延迟提升；出现断连 → 延迟并保持当前 beta
+# 联合反馈使用更细步长（beta_step 默认 1）与更小间隔（beta_interval 默认 5）
+
+plugin:
+  id: "controller.joint_feedback.v1"
+  name: "联合反馈控制器（灰度+连通性）"
+  version: "1.0.0"
+  language: "Python"
+  entry: "joint_feedback_controller"
+  type: "controller"
+  status: "verified"
+
+interface:
+  input: ["params", "iteration", "gray_ratio", "connected"]
+  output: ["beta"]
+  signature: "JointFeedbackController(params).beta(iteration, gray_ratio, connected) -> float   # solver/continuation.py"
+  note: "双反馈：灰度超标或断连均延迟 beta 提升，步长更温和"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: ["filter.density.v1"]
+  projections: ["heaviside_projection"]
+  controllers: []
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2, 3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters:
+  - name: "gray_threshold"
+    meaning: "灰度达标阈值；灰度超过该值时延迟 beta 提升"
+    type: "float"
+    range: [0, 1]
+    default: 0.20
+    suggested: [0.10, 0.20, 0.30]
+    unit: ""
+  - name: "beta_step"
+    meaning: "每间隔 beta 的固定增量（联合反馈默认更细，取 1）"
+    type: "float"
+    range: [0, 64]
+    default: 1
+    suggested: [1, 2]
+    unit: ""
+  - name: "beta_interval"
+    meaning: "beta 提升的迭代间隔（联合反馈默认更小，取 5）"
+    type: "int"
+    range: [1, 100]
+    default: 5
+    suggested: [5, 10]
+    unit: "迭代"
+
+limitations:
+  - "连通性反馈依赖 8 邻接连通分量计数（忽略单单元碎点），口径需与审计一致"
+  - "双反馈使收敛速度慢于固定周期调度（属预期权衡）"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

@@ -1,0 +1,55 @@
+# filter.density.v1 — 密度滤波（88-line 去投影路径）
+# 对应 Python 入口：solver.filters.density_filter（卷积矩阵 H 由 rmin 构建）
+
+plugin:
+  id: "filter.density.v1"
+  name: "密度滤波（归一化卷积）"
+  version: "1.0.0"
+  language: "Python"
+  entry: "density_filter"
+  type: "filter"
+  status: "verified"
+
+interface:
+  input: ["x", "H"]
+  output: ["xTilde"]
+  signature: "density_filter(x, H) -> xTilde   # solver/filters.py"
+  note: "xTilde = H@x，与 Heaviside 投影组合使用保证链式导数正确"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: []
+  projections: ["heaviside_projection", "none"]
+  controllers:
+    - "periodic_controller"
+    - "gray_feedback_controller"
+    - "joint_feedback_controller"
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: ["filter.sensitivity.v1"]
+
+parameters: []
+
+limitations:
+  - "滤波半径 rmin 沿用 task 参数（默认 1.5），过小会产生棋盘格"
+  - "与灵敏度滤波互斥，不可同时使用"
+  - "需与投影/控制器的伴随灵敏度路径配对（88-line 路径）"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

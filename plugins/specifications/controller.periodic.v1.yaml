@@ -1,0 +1,67 @@
+# controller.periodic.v1 — 周期控制器（固定 beta 调度）
+# 对应 Python 入口：solver.continuation.PeriodicController
+# 对应实验组 B1：beta = min(beta_max, beta_step * (it//beta_interval + 1))
+# 不受灰度/连通性反馈影响，是"固定调度"的对照基线
+
+plugin:
+  id: "controller.periodic.v1"
+  name: "周期控制器（固定 beta 调度）"
+  version: "1.0.0"
+  language: "Python"
+  entry: "periodic_controller"
+  type: "controller"
+  status: "verified"
+
+interface:
+  input: ["params", "iteration"]
+  output: ["beta"]
+  signature: "PeriodicController(params).beta(iteration, gray_ratio, connected) -> float   # solver/continuation.py"
+  note: "按固定步长/间隔递增 beta，无反馈"
+
+compatibility:
+  solvers: ["solver.fe_solver.v1"]
+  optimizers: ["OC"]
+  filters: ["filter.density.v1"]
+  projections: ["heaviside_projection"]
+  controllers: []
+  evaluators: ["evaluator.standard.v1"]
+  dimensions: [2, 3]
+  requires_chain_gradient: false
+  dependencies: []
+  mutual_exclusion: []
+
+parameters:
+  - name: "beta_step"
+    meaning: "每间隔 beta 的固定增量"
+    type: "float"
+    range: [0, 64]
+    default: 2
+    suggested: [1, 2, 4]
+    unit: ""
+  - name: "beta_interval"
+    meaning: "beta 提升的迭代间隔"
+    type: "int"
+    range: [1, 100]
+    default: 10
+    suggested: [5, 10, 20]
+    unit: "迭代"
+
+limitations:
+  - "不感知灰度/连通性反馈，锐化时机固定，可能过早锐化导致断连"
+  - "beta_interval 过小会快速逼近 beta_max，失去延续平滑性"
+
+evidence:
+  paper_doi: ""
+  pages: []
+  figures: []
+  equations: []
+
+verification:
+  unit_test: true
+  finite_difference_test: false
+  mbb_reproduction: true
+  cantilever_3d: false
+  cpu_gpu_consistency: false
+  verified_by: "求解器开发组"
+  implementation_commit: ""
+  verification_date: "2026-08-20"

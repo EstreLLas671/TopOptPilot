@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "typebox": "1.0.0"
+  }
+}
